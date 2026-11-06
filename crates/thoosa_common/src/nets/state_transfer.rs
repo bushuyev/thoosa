@@ -1,14 +1,14 @@
-use thoosa_common::tch_error::tch_result;
-use std::collections::BTreeMap;
-use serde::{Deserialize, Serialize};
-use tch::{Device, Kind, Tensor, nn::VarStore};
-use thoosa_shared::ThoError;
-use thoosa_shared::ipc_types::{TensorKey};
-use thoosa_common::ipc::tensor_info::{WorkerTensorInfoPayload};
-use thoosa_common::ipc::state_transfer::StageStateInfo;
-use crate::tho_device::ThoDevice;
 use crate::cuda_utils::tensor_mem_size;
+use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use tch::{Device, Kind, Tensor, nn::VarStore};
+use thoosa_common::ipc::state_transfer::StageStateInfo;
+use thoosa_common::ipc::tensor_info::WorkerTensorInfoPayload;
+use thoosa_common::tch_error::tch_result;
+use thoosa_shared::ThoError;
+use thoosa_shared::ipc_types::TensorKey;
 
 /// Tensor storage and its schema have separate lifetimes: the schema remains in
 /// the worker while the parent owns the CPU copy of the tensors.
@@ -24,20 +24,45 @@ struct StateTensor {
 
 impl StateTensors {
     pub(crate) fn from_info(info: &StageStateInfo) -> Self {
-        Self(info.tensors.iter().map(|tensor| (tensor.tensor_key.to_tensor_key(), StateTensor {
-            tensor: None, kind: tensor.kind.into(), shape: tensor.shape.clone(),
-        })).collect())
+        Self(
+            info.tensors
+                .iter()
+                .map(|tensor| {
+                    (
+                        tensor.tensor_key.to_tensor_key(),
+                        StateTensor {
+                            tensor: None,
+                            kind: tensor.kind.into(),
+                            shape: tensor.shape.clone(),
+                        },
+                    )
+                })
+                .collect(),
+        )
     }
 
     pub(crate) fn insert(&mut self, key: String, tensor: Tensor) -> Result<(), ThoError> {
-        self.0.insert(key, StateTensor { kind: tensor.kind(), shape: tensor.size(), tensor: Some(ThoTensor::new((), tensor)?) });
+        self.0.insert(
+            key,
+            StateTensor {
+                kind: tensor.kind(),
+                shape: tensor.size(),
+                tensor: Some(ThoTensor::new((), tensor)?),
+            },
+        );
         Ok(())
     }
 
     pub(crate) fn info(&self) -> StageStateInfo {
         // CudaWorker supplies the installed endpoint identity. Model state does
         // not need to know which crate or stage installed its owner.
-        StageStateInfo::new(self.0.iter().map(|(key, slot)| WorkerTensorInfoPayload::new(TensorKey::stage_state("", "", key), slot.kind.into(), slot.shape.clone(), tensor_mem_size(slot.kind, &slot.shape))).collect(), None)
+        StageStateInfo::new(
+            self.0
+                .iter()
+                .map(|(key, slot)| WorkerTensorInfoPayload::new(TensorKey::stage_state("", "", key), slot.kind.into(), slot.shape.clone(), tensor_mem_size(slot.kind, &slot.shape)))
+                .collect(),
+            None,
+        )
     }
 
     pub(crate) fn get(&self, key: &str) -> Result<Tensor, ThoError> {
@@ -60,7 +85,9 @@ impl StateTensors {
     }
 
     pub(crate) fn clear(&mut self) {
-        for slot in self.0.values_mut() { slot.tensor = None; }
+        for slot in self.0.values_mut() {
+            slot.tensor = None;
+        }
     }
 
     pub(crate) fn complete(&self) -> bool {
@@ -91,7 +118,11 @@ impl VarStoreState {
         let mut variables = Vec::with_capacity(vars.named_variables.len());
         for (name, tensor) in &vars.named_variables {
             let trainable = vars.trainable_variables.iter().enumerate().find_map(|(order, var)| var.tensor.is_set_to(tensor).then_some((order, var.group)));
-            variables.push(VariableState { name: name.clone(), trainable, requires_grad: tensor.requires_grad() });
+            variables.push(VariableState {
+                name: name.clone(),
+                trainable,
+                requires_grad: tensor.requires_grad(),
+            });
             tensors.insert(format!("var/{name}"), tch_result(tensor.f_detach())?)?;
         }
         // Optimizer snapshots address parameters by group and registration
@@ -108,7 +139,9 @@ impl VarStoreState {
             let (trainable, group) = var.trainable.map_or((false, 0), |(_, group)| (true, group));
             let (parent, name) = var.name.rsplit_once('.').unwrap_or(("", &var.name));
             let mut path = vs.root().set_group(group);
-            for component in parent.split('.').filter(|s| !s.is_empty()) { path = path.sub(component); }
+            for component in parent.split('.').filter(|s| !s.is_empty()) {
+                path = path.sub(component);
+            }
             let registered = path.add(name, tensor, trainable);
             let _ = tch_result(registered.f_set_requires_grad(var.requires_grad))?;
         }
@@ -136,7 +169,9 @@ mod tests {
 
         tensors.clear();
         assert!(!tensors.complete());
-        for (key, tensor) in cpu_copy.into_iter().rev() { tensors.set(&key, tensor, 0)?; }
+        for (key, tensor) in cpu_copy.into_iter().rev() {
+            tensors.set(&key, tensor, 0)?;
+        }
 
         let restored = metadata.restore(&tensors, 0)?;
         assert_eq!(restored.kind(), Kind::Double);

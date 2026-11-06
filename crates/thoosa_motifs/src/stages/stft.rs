@@ -1,4 +1,3 @@
-use thoosa_common::tch_error::tch_result;
 use crate::dims::{MotifSlices, Spectorgram};
 use log::debug;
 use std::fmt::Debug;
@@ -12,11 +11,12 @@ use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextI
 use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
 use thoosa_common::runner::common::cachable::DevicesWrap;
 use thoosa_common::runner::oom_handler::{Adjusters, NoInputAdjuster, NoStageAdjuster, OOMHandler, WithRunCtxContext, run_ctx_adjuster};
+use thoosa_common::runner::sync_stage::SyncStage;
+use thoosa_common::tch_error::tch_result;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_named_derive::Named;
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::traits::{Adjustable, AsyncStage, MaxParallelCtx, OutId, RunCtx, Stage, ThoSelector, WithId};
-use thoosa_common::runner::sync_stage::{SyncStage};
 use thoosa_shared::{ThoError, mono_key};
 
 use crate::stages::stage_ids::STFT;
@@ -54,7 +54,12 @@ where
     pub fn new_for_dims(run_config: StftRunConfig) -> Result<Self, ThoError> {
         run_config.validate()?;
         let id = stft_stage_id(&run_config);
-        Ok(Self { id: id.clone(), sync_stft: Arc::new(SyncStft::new(id, run_config.clone())?), run_config, pd: PhantomData })
+        Ok(Self {
+            id: id.clone(),
+            sync_stft: Arc::new(SyncStft::new(id, run_config.clone())?),
+            run_config,
+            pd: PhantomData,
+        })
     }
 
     pub fn run_config(&self) -> &StftRunConfig {
@@ -94,25 +99,14 @@ where
     async fn run(self: Arc<Self>, input: Self::In<'static>, mut ctx: Self::Ctx) -> Result<Self::Out, ThoError> {
         // The input can come from different loaders; follow its registered owners.
 
-        let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, SyncStftSelector> = OOMHandler::new(
-            vec![
-                Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(*MaxParallelStep::FAST))),
-                Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("sync_stft"))),
-            ],
-            None,
-        );
-        let output = t!(oom_handler
-            .run(
-                &self.sync_stft,
-                Arc::clone(&input),
-                ctx.branch(false),
-                WithRunCtxContext::new(
-                    MaxParallelAndDumpToCpuAdjustableContex::new(
-                        MaxParallelAdjustContextImpl::new(),
-                        DumpToCpuContextImpl::new(),
-                    ),
-                ),
-            )).await?;
+        let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, SyncStftSelector> = OOMHandler::new(vec![Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(*MaxParallelStep::FAST))), Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("sync_stft")))], None);
+        let output = t!(oom_handler.run(
+            &self.sync_stft,
+            Arc::clone(&input),
+            ctx.branch(false),
+            WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new(),),),
+        ))
+        .await?;
         Ok(Arc::new(DevicesWrap::wrap(output)))
     }
 }
@@ -139,9 +133,9 @@ where
 {
     type Output = ThoTensor<D, SynKey>;
 
-    fn local_subview(id:&SynKey, t:&Tensor, _selector: SyncStftSelector) -> Result<Self::Output, ThoError> {
+    fn local_subview(id: &SynKey, t: &Tensor, _selector: SyncStftSelector) -> Result<Self::Output, ThoError> {
         // Err(ThoError::new("SyncStftSelector::subview: input selection is not supported"))
-        ThoTensor::new(id.clone(), t.copy())//TODO
+        ThoTensor::new(id.clone(), t.copy()) //TODO
     }
 }
 
@@ -169,13 +163,11 @@ where
     }
 
     pub fn build_spectrogram(&self, input: &Tensor) -> Result<Tensor, ThoError> {
-
         let input_size = input.size();
         debug!("SyncStft::build_spectrogram: input_size={input_size:?} run_config={:?}", self.run_config);
 
-        Ok(
-            tch_result(tch_result(tch_result(input.f_totype(Float))?
-            .f_stft(
+        Ok(tch_result(
+            tch_result(tch_result(input.f_totype(Float))?.f_stft(
                 self.run_config.n_fft,
                 self.run_config.hop_length,
                 self.run_config.win_length,
@@ -185,8 +177,8 @@ where
                 true,
                 self.run_config.align_to_window,
             ))?
-            .f_abs())?
-        )
+            .f_abs(),
+        )?)
     }
 }
 
@@ -195,7 +187,8 @@ where
     C: RunCtx + Adjustable + 'static,
     InD: Dims + 'static,
     OutD: Dims + 'static,
-{}
+{
+}
 
 impl<C, InD, OutD> OutId for SyncStft<C, InD, OutD>
 where
@@ -247,10 +240,10 @@ fn stft_stage_id(run_config: &StftRunConfig) -> SynKey {
 
 #[cfg(test)]
 mod tests {
-    use thoosa_common::tch_error::tch_result;
     use tch::{Device, Kind, Tensor};
     use thoosa_common::nets::common_nets::StftRunConfig;
     use thoosa_common::runner::run_ctx::RunCtxImpl;
+    use thoosa_common::tch_error::tch_result;
     use thoosa_shared::ThoError;
 
     use crate::stages::stft::{SyncStft, stft_stage_id};
@@ -284,5 +277,4 @@ mod tests {
     //     // assert_eq!(output.device(), Device::Cpu);
     //     Ok(())
     // }
-
 }

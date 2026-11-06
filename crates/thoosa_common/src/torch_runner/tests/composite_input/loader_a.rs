@@ -30,13 +30,9 @@ pub(super) struct AStageInput {
 }
 
 impl AStageInput {
-    pub(super) fn new<S:Into<String>>(db_id: u32, token:S) -> Self {
+    pub(super) fn new<S: Into<String>>(db_id: u32, token: S) -> Self {
         let token = token.into();
-        Self {
-            id: mono_key!(db_id, &token),
-            db_id,
-            token
-        }
+        Self { id: mono_key!(db_id, &token), db_id, token }
     }
 }
 
@@ -54,24 +50,17 @@ impl WithId for AStageInput {
     }
 }
 
-
-impl Input for AStageInput{}
-
+impl Input for AStageInput {}
 
 #[derive(Debug, Named, Serialize, Deserialize)]
 pub(super) struct AStageOutput {
     pub id: SynKey,
-    pub(super) value:ThoTensor<AStageOutputDims, ()>,
+    pub(super) value: ThoTensor<AStageOutputDims, ()>,
 }
 
 impl AStageOutput {
     pub(super) fn new(id: SynKey, tensor: Tensor) -> Result<Arc<DevicesWrap<Self>>, ThoError> {
-        Ok(Arc::new(DevicesWrap::wrap(
-            AStageOutput{
-                id,
-                value: ThoTensor::new((), tensor)?,
-            }
-        )))
+        Ok(Arc::new(DevicesWrap::wrap(AStageOutput { id, value: ThoTensor::new((), tensor)? })))
     }
 }
 
@@ -80,19 +69,15 @@ impl WorkerInput for AStageOutput {}
 
 impl WorkerStageInput for AStageOutput {
     fn clone_refs(&self) -> Result<Box<dyn WorkerInput>, ThoError> {
-        Ok(Box::new(AStageOutput{
-            id: self.id.clone(),
-            value: self.value.clone_ref()?,
-        }))
+        Ok(Box::new(AStageOutput { id: self.id.clone(), value: self.value.clone_ref()? }))
     }
 
     fn ref_to_tensor(&self, all_cuda_tensors: &AllTensors, remove: bool) -> Result<Self, ThoError> {
-      Ok(AStageOutput{
-          id: self.id.clone(),
-          value: self.value.ref_to_tensor(all_cuda_tensors, remove)?,
-      })
+        Ok(AStageOutput {
+            id: self.id.clone(),
+            value: self.value.ref_to_tensor(all_cuda_tensors, remove)?,
+        })
     }
-
 }
 
 impl Select<RangeSelector> for AStageOutput {
@@ -111,14 +96,9 @@ impl LocalSelect<(), RangeSelector> for ThoTensor<AStageOutputDims, ()> {
     type Output = ThoTensor<AStageOutputDims, ()>;
 
     fn local_subview(_id: &(), t: &Tensor, selector: RangeSelector) -> Result<Self::Output, ThoError> {
-        ThoTensor::new(
-            (),
-            t.i(selector.start[0]..selector.end[0]).copy().into()
-        )
+        ThoTensor::new((), t.i(selector.start[0]..selector.end[0]).copy().into())
     }
 }
-
-
 
 impl WithId for AStageOutput {
     type ID = SynKey;
@@ -130,7 +110,6 @@ impl WithId for AStageOutput {
 
 impl Data for AStageOutput {
     type Metrics = <ThoTensor<AStageOutputDims, ()> as Data>::Metrics;
-
 
     fn size(&self) -> Self::Metrics {
         <ThoTensor<AStageOutputDims, ()> as Data>::size(&self.value)
@@ -155,15 +134,12 @@ impl thoosa_shared::CopyToDevice for AStageOutput {
     }
 }
 
-
-impl Output for AStageOutput{}
-
+impl Output for AStageOutput {}
 
 #[derive(Debug, Named, Cached)]
 pub(super) struct AStage {
     id: MonoKey,
 }
-
 
 impl AStage {
     pub(super) fn new() -> Self {
@@ -171,13 +147,13 @@ impl AStage {
     }
 }
 
-impl Stage for AStage  {
+impl Stage for AStage {
     type Ctx = RunCtxImpl;
     type In<'a> = Arc<AStageInput>;
     type Out = Arc<DevicesWrap<AStageOutput>>;
 }
 
-impl AsyncStage for AStage  {
+impl AsyncStage for AStage {
     // type RunInput = Arc<Self::In<'static>>;
     // type RunOutput = Arc<DevicesWrap<Self::Out>>;
 
@@ -185,18 +161,14 @@ impl AsyncStage for AStage  {
     //     WithId::id(input)
     // }
     async fn run(self: Arc<Self>, input: Self::In<'static>, _ctx: Self::Ctx) -> Result<Self::Out, ThoError> {
-
-
         let tensor = match input.token.as_str() {
             "a100" => Tensor::from_slice(&[100.1]),
-            _ => Tensor::rand(&[1], FLOAT_CPU)
+            _ => Tensor::rand(&[1], FLOAT_CPU),
         };
 
         let id = self.out_id(input.id());
 
-
         AStageOutput::new(id, tensor)
-
     }
 }
 

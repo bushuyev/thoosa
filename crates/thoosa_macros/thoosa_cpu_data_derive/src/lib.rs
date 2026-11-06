@@ -1,6 +1,6 @@
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{parse_macro_input, DeriveInput, Expr};
+use syn::{DeriveInput, Expr, parse_macro_input};
 
 /// CPU-only Data implementation, independent of Clone. Size accounting must be
 /// explicit: #[cpu_data(shallow)] counts inline bytes; #[cpu_data(mem_size = expr)]
@@ -19,13 +19,17 @@ fn expand(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     for attr in &input.attrs {
         if attr.path().is_ident("cpu_data") {
             attr.parse_nested_meta(|meta| {
-                if size.is_some() { return Err(meta.error("specify one memory-size policy")); }
+                if size.is_some() {
+                    return Err(meta.error("specify one memory-size policy"));
+                }
                 if meta.path.is_ident("shallow") {
                     size = Some(quote!(::core::mem::size_of_val(self) as u64));
                 } else if meta.path.is_ident("mem_size") {
                     let expression: Expr = meta.value()?.parse()?;
                     size = Some(quote!(#expression));
-                } else { return Err(meta.error("expected shallow or mem_size = expression")); }
+                } else {
+                    return Err(meta.error("expected shallow or mem_size = expression"));
+                }
                 Ok(())
             })?;
         }
@@ -49,10 +53,32 @@ mod tests {
     use super::*;
     #[test]
     fn test_size_policy_required_and_clone_not_required() {
-        assert!(expand(&syn::parse_quote!(struct Data(Vec<u8>);)).is_err());
-        let tokens = expand(&syn::parse_quote!(#[cpu_data(shallow)] struct Data<T>(T);)).unwrap().to_string();
+        assert!(
+            expand(&syn::parse_quote!(
+                struct Data(Vec<u8>);
+            ))
+            .is_err()
+        );
+        let tokens = expand(&syn::parse_quote!(
+            #[cpu_data(shallow)]
+            struct Data<T>(T);
+        ))
+        .unwrap()
+        .to_string();
         assert!(!tokens.contains("Clone"));
-        assert!(expand(&syn::parse_quote!(#[cpu_data(mem_size = 8 + self.0.capacity() as u64)] struct Data(Vec<u8>);)).is_ok());
-        assert!(expand(&syn::parse_quote!(#[cpu_data(shallow, shallow)] struct Data;)).is_err());
+        assert!(
+            expand(&syn::parse_quote!(
+                #[cpu_data(mem_size = 8 + self.0.capacity() as u64)]
+                struct Data(Vec<u8>);
+            ))
+            .is_ok()
+        );
+        assert!(
+            expand(&syn::parse_quote!(
+                #[cpu_data(shallow, shallow)]
+                struct Data;
+            ))
+            .is_err()
+        );
     }
 }

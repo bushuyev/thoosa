@@ -1,6 +1,6 @@
+use crate::tch_error::tch_result;
 use tch::Kind::Float;
 use tch::{Device, Tensor};
-use crate::tch_error::tch_result;
 
 pub fn uniform_weight(size: i64, device: Device) -> anyhow::Result<Tensor> {
     // Reject empty distributions before normalization divides by zero.

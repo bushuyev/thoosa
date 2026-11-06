@@ -36,17 +36,12 @@ pub fn spline_lambda_from_window_and_extrema(window: i64, extrema_per_window: f6
 /// - This version is for preprocessing; gradients will NOT flow through it.
 pub fn smoothing_spline_1d_channels(x: &Tensor, lambda: f64) -> Result<Tensor, TchError> {
     if !lambda.is_finite() || lambda < 0.0 {
-        return Err(TchError::Shape(format!(
-            "lambda must be finite and >= 0, got {lambda}"
-        )));
+        return Err(TchError::Shape(format!("lambda must be finite and >= 0, got {lambda}")));
     }
 
     let orig_kind = x.kind();
     if orig_kind != Kind::Float && orig_kind != Kind::Double {
-        return Err(TchError::Kind(format!(
-            "expected Float or Double input, got {:?}",
-            orig_kind
-        )));
+        return Err(TchError::Kind(format!("expected Float or Double input, got {:?}", orig_kind)));
     }
 
     let orig_device = x.device();
@@ -56,18 +51,11 @@ pub fn smoothing_spline_1d_channels(x: &Tensor, lambda: f64) -> Result<Tensor, T
         1 => true,
         2 => false,
         other => {
-            return Err(TchError::Shape(format!(
-                "expected shape [len] or [channels, len], got {:?} (rank={other})",
-                orig_shape
-            )));
+            return Err(TchError::Shape(format!("expected shape [len] or [channels, len], got {:?} (rank={other})", orig_shape)));
         }
     };
 
-    let x2 = if squeezed {
-        x.f_unsqueeze(0)?
-    } else {
-        x.shallow_clone()
-    };
+    let x2 = if squeezed { x.f_unsqueeze(0)? } else { x.shallow_clone() };
 
     let size = x2.size();
     let channels = size[0] as usize;
@@ -78,10 +66,7 @@ pub fn smoothing_spline_1d_channels(x: &Tensor, lambda: f64) -> Result<Tensor, T
     }
 
     // Move to CPU + Double for stable solve.
-    let x_cpu = x2
-        .f_to_device(Device::Cpu)?
-        .f_to_kind(Kind::Double)?
-        .f_contiguous()?;
+    let x_cpu = x2.f_to_device(Device::Cpu)?.f_to_kind(Kind::Double)?.f_contiguous()?;
 
     let mut input = vec![0.0f64; channels * len];
     x_cpu.f_copy_data(&mut input, channels * len)?;
@@ -98,16 +83,9 @@ pub fn smoothing_spline_1d_channels(x: &Tensor, lambda: f64) -> Result<Tensor, T
         output[start..end].copy_from_slice(&row_out);
     }
 
-    let y = Tensor::f_from_slice(&output)?
-        .f_view([channels as i64, len as i64])?
-        .f_to_kind(orig_kind)?
-        .f_to_device(orig_device)?;
+    let y = Tensor::f_from_slice(&output)?.f_view([channels as i64, len as i64])?.f_to_kind(orig_kind)?.f_to_device(orig_device)?;
 
-    if squeezed {
-        y.f_squeeze_dim(0)
-    } else {
-        Ok(y)
-    }
+    if squeezed { y.f_squeeze_dim(0) } else { Ok(y) }
 }
 
 /// Build diagonals for:
@@ -197,33 +175,16 @@ fn make_spline_system_diagonals(n: usize, lambda: f64) -> (Vec<f64>, Vec<f64>, V
 /// This is O(n) and much cheaper than dense inversion.
 ///
 /// Returns x solving A x = rhs.
-fn solve_symmetric_pentadiagonal(
-    off2: &[f64],
-    off1: &[f64],
-    diag: &[f64],
-    rhs: &[f64],
-) -> Result<Vec<f64>, TchError> {
+fn solve_symmetric_pentadiagonal(off2: &[f64], off1: &[f64], diag: &[f64], rhs: &[f64]) -> Result<Vec<f64>, TchError> {
     let n = diag.len();
     if rhs.len() != n {
-        return Err(TchError::Shape(format!(
-            "rhs len {} != diag len {}",
-            rhs.len(),
-            n
-        )));
+        return Err(TchError::Shape(format!("rhs len {} != diag len {}", rhs.len(), n)));
     }
     if off1.len() != n.saturating_sub(1) {
-        return Err(TchError::Shape(format!(
-            "off1 len {} != n-1 {}",
-            off1.len(),
-            n.saturating_sub(1)
-        )));
+        return Err(TchError::Shape(format!("off1 len {} != n-1 {}", off1.len(), n.saturating_sub(1))));
     }
     if off2.len() != n.saturating_sub(2) {
-        return Err(TchError::Shape(format!(
-            "off2 len {} != n-2 {}",
-            off2.len(),
-            n.saturating_sub(2)
-        )));
+        return Err(TchError::Shape(format!("off2 len {} != n-2 {}", off2.len(), n.saturating_sub(2))));
     }
 
     if n <= 2 {
@@ -248,11 +209,7 @@ fn solve_symmetric_pentadiagonal(
     if !c1.is_finite() || c1.abs() < EPS {
         return Err(TchError::Shape("singular system at row 1".to_string()));
     }
-    d[1] = if n > 2 {
-        (off1[1] - off1[0] * e[0]) / c1
-    } else {
-        0.0
-    };
+    d[1] = if n > 2 { (off1[1] - off1[0] * e[0]) / c1 } else { 0.0 };
     e[1] = if n > 3 { off2[1] / c1 } else { 0.0 };
     f[1] = (rhs[1] - off1[0] * f[0]) / c1;
 
@@ -267,11 +224,7 @@ fn solve_symmetric_pentadiagonal(
             return Err(TchError::Shape(format!("singular system at row {i}")));
         }
 
-        d[i] = if i < n - 1 {
-            (off1[i] - b_eff * e[i - 1]) / c
-        } else {
-            0.0
-        };
+        d[i] = if i < n - 1 { (off1[i] - b_eff * e[i - 1]) / c } else { 0.0 };
 
         e[i] = if i < n - 2 { off2[i] / c } else { 0.0 };
 
@@ -376,7 +329,6 @@ mod tests {
     use tch::Tensor;
     use thoosa_common::transforms::smoothing::moving_average;
 
-
     #[test]
     fn test_moving_average_replicates_edges() -> anyhow::Result<()> {
         let input = Tensor::from_slice(&[1.0f32, 2.0, 3.0, 4.0, 5.0, 5.0, 4.0, 3.0, 2.0, 1.0]).f_view([2, 5])?;
@@ -387,5 +339,4 @@ mod tests {
 
         Ok(())
     }
-
 }

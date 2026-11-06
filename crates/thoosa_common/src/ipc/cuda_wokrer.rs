@@ -1,13 +1,12 @@
-use thoosa_common::tch_error::tch_result;
 use crate::cuda_copier::{CudaCopier, ExecutionStreamPool};
 use crate::cuda_utils::{cuda_mem_for_device, tensor_mem_size};
 use crate::data_with_extra::DataWithExtra;
 use crate::dims::Dims;
 use crate::ipc::cuda_process;
-use crate::ipc::cuda_process::{DeviceInfo, IPC_SOCK_ENV };
+use crate::ipc::cuda_process::{DeviceInfo, IPC_SOCK_ENV};
 use crate::ipc::ipc_cuda_utils::recv_fd;
 use crate::ipc::serialization::{PostcardToFromBytes, ToFromBytes};
-use crate::ipc::worker_msg::{CudaWorkerId};
+use crate::ipc::worker_msg::CudaWorkerId;
 use crate::ipc::worker_msg::{CudaWorkerMsgIn, CudaWorkerMsgOut, DebugOutput, OpResult, Operation, WorkerCopyDonePayload, WorkerInput};
 use crate::ipc::wraps::{ErasedWithState, SyncStageIpcWrapper};
 use crate::tho_device::ThoDevice;
@@ -16,13 +15,13 @@ use crate::ws::{FsWorkspace, Workspace, WsConfigs};
 use anyhow::Context as _;
 use clap::Parser;
 use dashmap::DashMap;
-use futures_util::future::BoxFuture;
 use futures_util::FutureExt;
-use log::{debug, info, warn, LevelFilter};
+use futures_util::future::BoxFuture;
+use log::{LevelFilter, debug, info, warn};
 use memmap2::{MmapMut, MmapOptions};
 use parking_lot::{Mutex, RwLock};
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fmt::Debug;
@@ -31,18 +30,18 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock};
 use tch::{Device, Tensor};
-use thoosa_shared::ipc_types::{H2DTensorKey, TensorKey, WorkerOutput};
+use thoosa_common::ipc::state_transfer::StageStateInfo;
 use thoosa_common::ipc::tensor_info::{IpcTensorKind, WorkerTensorInfoPayload};
+use thoosa_common::tch_error::tch_result;
+use thoosa_shared::ipc_types::{H2DTensorKey, TensorKey, WorkerOutput};
 use thoosa_shared::perf_logging::{PERF, format_perf_map, init_tracing};
 use thoosa_shared::traits::{Data, Named, RunCtx, WithId};
-use thoosa_common::ipc::state_transfer::StageStateInfo;
 use thoosa_shared::{CopyToDevice, ThoError, panic_to_err};
 use thoosa_shims::context::ThoCudaContext;
 use thoosa_shims::stream::ThoCudaStream;
 use tokio::net::UnixStream;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
-
 
 //32 low and 32 high preallocated streams from https://github.com/pytorch/pytorch/blob/main/c10/cuda/CUDAStream.h
 const WORKER_EXEC_STREAMS: usize = 32;
@@ -90,14 +89,18 @@ async fn finish_stage_export(stages: &InstalledStages, endpoint_name: String, st
     // the freeze too. Failed purge invalidates only this endpoint, and the
     // parent's committed CPU backup can be restored after a successful purge.
     let _frozen = export.take().expect("validated export transaction");
-    if commit { endpoint.purge(device).await?; }
+    if commit {
+        endpoint.purge(device).await?;
+    }
     Ok(OpResult::Ok(None))
 }
 
 // Socket tasks must not survive their supervisor on error or cancellation.
 struct AbortSocketTask(tokio::task::AbortHandle);
 impl Drop for AbortSocketTask {
-    fn drop(&mut self) { self.0.abort(); }
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 
 // Framing has a single owner. Task completion must never cancel read_exact
@@ -118,10 +121,12 @@ where
                 Err(error) => {
                     warn!("serve_worker_requests: error={error:?}");
                     Err(error.into())
-                },
+                }
             };
             let failed = request.is_err();
-            if frame_tx.send(request).await.is_err() || failed { return; }
+            if frame_tx.send(request).await.is_err() || failed {
+                return;
+            }
         }
     });
     let reader_abort = AbortSocketTask(reader_task.abort_handle());
@@ -188,7 +193,14 @@ where
             }
         }
     }
-    reply_tx.send(CudaWorkerMsgOut { worker_id, request_id: shutdown_request_id, status: OpResult::Ok(None) }).await.context("worker response writer is closed")?;
+    reply_tx
+        .send(CudaWorkerMsgOut {
+            worker_id,
+            request_id: shutdown_request_id,
+            status: OpResult::Ok(None),
+        })
+        .await
+        .context("worker response writer is closed")?;
     debug!("cuda_wokrer::serve_worker_requests: shutdown_request_id={shutdown_request_id:?} reply sent");
     drop(reply_tx);
     writer_task.await.context("worker response writer task failed")??;
@@ -201,17 +213,15 @@ where
     Ok(())
 }
 
-static NEXT_WORKER_TENSOR_KEY: AtomicU64 = AtomicU64::new(1_000_000);//if starts from 0 it's difficult to find them in logs
+static NEXT_WORKER_TENSOR_KEY: AtomicU64 = AtomicU64::new(1_000_000); //if starts from 0 it's difficult to find them in logs
 
-
-pub static DEBUG_DATA:LazyLock<Arc<Mutex<Vec<String>>>> = LazyLock::new(|| Arc::new(Mutex::new(vec![])));
+pub static DEBUG_DATA: LazyLock<Arc<Mutex<Vec<String>>>> = LazyLock::new(|| Arc::new(Mutex::new(vec![])));
 
 //1 cuda device per worker
 pub struct CudaWorker;
 
-
 //stage_id - None for stateless stages, init_data, ctx, all_tensors, device
-pub type InitFn<W = dyn Workspace> = Box<dyn for <'a> Fn(Option<String>, Box<dyn WorkerInput>, Arc<RwLock<Box<W>>>, &'a AllTensors, &'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> + Send + Sync>;
+pub type InitFn<W = dyn Workspace> = Box<dyn for<'a> Fn(Option<String>, Box<dyn WorkerInput>, Arc<RwLock<Box<W>>>, &'a AllTensors, &'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> + Send + Sync>;
 
 // A worker endpoint owns its execution/export lease. An export retains the
 // owned guard across wire requests; unrelated endpoints remain runnable.
@@ -231,13 +241,21 @@ struct FrozenExport {
 
 impl InstalledEndpoint {
     fn new(stage: Arc<dyn SyncStageIpcWrapper>) -> Self {
-        Self { stage, lease: Arc::new(tokio::sync::RwLock::new(())), export: tokio::sync::Mutex::new(None), state_failure: Mutex::new(None) }
+        Self {
+            stage,
+            lease: Arc::new(tokio::sync::RwLock::new(())),
+            export: tokio::sync::Mutex::new(None),
+            state_failure: Mutex::new(None),
+        }
     }
 
     fn check_state(&self) -> Result<(), ThoError> {
         // A failed purge or panicking invocation may leave partial state. Never
         // invoke or export it until an exclusive purge completes successfully.
-        match self.state_failure.lock().as_ref() { Some(error) => Err(error.clone()), None => Ok(()) }
+        match self.state_failure.lock().as_ref() {
+            Some(error) => Err(error.clone()),
+            None => Ok(()),
+        }
     }
 
     async fn reset_checkpoint(&self, info: StageStateInfo) -> Result<(), ThoError> {
@@ -258,7 +276,9 @@ impl InstalledEndpoint {
         // Catch polling as well as construction. Catching only creation of a
         // future lets its panic escape to the transport supervisor.
         let result = std::panic::AssertUnwindSafe(async { self.stage.purge(device).await }).catch_unwind().await.unwrap_or_else(|panic| Err(worker_stage_panic(panic)));
-        if result.is_ok() { *self.state_failure.lock() = None; }
+        if result.is_ok() {
+            *self.state_failure.lock() = None;
+        }
         result
     }
 
@@ -286,8 +306,7 @@ fn worker_stage_panic(panic: Box<dyn std::any::Any + Send>) -> ThoError {
 type InstalledStages = Arc<DashMap<String, Option<Arc<InstalledEndpoint>>>>;
 
 fn installed_endpoint(stages: &InstalledStages, key: &str) -> Result<Arc<InstalledEndpoint>, ThoError> {
-    stages.get(key).and_then(|entry| entry.value().as_ref().map(Arc::clone))
-        .ok_or_else(|| ThoError::MissingEndpoint(key.to_owned()))
+    stages.get(key).and_then(|entry| entry.value().as_ref().map(Arc::clone)).ok_or_else(|| ThoError::MissingEndpoint(key.to_owned()))
 }
 
 struct WorkerSharedArena {
@@ -399,12 +418,11 @@ pub struct WorkerCli {
     pub write_logger_level: LevelFilter,
 
     #[arg(long, default_value_t = 0)]
-    pub cuda_device:usize
+    pub cuda_device: usize,
 }
 
 impl CudaWorker {
-
-    pub fn run_if_sock(cdt:&str, app_configs:&WsConfigs, init_map: HashMap<String, InitFn>) -> anyhow::Result<()>{
+    pub fn run_if_sock(cdt: &str, app_configs: &WsConfigs, init_map: HashMap<String, InitFn>) -> anyhow::Result<()> {
         Self::run_if_sock_with_workspace(cdt, app_configs, init_map, FsWorkspace::new)
     }
 
@@ -414,39 +432,25 @@ impl CudaWorker {
         W: Workspace + ?Sized + 'static,
         F: FnOnce(PathBuf, WsConfigs) -> anyhow::Result<Box<W>>,
     {
-
         let ipc_sock = std::env::var_os(IPC_SOCK_ENV);
         println!("CudaWorker::run_if_sock: ipc_sock={ipc_sock:?}");
 
         if let Some(sock_path) = ipc_sock {
-
             let worker_cli = WorkerCli::parse();
-            let ws_root:PathBuf = worker_cli.ws_path.into();
+            let ws_root: PathBuf = worker_cli.ws_path.into();
 
-            let log_filename = ws_root.join("log")
-                .join(format!("thoosa_worker_{}.log", cdt).to_owned());
+            let log_filename = ws_root.join("log").join(format!("thoosa_worker_{}.log", cdt).to_owned());
 
-            let _logging_guards = init_tracing(
-                worker_cli.term_logger_level,
-                false,
-                worker_cli.write_logger_level,
-                false,
-                log_filename,
-                "info",
-                None,
-                Some(([127, 0, 0, 1], 6667).into()),
-            )?;
+            let _logging_guards = init_tracing(worker_cli.term_logger_level, false, worker_cli.write_logger_level, false, log_filename, "info", None, Some(([127, 0, 0, 1], 6667).into()))?;
 
             debug!("CudaWorker::run_if_sock: sock_path={sock_path:?}");
-            let exec_context = ThoCudaContext::new(0i32)?;//TODO device
+            let exec_context = ThoCudaContext::new(0i32)?; //TODO device
             let rt = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .on_thread_start(move || {
-
                     if let Err(err) = exec_context.bind_to_thread() {
                         panic!("Failed to create context: {err:?}");
                     }
-
                 })
                 .thread_name_fn(|| {
                     static TOKIO_THREAD_ID: AtomicUsize = AtomicUsize::new(0);
@@ -458,12 +462,7 @@ impl CudaWorker {
                 let ws = Arc::new(RwLock::new(workspace_factory(ws_root.clone(), app_configs.clone())?));
 
                 // Application workers use only postcard/typetag endpoint initializers after the proxy migration.
-                CudaWorker::run_worker(
-                    sock_path,
-                    &ws,
-                    init_map,
-                    ThoDevice::from(1usize),
-                ).await//TODO Cuda(0)
+                CudaWorker::run_worker(sock_path, &ws, init_map, ThoDevice::from(1usize)).await //TODO Cuda(0)
             })?;
 
             info!("perf: \n{}", format_perf_map(&PERF));
@@ -475,10 +474,10 @@ impl CudaWorker {
     }
 
     pub async fn run_worker<W>(
-        sock_path:OsString,
-        ws:&Arc<RwLock<Box<W>>>,
+        sock_path: OsString,
+        ws: &Arc<RwLock<Box<W>>>,
         endpoint_inits: HashMap<String, InitFn<W>>,
-        tho_device: ThoDevice //handles execution on single Cuda device
+        tho_device: ThoDevice, //handles execution on single Cuda device
     ) -> anyhow::Result<()>
     where
         W: Workspace + ?Sized + 'static,
@@ -490,11 +489,7 @@ impl CudaWorker {
         let worker_id: CudaWorkerId = serde_json::from_str(&std::env::var(cuda_process::WORKER_ID_ENV).context("missing CUDA worker identity")?)?;
         let cuda_device = tho_device.gpu_ordinal()?;
 
-        let exec_stream_pool = ExecutionStreamPool::new(
-            (0..WORKER_EXEC_STREAMS)
-                .map(|_| ThoCudaStream::from_pool(cuda_device as i32, false))
-                .collect::<Result<Vec<_>, _>>()?,
-        );
+        let exec_stream_pool = ExecutionStreamPool::new((0..WORKER_EXEC_STREAMS).map(|_| ThoCudaStream::from_pool(cuda_device as i32, false)).collect::<Result<Vec<_>, _>>()?);
         let stream = UnixStream::connect(PathBuf::from(sock_path)).await?;
 
         debug!("run_worker: worker connected");
@@ -507,15 +502,13 @@ impl CudaWorker {
         debug!("run_worker: arena_fd={arena_fd:?}");
         let file = File::from(arena_fd);
 
-
         let arena_size = file.metadata()?.len() as usize;
 
         let arena = unsafe { MmapOptions::new().len(arena_size).map_mut(&file)? };
-       /* unsafe {
+        /* unsafe {
             assert_eq!(libc::madvise(arena.as_mut_ptr().cast(), arena.len(), libc::MADV_RANDOM), 0);
             assert_eq!(libc::madvise(arena.as_mut_ptr().cast(), arena.len(), libc::MADV_HUGEPAGE), 0);
         };*/
-
 
         // The descriptor can close after mmap; the mapping itself remains shared and is retained by the request context.
         let shared_arena = Arc::new(WorkerSharedArena::new(arena));
@@ -523,15 +516,7 @@ impl CudaWorker {
 
         let cuda_copier = Arc::new(tokio::sync::RwLock::new(CudaCopier::make_instance_for_cuda_device(cuda_device, 0.2, WORKER_COPY_STREAMS)?));
         // Readiness follows all fallible device and arena initialization.
-        cuda_process::write_frame(
-            &mut writer,
-            &PostcardToFromBytes::to_bytes(&DeviceInfo {
-                worker_id,
-                free_mem,
-                total_mem
-            })?,
-            "DeviceInfo/worker"
-        ).await?;
+        cuda_process::write_frame(&mut writer, &PostcardToFromBytes::to_bytes(&DeviceInfo { worker_id, free_mem, total_mem })?, "DeviceInfo/worker").await?;
 
         let all_cuda_tensors = Arc::new(AllTensors::new(worker_id));
         let request_context = WorkerRequestContext {
@@ -544,9 +529,7 @@ impl CudaWorker {
             installed_stages: Arc::new(DashMap::new()),
             tho_device,
         };
-        serve_worker_requests(reader, writer, worker_id, move |request| {
-            Self::process_worker_request(request, request_context.clone())
-        }).await?;
+        serve_worker_requests(reader, writer, worker_id, move |request| Self::process_worker_request(request, request_context.clone())).await?;
         info!("worker finished");
         Ok(())
     }
@@ -572,7 +555,14 @@ impl CudaWorker {
                     };
                     Ok(status)
                 }
-                Operation::H2dCopy { tensor_key: _tensor_key, kind, shape, tensor_byte_len, arena_offset, dst_key } => {
+                Operation::H2dCopy {
+                    tensor_key: _tensor_key,
+                    kind,
+                    shape,
+                    tensor_byte_len,
+                    arena_offset,
+                    dst_key,
+                } => {
                     debug!("process_worker_request: Operation::H2dCopy kind={kind:?} shape={shape:?} tensor_byte_len={tensor_byte_len:?} arena_offset={arena_offset}");
 
                     let _cuda_device = context.tho_device.gpu_ordinal()?;
@@ -589,18 +579,16 @@ impl CudaWorker {
 
                         let endpoint = installed_endpoint(&context.installed_stages, &endpoint_key)?;
 
-
                         let _lease = endpoint.lease.write().await;
                         endpoint.check_state()?;
-                        endpoint.stage.state_transfer()
+                        endpoint
+                            .stage
+                            .state_transfer()
                             .ok_or_else(|| ThoError::new(format!("no state for endpoint_key={endpoint_key}")))?
-                            .set_state_tensor(context.tho_device.tho_device_idx(), tensor_id.clone(), cuda_t).await?;
+                            .set_state_tensor(context.tho_device.tho_device_idx(), tensor_id.clone(), cuda_t)
+                            .await?;
 
-                        TensorKey::StageState {
-                            endpoint_name,
-                            stage_id,
-                            tensor_key: tensor_id,
-                        }
+                        TensorKey::StageState { endpoint_name, stage_id, tensor_key: tensor_id }
                     } else {
                         insert_worker_tensor(&context.all_cuda_tensors, cuda_t)?.into()
                     };
@@ -609,7 +597,14 @@ impl CudaWorker {
 
                     Ok(OpResult::Ok(Some(Box::new(WorkerCopyDonePayload { transfer_id: request_id, tensor_ref }) as Box<dyn WorkerOutput>)))
                 }
-                Operation::D2hCopy { export_id, tensor_key, kind, shape, tensor_byte_len, arena_offset } => {
+                Operation::D2hCopy {
+                    export_id,
+                    tensor_key,
+                    kind,
+                    shape,
+                    tensor_byte_len,
+                    arena_offset,
+                } => {
                     debug!("run_worker: Operation::D2hCopy tensor_key={tensor_key:?} kind={kind:?} shape={shape:?} tensor_byte_len={tensor_byte_len} arena_offset={arena_offset}");
                     validate_arena_tensor_metadata(kind, &shape, tensor_byte_len, arena_offset, &context.shared_arena, "D2H destination")?;
 
@@ -627,14 +622,14 @@ impl CudaWorker {
                         }
                         Some(guard)
                     } else {
-                        if export_id.is_some() { return Err(ThoError::new("data copy cannot use a state export identity")); }
+                        if export_id.is_some() {
+                            return Err(ThoError::new("data copy cannot use a state export identity"));
+                        }
                         None
                     };
                     let source = match &tensor_key {
-                        TensorKey::Data(tensor_key) => {
-                            prepare_d2h_source(&context.all_cuda_tensors, tensor_key.clone(), kind, &shape, cuda_device)
-                        }
-                        TensorKey::StageState{ endpoint_name, stage_id, tensor_key: tensor_id } => {
+                        TensorKey::Data(tensor_key) => prepare_d2h_source(&context.all_cuda_tensors, tensor_key.clone(), kind, &shape, cuda_device),
+                        TensorKey::StageState { endpoint_name, stage_id, tensor_key: tensor_id } => {
                             let endpoint_key = cuda_process::endpoint_stage_key(endpoint_name.clone(), Some(stage_id));
 
                             let endpoint = installed_endpoint(&context.installed_stages, &endpoint_key)?;
@@ -651,7 +646,9 @@ impl CudaWorker {
                     // parent retains exclusive destination storage in PendingRequests
                     // until reply or worker exit; chunks retain this worker's mapping
                     // and the source tensor even if the request task is cancelled.
-                    unsafe { context.cuda_copier.read().await.copy_to_cpu_ptr(source, destination_address, Arc::clone(&context.shared_arena)).await?; }
+                    unsafe {
+                        context.cuda_copier.read().await.copy_to_cpu_ptr(source, destination_address, Arc::clone(&context.shared_arena)).await?;
+                    }
                     Ok(OpResult::Ok(Some(Box::new(WorkerCopyDonePayload { transfer_id: request_id, tensor_ref: tensor_key }) as Box<dyn WorkerOutput>)))
                 }
                 Operation::ExportStageTensors { endpoint_name, stage_id, export_id, destinations } => {
@@ -675,10 +672,14 @@ impl CudaWorker {
                             return Err(ThoError::new("state batch has an unrelated or duplicate tensor key"));
                         }
                         validate_arena_tensor_metadata(info.kind, &info.shape, info.tensor_byte_len, destination.arena_offset, &context.shared_arena, "state D2H destination")?;
-                        if info.tensor_byte_len != 0 { ranges.push((destination.arena_offset, destination.arena_offset + info.tensor_byte_len)); }
+                        if info.tensor_byte_len != 0 {
+                            ranges.push((destination.arena_offset, destination.arena_offset + info.tensor_byte_len));
+                        }
                     }
                     ranges.sort_unstable();
-                    if ranges.windows(2).any(|ranges| ranges[0].1 > ranges[1].0) { return Err(ThoError::new("state D2H destinations overlap")); }
+                    if ranges.windows(2).any(|ranges| ranges[0].1 > ranges[1].0) {
+                        return Err(ThoError::new("state D2H destinations overlap"));
+                    }
                     let mut sources = Vec::with_capacity(destinations.len());
                     for destination in destinations {
                         let info = destination.info;
@@ -691,7 +692,9 @@ impl CudaWorker {
                     }
                     // SAFETY: ranges/metadata were validated above; the parent
                     // request retains all allocations until reply or worker exit.
-                    unsafe { context.cuda_copier.read().await.copy_batch_to_cpu_ptrs(sources, Arc::clone(&context.shared_arena)).await?; }
+                    unsafe {
+                        context.cuda_copier.read().await.copy_batch_to_cpu_ptrs(sources, Arc::clone(&context.shared_arena)).await?;
+                    }
                     Ok(OpResult::Ok(None))
                 }
                 Operation::DropThoTensor { tensor_key } => {
@@ -757,17 +760,13 @@ impl CudaWorker {
                         warn!("run_worker: e={e}");
                         debug!("run_worker: e={e:?}");
                     }
-                    let result= result?;
+                    let result = result?;
                     debug!("run_worker: invoke endpoint endpoint_key={endpoint_key:?} result={result:?}");
                     Ok(OpResult::Ok(Some(result)))
                 }
-                operation @ (Operation::PurgeStage { .. } | Operation::GetStageStateInfo { .. } | Operation::BeginStageStatePurge { .. }) => {
-                    stage_state_operation(&context.installed_stages, operation, context.tho_device, request_id).await
-                }
+                operation @ (Operation::PurgeStage { .. } | Operation::GetStageStateInfo { .. } | Operation::BeginStageStatePurge { .. }) => stage_state_operation(&context.installed_stages, operation, context.tho_device, request_id).await,
 
-                Operation::FinishStageStatePurge { endpoint_name, stage_id, export_id, commit } => {
-                    finish_stage_export(&context.installed_stages, endpoint_name, stage_id, export_id, commit, context.tho_device).await
-                }
+                Operation::FinishStageStatePurge { endpoint_name, stage_id, export_id, commit } => finish_stage_export(&context.installed_stages, endpoint_name, stage_id, export_id, commit, context.tho_device).await,
                 Operation::ResetStageState { endpoint_name, stage_id, info } => {
                     let key = cuda_process::endpoint_stage_key(endpoint_name, stage_id.as_ref());
                     let endpoint = installed_endpoint(&context.installed_stages, &key)?;
@@ -779,14 +778,14 @@ impl CudaWorker {
                     let endpoint = context.installed_stages.get(&endpoint_key).and_then(|entry| entry.value().as_ref().map(Arc::clone));
                     let _lease = if let Some(endpoint) = &endpoint { Some(endpoint.lease.write().await) } else { None };
                     let removed = context.installed_stages.remove(&endpoint_key).is_some();
-                    debug!("run_worker: drop endpoint: endpoint key={endpoint_key} removed={removed} installed_endpoints keys={:?}", context.installed_stages.iter().map(|entry| entry.key().clone()).collect::<Vec<_>>());
+                    debug!(
+                        "run_worker: drop endpoint: endpoint key={endpoint_key} removed={removed} installed_endpoints keys={:?}",
+                        context.installed_stages.iter().map(|entry| entry.key().clone()).collect::<Vec<_>>()
+                    );
                     Ok(OpResult::Ok(None))
                 }
-                Operation::Shutdown { dummy: _ } => {
-                    Err(ThoError::new(format!("worker shutdown request {request_id} escaped the reader loop")))
-                }
+                Operation::Shutdown { dummy: _ } => Err(ThoError::new(format!("worker shutdown request {request_id} escaped the reader loop"))),
                 Operation::Debug => {
-
                     info!("run_worker: Operation::Debug context.tho_device={:?} all_cuda_tensors.len={}", context.tho_device, context.all_cuda_tensors.tensors.lock().len());
 
                     for (key, tensor) in context.all_cuda_tensors.tensors.lock().iter() {
@@ -800,17 +799,17 @@ impl CudaWorker {
                                 info!("run_worker: key={:?} state_info={:?}", entry.key(), stage_with_state.get_state_info(context.tho_device.tho_device_idx()).await?);
                             }
                         }
-
                     }
 
                     let out = Box::new(DebugOutput::new(DEBUG_DATA.lock().as_ref()));
                     Ok(OpResult::Ok(Some(out)))
                 }
             }
-        })().await
+        })()
+        .await
     }
 
-    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="CudaWorker::drop_tensor"))]
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "CudaWorker::drop_tensor"))]
     fn drop_tensor<W: Workspace + ?Sized>(context: &WorkerRequestContext<W>, tensor_key: &u64) -> OpResult {
         let removed = context.all_cuda_tensors.tensors.lock().remove(tensor_key);
         debug!("run_worker: Operation::DropThoTensor: removed={removed:?}");
@@ -819,17 +818,17 @@ impl CudaWorker {
 }
 
 pub trait WorkerStageInput: Debug + Sized + Debug {
-
     //for cloning on the main-process-side ThoTensor/ThoModule  containing references to the data kept on  worker side
-    fn clone_refs(&self) -> Result<Box<dyn WorkerInput>, ThoError> {//on main side
+    fn clone_refs(&self) -> Result<Box<dyn WorkerInput>, ThoError> {
+        //on main side
         // Some inputs use a typed adapter instead of reference cloning.
         Err(ThoError::new("input requires a typed worker adapter for reference cloning"))
     }
 
-    fn ref_to_tensor(&self, _all_cuda_tensors: &AllTensors, _remove: bool) -> Result<Self, ThoError> {//on worker side
+    fn ref_to_tensor(&self, _all_cuda_tensors: &AllTensors, _remove: bool) -> Result<Self, ThoError> {
+        //on worker side
         Err(ThoError::new("input does not support worker tensor materialization"))
     }
-
 }
 
 pub trait WorkerStageOutput: Debug + Sized + Serialize {
@@ -841,15 +840,13 @@ where
     D: Dims,
     Id: Named + Debug + Clone + DeserializeOwned,
 {
-
     fn ref_to_tensor(&self, all_cuda_tensors: &AllTensors, remove: bool) -> Result<Self, ThoError> {
         // Typed worker wrappers receive the tensor reference as a trait object and materialize it only inside the worker.
         Self::ref_to_tensor_(all_cuda_tensors, self, remove)
     }
-
 }
 
-impl <D,E>WorkerStageOutput for DataWithExtra<D, E>
+impl<D, E> WorkerStageOutput for DataWithExtra<D, E>
 where
     D: WorkerStageOutput + Data + CopyToDevice + WithId + Sync,
     E: Clone + Serialize + Debug + Send + Sync,
@@ -866,10 +863,10 @@ where
     D: Dims,
     Id: Clone + Debug + Named,
 {
-
     // Materialization produces local storage, whose kernels acquire the same
     // LocalTensorLease as in-process execution. No proxy can expose a raw Tensor.
-    fn ref_to_tensor_(all_cuda_tensors: &AllTensors, input_ref: &ThoTensor<D, Id>, remove: bool) -> Result<ThoTensor<D, Id>, ThoError> {//TODO make input_ref &self
+    fn ref_to_tensor_(all_cuda_tensors: &AllTensors, input_ref: &ThoTensor<D, Id>, remove: bool) -> Result<ThoTensor<D, Id>, ThoError> {
+        //TODO make input_ref &self
         input_ref.ref_worker_id().ok_or_else(|| ThoError::new("worker input must be a tensor reference"))?.check(all_cuda_tensors.worker_id)?;
         let input_key = input_ref.ref_key().ok_or_else(|| ThoError::new(format!("worker sync stage expected ThoTensor ref input, got {input_ref:?}")))?;
 
@@ -878,25 +875,19 @@ where
         if remove {
             let mut tensors = all_cuda_tensors.tensors.lock();
             debug!("ThoTensor::ref_to_tensor: input_key={input_key:?} keys={:?}", tensors.keys());
-            let tensor  = tensors
-                .remove(&input_key)
-                .ok_or_else(|| ThoError::new(format!("worker sync stage could not find tensor ref key={input_key}")))?;
+            let tensor = tensors.remove(&input_key).ok_or_else(|| ThoError::new(format!("worker sync stage could not find tensor ref key={input_key}")))?;
 
             ThoTensor::new(input_ref.id().clone(), tensor)
         } else {
             let tensors = all_cuda_tensors.tensors.lock();
             debug!("ThoTensor::ref_to_tensor: input_key={input_key:?} keys={:?}", tensors.keys());
-            let source = tensors
-                .get(&input_key)
-                .ok_or_else(|| ThoError::new(format!("worker sync stage could not find tensor ref key={input_key}")))?;
+            let source = tensors.get(&input_key).ok_or_else(|| ThoError::new(format!("worker sync stage could not find tensor ref key={input_key}")))?;
 
             debug!("ThoTensor::ref_to_tensor: input_key={input_key:?} source={source:?}");
 
             let mut tensor = tch_result(source.f_alias())?;
 
-
             if let Some(selector) = input_ref.selector() {
-
                 let ranges = selector.tensor_ranges()?;
                 if ranges.len() > tensor.dim() {
                     return Err(ThoError::new(format!("selector {selector:?} has {} ranges for a {}-dimensional tensor", ranges.len(), tensor.dim())));
@@ -918,7 +909,6 @@ where
 
             ThoTensor::new(input_ref.id().clone(), tensor)
         }
-
     }
 }
 
@@ -958,7 +948,6 @@ pub fn insert_worker_tensor(all_cuda_tensors: &AllTensors, tensor: Tensor) -> an
             Err(_) => anyhow::bail!("worker tensor key space exhausted"),
         };
 
-
         if let std::collections::hash_map::Entry::Vacant(entry) = tensors.entry(key) {
             debug!("insert_worker_tensor: key={key:?} tensor={tensor:?}");
 
@@ -968,13 +957,10 @@ pub fn insert_worker_tensor(all_cuda_tensors: &AllTensors, tensor: Tensor) -> an
     }
 }
 
-
-
 #[derive(Debug)]
 pub struct WokerRunCtx {
     tho_device_idx: usize,
 }
-
 
 impl WokerRunCtx {
     pub fn new(tho_device_idx: usize) -> Self {
@@ -984,8 +970,7 @@ impl WokerRunCtx {
 
 impl Named for WokerRunCtx {}
 
-
-impl WithId for WokerRunCtx{
+impl WithId for WokerRunCtx {
     type ID = ();
 
     fn id(&self) -> &Self::ID {
@@ -1000,13 +985,12 @@ impl RunCtx for WokerRunCtx {
 
     fn branch(&mut self, _with_new_cache_area: bool) -> Self
     where
-        Self: Sized
+        Self: Sized,
     {
         WokerRunCtx::new(self.tho_device_idx)
     }
 
-    fn add_purge_gpu_closure(&mut self, _cl: Box<dyn Fn() -> BoxFuture<'static, Result<(), ThoError>> + Send + Sync>) {
-    }
+    fn add_purge_gpu_closure(&mut self, _cl: Box<dyn Fn() -> BoxFuture<'static, Result<(), ThoError>> + Send + Sync>) {}
 }
 
 #[cfg(test)]
@@ -1035,27 +1019,39 @@ mod mock_request_handler {
     }
 
     impl SyncStageIpcWrapper for MockStatelessEndpoint {
-        fn execution(&self) -> crate::ipc::wraps::WorkerExecution<'_> { crate::ipc::wraps::WorkerExecution::Borrowed(self) }
+        fn execution(&self) -> crate::ipc::wraps::WorkerExecution<'_> {
+            crate::ipc::wraps::WorkerExecution::Borrowed(self)
+        }
     }
 
     impl SyncStageIpcWrapper for MockExportEndpoint {
-        fn execution(&self) -> crate::ipc::wraps::WorkerExecution<'_> { crate::ipc::wraps::WorkerExecution::Stateful(self) }
-        fn state_transfer(&self) -> Option<&dyn crate::ipc::state_transfer::StateTransfer> { Some(self) }
+        fn execution(&self) -> crate::ipc::wraps::WorkerExecution<'_> {
+            crate::ipc::wraps::WorkerExecution::Stateful(self)
+        }
+        fn state_transfer(&self) -> Option<&dyn crate::ipc::state_transfer::StateTransfer> {
+            Some(self)
+        }
         fn purge(&self, _: ThoDevice) -> BoxFuture<'_, Result<(), ThoError>> {
             async move { self.purge_state() }.boxed()
         }
     }
 
     impl crate::ipc::wraps::ErasedWithState for MockExportEndpoint {
-        fn do_run_with_state<'a>(&'a self, _: &'a Box<dyn WorkerInput>, _: &'a AllTensors, _: &'a ThoDevice, _: &'a mut dyn crate::cuda_copier::HandleCtx, _: &'a WokerRunCtx) -> BoxFuture<'a, Result<Box<dyn WorkerOutput>, ThoError>> { unreachable!("export metadata test") }
+        fn do_run_with_state<'a>(&'a self, _: &'a Box<dyn WorkerInput>, _: &'a AllTensors, _: &'a ThoDevice, _: &'a mut dyn crate::cuda_copier::HandleCtx, _: &'a WokerRunCtx) -> BoxFuture<'a, Result<Box<dyn WorkerOutput>, ThoError>> {
+            unreachable!("export metadata test")
+        }
     }
 
     impl crate::ipc::state_transfer::StateTransfer for MockExportEndpoint {
         fn get_state_info(&self, _: usize) -> BoxFuture<'_, Result<StageStateInfo, ThoError>> {
             async move { self.describe() }.boxed()
         }
-        fn get_state_tensor(&self, _: usize, _: String) -> BoxFuture<'_, Result<Tensor, ThoError>> { unreachable!("export metadata test") }
-        fn set_state_tensor(&self, _: usize, _: String, _: Tensor) -> BoxFuture<'_, Result<(), ThoError>> { unreachable!("export metadata test") }
+        fn get_state_tensor(&self, _: usize, _: String) -> BoxFuture<'_, Result<Tensor, ThoError>> {
+            unreachable!("export metadata test")
+        }
+        fn set_state_tensor(&self, _: usize, _: String, _: Tensor) -> BoxFuture<'_, Result<(), ThoError>> {
+            unreachable!("export metadata test")
+        }
     }
 
     pub struct MockExportEndpointBuilder {
@@ -1075,12 +1071,12 @@ mod mock_request_handler {
 
         fn build_inner(self, panics: bool) -> MockExportEndpoint {
             let mut endpoint = MockExportEndpoint::new();
-            endpoint.expect_describe().times(1).return_once(move || {
-                if self.describe_fails { Err(ThoError::new("description failed")) } else { Ok(StageStateInfo::empty()) }
-            });
+            endpoint.expect_describe().times(1).return_once(move || if self.describe_fails { Err(ThoError::new("description failed")) } else { Ok(StageStateInfo::empty()) });
             if let Some(result) = self.purge_result {
                 endpoint.expect_purge_state().times(1).return_once(move || {
-                    if panics { panic!("purge polling panic"); }
+                    if panics {
+                        panic!("purge polling panic");
+                    }
                     result
                 });
             } else {
@@ -1095,7 +1091,9 @@ mod mock_request_handler {
         pub calls: usize,
     }
     impl<F> MockRequestHandlerBuilder<F>
-    where F: FnMut(CudaWorkerMsgIn) -> BoxFuture<'static, Result<OpResult, ThoError>> + Send + 'static {
+    where
+        F: FnMut(CudaWorkerMsgIn) -> BoxFuture<'static, Result<OpResult, ThoError>> + Send + 'static,
+    {
         pub fn build(self) -> MockRequestHandler {
             let mut handler = MockRequestHandler::new();
             handler.expect_run().times(self.calls).returning(self.run);
@@ -1106,13 +1104,18 @@ mod mock_request_handler {
 
 #[cfg(test)]
 mod request_tests {
-    use super::*;
     use super::mock_request_handler::{MockRequestHandlerBuilder, MockStatelessEndpoint};
+    use super::*;
     use futures_util::FutureExt;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    fn worker_id() -> CudaWorkerId { CudaWorkerId { device_idx: 1, generation: thoosa_shared::CudaDeviceGeneration(0) } }
+    fn worker_id() -> CudaWorkerId {
+        CudaWorkerId {
+            device_idx: 1,
+            generation: thoosa_shared::CudaDeviceGeneration(0),
+        }
+    }
 
     async fn send<W: tokio::io::AsyncWrite + Unpin>(writer: &mut W, request_id: u64, operation: Operation) {
         let request = CudaWorkerMsgIn { worker_id: worker_id(), request_id, operation };
@@ -1128,9 +1131,13 @@ mod request_tests {
     async fn test_export_freezes_only_its_endpoint_until_matching_commit_or_abort() {
         for commit in [false, true] {
             let stages: InstalledStages = Arc::new(DashMap::new());
-            let endpoint = Arc::new(InstalledEndpoint::new(Arc::new(super::mock_request_handler::MockExportEndpointBuilder {
-                describe_fails: false, purge_result: if commit { Some(Ok(())) } else { None },
-            }.build())));
+            let endpoint = Arc::new(InstalledEndpoint::new(Arc::new(
+                super::mock_request_handler::MockExportEndpointBuilder {
+                    describe_fails: false,
+                    purge_result: if commit { Some(Ok(())) } else { None },
+                }
+                .build(),
+            )));
             stages.insert(cuda_process::endpoint_stage_key("stateful".into(), None::<&String>), Some(Arc::clone(&endpoint)));
             let other = InstalledEndpoint::new(Arc::new(MockStatelessEndpoint::new()));
             // Begin waits for a previously admitted invocation, including its GPU synchronization.
@@ -1154,9 +1161,13 @@ mod request_tests {
     async fn test_failed_export_commit_releases_lease_and_allows_state_purge_retry() {
         for panics in [false, true] {
             let stages: InstalledStages = Arc::new(DashMap::new());
-            let endpoint = Arc::new(InstalledEndpoint::new(Arc::new(super::mock_request_handler::MockExportEndpointBuilder {
-                describe_fails: false, purge_result: Some(Err(ThoError::oom())),
-            }.build_with_purge_retry(panics))));
+            let endpoint = Arc::new(InstalledEndpoint::new(Arc::new(
+                super::mock_request_handler::MockExportEndpointBuilder {
+                    describe_fails: false,
+                    purge_result: Some(Err(ThoError::oom())),
+                }
+                .build_with_purge_retry(panics),
+            )));
             stages.insert(cuda_process::endpoint_stage_key("stateful".into(), None::<&String>), Some(Arc::clone(&endpoint)));
             stage_state_operation(&stages, Operation::BeginStageStatePurge { endpoint_name: "stateful".into(), stage_id: None }, 1usize.into(), 7).await.unwrap();
             let error = finish_stage_export(&stages, "stateful".into(), None, 7, true, 1usize.into()).await.unwrap_err();
@@ -1206,9 +1217,7 @@ mod request_tests {
     #[tokio::test]
     async fn test_failed_export_description_releases_endpoint_lease() {
         let stages: InstalledStages = Arc::new(DashMap::new());
-        let endpoint = Arc::new(InstalledEndpoint::new(Arc::new(super::mock_request_handler::MockExportEndpointBuilder {
-            describe_fails: true, purge_result: None,
-        }.build())));
+        let endpoint = Arc::new(InstalledEndpoint::new(Arc::new(super::mock_request_handler::MockExportEndpointBuilder { describe_fails: true, purge_result: None }.build())));
         stages.insert(cuda_process::endpoint_stage_key("stateful".into(), None::<&String>), Some(Arc::clone(&endpoint)));
         assert!(stage_state_operation(&stages, Operation::BeginStageStatePurge { endpoint_name: "stateful".into(), stage_id: None }, 1usize.into(), 7).await.is_err());
         assert!(endpoint.export.lock().await.is_none());
@@ -1219,7 +1228,18 @@ mod request_tests {
     async fn test_last_request_panic_closes_transport_without_another_frame() {
         let (mut client, server) = tokio::io::duplex(4096);
         let (reader, writer) = tokio::io::split(server);
-        let handler = MockRequestHandlerBuilder { calls: 1, run: |_| async { panic!("last request panic"); #[allow(unreachable_code)] Ok(OpResult::Ok(None)) }.boxed() }.build();
+        let handler = MockRequestHandlerBuilder {
+            calls: 1,
+            run: |_| {
+                async {
+                    panic!("last request panic");
+                    #[allow(unreachable_code)]
+                    Ok(OpResult::Ok(None))
+                }
+                .boxed()
+            },
+        }
+        .build();
         let worker = tokio::spawn(serve_worker_requests(reader, writer, worker_id(), move |request| handler.run(request)));
         send(&mut client, 1, Operation::Debug).await;
         let error = tokio::time::timeout(Duration::from_secs(3), worker).await.unwrap().unwrap().unwrap_err();
@@ -1234,16 +1254,28 @@ mod request_tests {
         let (reader, writer) = tokio::io::split(server);
         let release = Arc::new(tokio::sync::Notify::new());
         let first = Arc::clone(&release);
-        let handler = MockRequestHandlerBuilder { calls: 2, run: move |request: CudaWorkerMsgIn| {
-            let first = Arc::clone(&first);
-            async move {
-                if request.request_id == 1 { first.notified().await; }
-                Ok(OpResult::Ok(None))
-            }.boxed()
-        }}.build();
+        let handler = MockRequestHandlerBuilder {
+            calls: 2,
+            run: move |request: CudaWorkerMsgIn| {
+                let first = Arc::clone(&first);
+                async move {
+                    if request.request_id == 1 {
+                        first.notified().await;
+                    }
+                    Ok(OpResult::Ok(None))
+                }
+                .boxed()
+            },
+        }
+        .build();
         let worker = tokio::spawn(serve_worker_requests(reader, writer, worker_id(), move |request| handler.run(request)));
         send(&mut client, 1, Operation::Debug).await;
-        let bytes = PostcardToFromBytes::to_bytes(&CudaWorkerMsgIn { worker_id: worker_id(), request_id: 2, operation: Operation::Debug }).unwrap();
+        let bytes = PostcardToFromBytes::to_bytes(&CudaWorkerMsgIn {
+            worker_id: worker_id(),
+            request_id: 2,
+            operation: Operation::Debug,
+        })
+        .unwrap();
         let header = (bytes.len() as u32).to_le_bytes();
         client.write_all(&header[..2]).await.unwrap();
         release.notify_one();
@@ -1296,13 +1328,21 @@ mod request_tests {
         let (output, writer) = tokio::io::duplex(4096);
         let pending = Arc::new(tokio::sync::Notify::new());
         let started = Arc::clone(&pending);
-        let handler = MockRequestHandlerBuilder { calls: 2, run: move |request: CudaWorkerMsgIn| {
-            let started = Arc::clone(&started);
-            async move {
-                if request.request_id == 1 { started.notify_one(); return std::future::pending().await; }
-                Ok(OpResult::Ok(None))
-            }.boxed()
-        }}.build();
+        let handler = MockRequestHandlerBuilder {
+            calls: 2,
+            run: move |request: CudaWorkerMsgIn| {
+                let started = Arc::clone(&started);
+                async move {
+                    if request.request_id == 1 {
+                        started.notify_one();
+                        return std::future::pending().await;
+                    }
+                    Ok(OpResult::Ok(None))
+                }
+                .boxed()
+            },
+        }
+        .build();
         let worker = tokio::spawn(serve_worker_requests(reader, writer, worker_id(), move |request| handler.run(request)));
         send(&mut input, 1, Operation::Debug).await;
         pending.notified().await;
@@ -1324,10 +1364,7 @@ mod generation_tests {
         let current = CudaWorkerId { device_idx: 2, generation: CudaDeviceGeneration(3) };
         let tensors = AllTensors::new(current);
         tensors.tensors.lock().insert(42, tch_result(Tensor::f_from_slice(&[7f32]))?);
-        for worker_id in [
-            CudaWorkerId { generation: CudaDeviceGeneration(2), ..current },
-            CudaWorkerId { device_idx: 1, ..current },
-        ] {
+        for worker_id in [CudaWorkerId { generation: CudaDeviceGeneration(2), ..current }, CudaWorkerId { device_idx: 1, ..current }] {
             let stale: ThoTensor = ThoTensor::new_ref((), 42, vec![1], tch::Kind::Float, None, worker_id);
             for consume in [false, true] {
                 assert!(matches!(stale.ref_to_tensor(&tensors, consume).unwrap_err().what(), ThoError::CudaBeingRecovered));

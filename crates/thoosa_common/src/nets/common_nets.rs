@@ -1,10 +1,8 @@
-use thoosa_common::tch_error::tch_result;
 use crate::dims::Dims;
 use crate::nets::batches::BatchLengths;
 use crate::nets::nodes::{BinaryHeadPool, ThoModule};
-use crate::nets::tho_varstore::clone_var_store_to;
 use crate::nets::state_transfer::{StateTensors, VarStoreState};
-use thoosa_common::ipc::state_transfer::StageStateInfo;
+use crate::nets::tho_varstore::clone_var_store_to;
 use crate::parzen::optimizer::{AsyncTPEOptimizer, CompletedTrial, ConfigurationSpace, StudyDirection};
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
@@ -24,6 +22,8 @@ use tch::Device::Cpu;
 use tch::Kind::Float;
 use tch::nn::VarStore;
 use tch::{Device, Kind, Tensor, nn};
+use thoosa_common::ipc::state_transfer::StageStateInfo;
+use thoosa_common::tch_error::tch_result;
 use thoosa_properties_map::ToHashmap;
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
@@ -39,13 +39,13 @@ use thoosa_shared::{CopyToDevice, ThoError, panic_to_err_async};
 use thoosa_shims::inference_mode::InferenceModeGuard;
 
 pub trait WithCommonTrainingRunConfig {
-    fn config(&self)->&CommonTrainingRunConfig;
+    fn config(&self) -> &CommonTrainingRunConfig;
 }
 
 type ModuleFactory<DI, DO> = dyn Fn(&nn::Path) -> anyhow::Result<Box<dyn ThoModule<DI, DO>>> + Send + Sync;
 
 pub struct ThoModuleWithStore<DI: Dims + Send + 'static + ?Sized, DO: Dims + Send> {
-    id:SynKey,
+    id: SynKey,
     module: parking_lot::Mutex<Option<Box<dyn ThoModule<DI, DO>>>>,
     var_store: VarStore,
     offloaded: Option<(VarStoreState, StateTensors)>,
@@ -53,10 +53,11 @@ pub struct ThoModuleWithStore<DI: Dims + Send + 'static + ?Sized, DO: Dims + Sen
     module_factory: Option<Arc<ModuleFactory<DI, DO>>>,
 }
 
-impl <DI, DO> WithId for ThoModuleWithStore<DI, DO>
+impl<DI, DO> WithId for ThoModuleWithStore<DI, DO>
 where
     DI: Dims + Send + 'static + ?Sized,
-    DO: Dims + Send, {
+    DO: Dims + Send,
+{
     type ID = SynKey;
 
     fn id(&self) -> &Self::ID {
@@ -64,11 +65,11 @@ where
     }
 }
 
-impl <DI, DO> Output for ThoModuleWithStore<DI, DO>
+impl<DI, DO> Output for ThoModuleWithStore<DI, DO>
 where
     DI: Dims + Send + 'static + ?Sized,
-    DO: Dims + Send + 'static, {
-
+    DO: Dims + Send + 'static,
+{
 }
 
 impl<DI, DO> Debug for ThoModuleWithStore<DI, DO>
@@ -77,18 +78,13 @@ where
     DO: Dims + Send,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ThoModuleWithStore")
-            .field("module", &self.module)
-            .field("var_store", &self.var_store)
-            .field("has_factory", &self.module_factory.is_some())
-            .finish()
+        f.debug_struct("ThoModuleWithStore").field("module", &self.module).field("var_store", &self.var_store).field("has_factory", &self.module_factory.is_some()).finish()
     }
 }
 
 // Auto traits follow the factory bounds and the mutex protecting the non-Sync module.
 
-impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModule<DI, DO> for ThoModuleWithStore<DI, DO>
-{
+impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModule<DI, DO> for ThoModuleWithStore<DI, DO> {
     fn tho_forward(&self, t: &ThoTensor<DI, DebugId>, lengths: Option<&mut BatchLengths>, train: bool) -> anyhow::Result<ThoTensor<DO, DebugId>> {
         let _guard = InferenceModeGuard::new(!train)?;
 
@@ -101,12 +97,8 @@ impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModule<DI, DO> for
                 warn!("ThoModuleWithStore::tho_forward: store_float_precision={store_float_precision:?}"); //dummy nets may have no tensors
                 Float
             }
-            VarStoreFloatPrecision::Uniform(kind) => {
-                kind
-            }
-            VarStoreFloatPrecision::Mixed(_) => {
-                return Err(anyhow::anyhow!("ThoModule {:?} contains tensors of unexpected precision: store_float_precision={store_float_precision:?}", self.id))
-            }
+            VarStoreFloatPrecision::Uniform(kind) => kind,
+            VarStoreFloatPrecision::Mixed(_) => return Err(anyhow::anyhow!("ThoModule {:?} contains tensors of unexpected precision: store_float_precision={store_float_precision:?}", self.id)),
         };
 
         let t = if !float_precision.eq(&t.kind()) {
@@ -145,12 +137,7 @@ impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModuleWithStore<DI
     /// let model = ThoModuleWithStore::with_factory(SynKey::new([]), module, VarStore::new(Device::Cpu), Some(factory));
     /// retained.set(7);
     /// ```
-    pub fn with_factory<I:Into<SynKey>>(
-        id: I,
-        module: Box<dyn ThoModule<DI, DO>>,
-        var_store: VarStore,
-        module_factory: Option<Arc<ModuleFactory<DI, DO>>>,
-    ) -> Self {
+    pub fn with_factory<I: Into<SynKey>>(id: I, module: Box<dyn ThoModule<DI, DO>>, var_store: VarStore, module_factory: Option<Arc<ModuleFactory<DI, DO>>>) -> Self {
         Self {
             id: id.into(),
             module: parking_lot::Mutex::new(Some(module)),
@@ -169,8 +156,6 @@ impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModuleWithStore<DI
 
         let builder: Arc<ModuleFactory<DI, DO>> = Arc::new(builder);
         let mut vs = VarStore::new(device);
-
-
 
         let mut module = builder(&vs.root())?;
         vs.load(&model)?;
@@ -197,11 +182,7 @@ impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModuleWithStore<DI
 
     #[allow(dead_code)]
     fn mem_total(&self) -> usize {
-        self.var_store
-            .variables()
-            .iter()
-            .map(|t| tensor_mem_size(t.1))
-            .sum()
+        self.var_store.variables().iter().map(|t| tensor_mem_size(t.1)).sum()
     }
 
     #[allow(dead_code)]
@@ -230,8 +211,7 @@ impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModuleWithStore<DI
     }
 
     pub fn has_gpu_data(&self, device: usize) -> bool {
-        device != 0 && (self.module.lock().is_some() && self.tho_device_idx() == device
-            || self.offloaded.as_ref().is_some_and(|(_, tensors)| tensors.has_device(device)))
+        device != 0 && (self.module.lock().is_some() && self.tho_device_idx() == device || self.offloaded.as_ref().is_some_and(|(_, tensors)| tensors.has_device(device)))
     }
 
     pub fn state_info(&self) -> Result<StageStateInfo, ThoError> {
@@ -249,7 +229,9 @@ impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModuleWithStore<DI
     }
 
     pub fn drop_gpu(&mut self, device: usize) -> Result<(), ThoError> {
-        if !self.has_gpu_data(device) { return Ok(()); }
+        if !self.has_gpu_data(device) {
+            return Ok(());
+        }
         if let Some((_, tensors)) = &mut self.offloaded {
             tensors.clear();
             return Ok(());
@@ -259,7 +241,9 @@ impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModuleWithStore<DI
         }
         let mut tensors = StateTensors::default();
         let variables = VarStoreState::capture(&self.var_store, &mut tensors)?;
-        if tensors.info().tensors.is_empty() { return Ok(()); }
+        if tensors.info().tensors.is_empty() {
+            return Ok(());
+        }
         tensors.clear();
         // Both the module (including derived/quantized caches) and VarStore own
         // GPU tensors. Drop both after the parent's D2H copies have completed.
@@ -278,7 +262,9 @@ impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModuleWithStore<DI
             let vs = variables.restore(tensors, device)?;
             let builder = self.module_factory.as_ref().ok_or_else(|| ThoError::new("model has no module factory"))?;
             let mut module = builder(&vs.root())?;
-            if self.quantized { module.quantize(); }
+            if self.quantized {
+                module.quantize();
+            }
             self.var_store = vs;
             *self.module.get_mut() = Some(module);
             self.offloaded = None;
@@ -295,10 +281,7 @@ pub enum VarStoreFloatPrecision {
 }
 
 fn is_float_kind(kind: Kind) -> bool {
-    matches!(
-            kind,
-            Kind::Half | Kind::BFloat16 | Kind::Float | Kind::Double
-        )
+    matches!(kind, Kind::Half | Kind::BFloat16 | Kind::Float | Kind::Double)
 }
 
 pub fn var_store_float_precision(vs: &nn::VarStore) -> VarStoreFloatPrecision {
@@ -328,35 +311,34 @@ pub fn var_store_float_precision(vs: &nn::VarStore) -> VarStoreFloatPrecision {
 }
 
 #[async_trait]
-impl <DI, DO> CopyToDevice for ThoModuleWithStore<DI, DO>
+impl<DI, DO> CopyToDevice for ThoModuleWithStore<DI, DO>
 where
-DI: Dims + Send + 'static,
-DO: Dims + Send + 'static {
-
+    DI: Dims + Send + 'static,
+    DO: Dims + Send + 'static,
+{
     async fn copy_to_device(&self, tho_dst_device: usize) -> Result<Self, ThoError> {
-
         debug!("ThoModuleWithStore::copy_to_device: has module_factory={}", self.module_factory.is_some());
 
         self.ensure_ready()?;
         let var_store = clone_var_store_to(&self.var_store, tho_dst_device.into()).await?;
         // let mut var_store = VarStore::new(ThoDevice::from(tho_dst_device).into());
-        let builder = self
-            .module_factory
-            .as_ref()
-            .unwrap_or_else(|| panic!("copy_to_device requires module_factory; construct modules via ThoModuleWithStore::load to enable copying"));
+        let builder = self.module_factory.as_ref().unwrap_or_else(|| panic!("copy_to_device requires module_factory; construct modules via ThoModuleWithStore::load to enable copying"));
 
         let mut module = builder(&var_store.root())?;
-        if self.quantized { module.quantize(); }
+        if self.quantized {
+            module.quantize();
+        }
         let mut result = Self::with_factory(self.id.clone(), module, var_store, Some(Arc::clone(builder)));
         result.quantized = self.quantized;
         Ok(result)
     }
 }
 
-impl <DI, DO> Data for ThoModuleWithStore<DI, DO>
+impl<DI, DO> Data for ThoModuleWithStore<DI, DO>
 where
     DI: Dims + Send + 'static,
-    DO: Dims + Send + 'static{
+    DO: Dims + Send + 'static,
+{
     type Metrics = ();
 
     fn size(&self) -> Self::Metrics {
@@ -368,10 +350,8 @@ where
     }
 
     fn mem_size(&self) -> u64 {
-        if let Ok( guard) = self.var_store.variables_.lock() {
-            guard.trainable_variables.iter().map(|v|tensor_mem_size(&v.tensor) as u64).sum::<u64>()
-          + guard.named_variables.iter().map(|v|tensor_mem_size(v.1) as u64).sum::<u64>()
-
+        if let Ok(guard) = self.var_store.variables_.lock() {
+            guard.trainable_variables.iter().map(|v| tensor_mem_size(&v.tensor) as u64).sum::<u64>() + guard.named_variables.iter().map(|v| tensor_mem_size(v.1) as u64).sum::<u64>()
         } else {
             error!("ThoModuleWithStore::mem_size: can't get variables");
             0
@@ -380,16 +360,16 @@ where
 }
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
-pub struct BinaryHeadMax{}
+pub struct BinaryHeadMax {}
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
-pub struct BinaryHeadMean{}
+pub struct BinaryHeadMean {}
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
-pub struct BinaryHeadLse{
+pub struct BinaryHeadLse {
     #[in_map]
     #[run_config]
-    pub tau: f64
+    pub tau: f64,
 }
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -402,22 +382,16 @@ pub enum BinaryHeadPoolArgs {
 impl From<&BinaryHeadPoolArgs> for BinaryHeadPool {
     fn from(value: &BinaryHeadPoolArgs) -> Self {
         match value {
-            BinaryHeadPoolArgs::Max(_) => {
-                BinaryHeadPool::Max
-            }
-            BinaryHeadPoolArgs::Mean(_) => {
-                BinaryHeadPool::Mean
-            }
-            BinaryHeadPoolArgs::Lse(BinaryHeadLse{tau}) => {
-                BinaryHeadPool::Lse {tau: *tau}
-            }
+            BinaryHeadPoolArgs::Max(_) => BinaryHeadPool::Max,
+            BinaryHeadPoolArgs::Mean(_) => BinaryHeadPool::Mean,
+            BinaryHeadPoolArgs::Lse(BinaryHeadLse { tau }) => BinaryHeadPool::Lse { tau: *tau },
         }
     }
 }
 
 impl Default for BinaryHeadPoolArgs {
     fn default() -> Self {
-        BinaryHeadPoolArgs::Max(BinaryHeadMax{})
+        BinaryHeadPoolArgs::Max(BinaryHeadMax {})
     }
 }
 
@@ -425,11 +399,11 @@ impl Default for BinaryHeadPoolArgs {
 pub struct AdamW {
     #[in_map]
     #[run_config]
-    beta1:f32,
+    beta1: f32,
 
     #[in_map]
     #[run_config]
-    beta2:f32,
+    beta2: f32,
 
     #[in_map]
     #[run_config]
@@ -437,12 +411,12 @@ pub struct AdamW {
 
     #[in_map]
     #[run_config]
-    amsgrad:bool
+    amsgrad: bool,
 }
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Serialize, Deserialize)]
 pub enum Optimizers {
-    AdamW(AdamW)
+    AdamW(AdamW),
 }
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Serialize, Deserialize)]
@@ -461,29 +435,23 @@ pub struct CommonTrainingRunConfig {
 
     #[in_map]
     #[run_config]
-    pub patience:u32,
+    pub patience: u32,
 
     #[in_map]
     #[run_config]
-    pub min_delta:f32,
+    pub min_delta: f32,
 
     #[in_map]
     #[run_config]
-    optimizer: Option<Optimizers>
+    optimizer: Option<Optimizers>,
 }
 
 impl CommonTrainingRunConfig {
     fn default_optimizer() -> Optimizers {
-        Optimizers::AdamW(AdamW {
-            beta1: 0.9, beta2: 0.999, wd: 0.01, amsgrad: false
-        })
+        Optimizers::AdamW(AdamW { beta1: 0.9, beta2: 0.999, wd: 0.01, amsgrad: false })
     }
 
-    pub fn new(
-        cycles: u32,
-        batch_size: u32,
-        lr: f64,
-    ) -> Self {
+    pub fn new(cycles: u32, batch_size: u32, lr: f64) -> Self {
         Self {
             epochs: cycles,
             batch_size,
@@ -500,15 +468,14 @@ impl CommonTrainingRunConfig {
         debug!("CommonTrainingRunConfig::tho_optimizer: optimizer={optimizer:?}");
 
         match optimizer {
-            Optimizers::AdamW(AdamW{ beta1, beta2, wd, amsgrad }) => {
-                tch::nn::AdamW{
-                    beta1: beta1 as f64,
-                    beta2: beta2 as f64,
-                    wd,
-                    eps: 1e-8,
-                    amsgrad,
-                }.into()
+            Optimizers::AdamW(AdamW { beta1, beta2, wd, amsgrad }) => tch::nn::AdamW {
+                beta1: beta1 as f64,
+                beta2: beta2 as f64,
+                wd,
+                eps: 1e-8,
+                amsgrad,
             }
+            .into(),
         }
     }
 }
@@ -571,32 +538,28 @@ pub enum NetsPadding {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum ConvNetJoint {
     AttnPool1d,
-    MinMax
+    MinMax,
 }
 
 impl From<&ConvNetJointArgs> for ConvNetJoint {
     fn from(value: &ConvNetJointArgs) -> Self {
         match value {
-            ConvNetJointArgs::AttnPool1d(_) => {
-                ConvNetJoint::AttnPool1d
-            }
-            ConvNetJointArgs::MinMax(_) => {
-                ConvNetJoint::MinMax
-            }
+            ConvNetJointArgs::AttnPool1d(_) => ConvNetJoint::AttnPool1d,
+            ConvNetJointArgs::MinMax(_) => ConvNetJoint::MinMax,
         }
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConvNetParams {
-    pub num_conv_layers:u32,
-    pub kernel:u32,
-    pub hidden_conv_channels:u32,
+    pub num_conv_layers: u32,
+    pub kernel: u32,
+    pub hidden_conv_channels: u32,
 
-    pub num_head_layers:u32,
-    pub num_head_features:u32,
+    pub num_head_layers: u32,
+    pub num_head_features: u32,
 
-    pub joint: ConvNetJoint
+    pub joint: ConvNetJoint,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -626,14 +589,14 @@ impl LinLenNetParams {
 }
 
 impl ConvNetParams {
-    pub fn new(num_conv_layers:u32, hidden_conv_channels:u32, kernel: u32, num_head_layers: u32, num_head_features: u32, joint: ConvNetJoint) -> Self {
+    pub fn new(num_conv_layers: u32, hidden_conv_channels: u32, kernel: u32, num_head_layers: u32, num_head_features: u32, joint: ConvNetJoint) -> Self {
         Self {
             num_conv_layers,
             num_head_layers,
             kernel,
             hidden_conv_channels,
             num_head_features,
-            joint
+            joint,
         }
     }
 }
@@ -663,12 +626,8 @@ pub struct PlotVecf32 {
 
 impl PlotVecf32 {
     pub fn new(id: &str) -> Self {
-        Self {
-            id: id.into(),
-            data: vec![],
-        }
+        Self { id: id.into(), data: vec![] }
     }
-
 }
 
 impl TrainListener for PlotVecf32 {
@@ -678,13 +637,8 @@ impl TrainListener for PlotVecf32 {
         //TODO move into another listener
         if self.data.len() > 10 {
             let len_half = self.data.len() / 2;
-            if self.data[0..len_half].iter().sum::<f32>()
-                < self.data[len_half..].iter().sum::<f32>()
-            {
-                debug!(
-                    "TrainListener for PlotVecf32::on_valid_cycle stopping self.data={:?}",
-                    self.data
-                );
+            if self.data[0..len_half].iter().sum::<f32>() < self.data[len_half..].iter().sum::<f32>() {
+                debug!("TrainListener for PlotVecf32::on_valid_cycle stopping self.data={:?}", self.data);
                 return ListenerResponse::Stop;
             }
         }
@@ -698,10 +652,7 @@ where
     P: FieldName + 'static,
     R: RunConfig + TryFrom<std::vec::IntoIter<NamedVal<P>>, Error = anyhow::Error> + Clone + ToHashmap,
 {
-    let base_opt_vals = cs
-        .into_iter()
-        .map(|hp| NamedVal::new(hp.name().clone(), opt_param_base_value(hp)))
-        .collect::<Vec<_>>();
+    let base_opt_vals = cs.into_iter().map(|hp| NamedVal::new(hp.name().clone(), opt_param_base_value(hp))).collect::<Vec<_>>();
     let base_map = run_config_property_map::<P, R>(const_vals, grid_vals, &base_opt_vals)?;
 
     cs.into_iter()
@@ -733,11 +684,7 @@ where
 }
 
 fn changed_property_key(base_map: &HashMap<String, Val>, alt_map: &HashMap<String, Val>) -> Option<String> {
-    let mut changed = alt_map
-        .iter()
-        .filter(|(key, val)| base_map.get(*key) != Some(*val))
-        .map(|(key, _)| key.clone())
-        .collect::<Vec<_>>();
+    let mut changed = alt_map.iter().filter(|(key, val)| base_map.get(*key) != Some(*val)).map(|(key, _)| key.clone()).collect::<Vec<_>>();
     changed.extend(base_map.keys().filter(|key| !alt_map.contains_key(*key)).cloned());
     changed.sort();
     changed.dedup();
@@ -761,27 +708,21 @@ fn opt_param_alt_value<P: FieldName>(hp: &Hyperparameter<P>) -> Option<Val> {
     }
 }
 
-#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="opt_train"))]
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "opt_train"))]
 pub async fn opt_train<P, R, F, N: Debug + Default, A: Debug + Send + Sync + 'static>(
     opt_config: Arc<OptConfig>, //N node parameters
     mut train: F,
-    run_config_source: Arc<thoosa_shared::run_configs::TrainingRunConfigs<P> >,
+    run_config_source: Arc<thoosa_shared::run_configs::TrainingRunConfigs<P>>,
     descr: &str,
     reusable_completed_trials: Vec<CompletedTrial>,
 ) -> anyhow::Result<(A, N, R, f32)>
 where
     P: FieldName + 'static,
     R: RunConfig + TryFrom<std::vec::IntoIter<NamedVal<P>>, Error = anyhow::Error> + Clone + ToHashmap,
-    F: for<'a, 'b> AsyncFnMut(
-            R,
-            &'a mut (dyn TrainListener + 'b),
-        ) -> Result<(A, f32, N), ThoError>,
+    F: for<'a, 'b> AsyncFnMut(R, &'a mut (dyn TrainListener + 'b)) -> Result<(A, f32, N), ThoError>,
 {
-    let const_vals = run_config_source
-        .grid_run_config_source()
-        .const_params()
-        .clone();
-    const MAX_LOSS:f32 = f32::MAX;
+    let const_vals = run_config_source.grid_run_config_source().const_params().clone();
+    const MAX_LOSS: f32 = f32::MAX;
     let min_loss = Arc::new(RwLock::new(MAX_LOSS));
 
     let min_var_store: Arc<RwLock<Option<(A, N, R, f32)>>> = Arc::new(RwLock::new(None));
@@ -808,17 +749,14 @@ where
             vec![]
         } else {
             let reusable_param_keys = opt_param_property_keys::<P, R>(const_vals.as_slice(), grid_vals.as_slice(), &config_space)?;
-            config_space.reusable_configs_from_completed_trials_with_param_keys(
-                reusable_completed_trials.iter().cloned(),
-                StudyDirection::Minimize,
-                opt_config.opt_max_evals as usize,
-                &reusable_param_keys,
-            )
+            config_space.reusable_configs_from_completed_trials_with_param_keys(reusable_completed_trials.iter().cloned(), StudyDirection::Minimize, opt_config.opt_max_evals as usize, &reusable_param_keys)
         };
 
         let mut opt = AsyncTPEOptimizer::new(
             async move |opt_vals| {
-                if recovery_error_moved.read().is_some() { return MAX_LOSS; }
+                if recovery_error_moved.read().is_some() {
+                    return MAX_LOSS;
+                }
                 debug!("opt_train: opt_vals={opt_vals:?}  ");
 
                 let run_config: R = match [const_vals.as_slice(), grid_vals.as_slice(), opt_vals].concat().into_iter().try_into() {
@@ -830,15 +768,10 @@ where
                 };
 
                 let mut listener = PlotVecf32::new(
-                    format!("_params_{:?}", "id" /*TODO run_config.get_id()*/).as_str(),//get_id - it's not set 
+                    format!("_params_{:?}", "id" /*TODO run_config.get_id()*/).as_str(), //get_id - it's not set
                 );
 
-                let train_result = panic_to_err_async!(
-                    train_clone(
-                        run_config.clone(),
-                        &mut listener
-                    )
-                );
+                let train_result = panic_to_err_async!(train_clone(run_config.clone(), &mut listener));
                 let (var_store, loss, node_params) = match train_result {
                     Ok(result) => result,
                     Err(e) => {
@@ -857,9 +790,7 @@ where
 
                 if loss < min_loss_val {
                     *min_loss_moved.write() = loss;
-                    min_var_store_clone
-                        .write()
-                        .replace((var_store, node_params, run_config, loss));
+                    min_var_store_clone.write().replace((var_store, node_params, run_config, loss));
                 }
 
                 loss
@@ -883,7 +814,9 @@ where
         // Formatting a VarStore can inspect tensors after a failed CUDA operation.
         trace!("opt_train: done opt, descr={descr}");
         if let Err(error) = best_config {
-            if min_var_store.read().is_none() { return Err(error); }
+            if min_var_store.read().is_none() {
+                return Err(error);
+            }
             // Recovery failures above still propagate; ordinary optimizer failure may
             // retain a completed model, with an explicit partial-success report.
             warn!("opt_train: partial success for {descr}; optimization stopped early: {error:#}; retaining best_loss={}", min_loss.read());
@@ -897,11 +830,7 @@ where
 }
 
 pub fn is_nonzero(t_1: &Tensor) -> anyhow::Result<bool> {
-    Ok(t_1
-        .flatten(0, (t_1.size().len() - 1) as i64)
-        .iter::<f64>()?
-        .find(|v| v > &0.)
-        .is_some())
+    Ok(t_1.flatten(0, (t_1.size().len() - 1) as i64).iter::<f64>()?.find(|v| v > &0.).is_some())
 }
 
 #[allow(non_snake_case, unused_assignments, unused_variables)]
@@ -929,16 +858,14 @@ pub struct ConvNetArgs {
 
     #[in_map]
     #[run_config]
-    pub joint:ConvNetJointArgs
+    pub joint: ConvNetJointArgs,
 }
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq)]
-pub struct AttnPool1dArgs{
-
-}
+pub struct AttnPool1dArgs {}
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq)]
-pub struct MinMaxArgs{
+pub struct MinMaxArgs {
     #[in_map]
     pub _dummy: u32,
 }
@@ -947,13 +874,19 @@ pub struct MinMaxArgs{
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum ConvNetJointArgs {
     AttnPool1d(AttnPool1dArgs),
-    MinMax(MinMaxArgs)
+    MinMax(MinMaxArgs),
 }
 
 impl ConvNetArgs {
-    pub fn new(num_conv_layers: u32, hidden_conv_channels: u32, kernel: u32, num_head_layers: u32, num_head_features:u32, joint:ConvNetJointArgs) -> Self {
-
-        Self { num_conv_layers, hidden_conv_channels, num_head_layers, kernel, num_head_features, joint }
+    pub fn new(num_conv_layers: u32, hidden_conv_channels: u32, kernel: u32, num_head_layers: u32, num_head_features: u32, joint: ConvNetJointArgs) -> Self {
+        Self {
+            num_conv_layers,
+            hidden_conv_channels,
+            num_head_layers,
+            kernel,
+            num_head_features,
+            joint,
+        }
     }
 }
 
@@ -1009,7 +942,14 @@ pub struct StftRunConfig {
 
 impl StftRunConfig {
     pub fn new(n_fft: i64, hop_length: Option<i64>, win_length: Option<i64>, normalized: bool, onesided: bool, align_to_window: bool) -> Self {
-        Self { n_fft, hop_length, win_length, normalized, onesided, align_to_window }
+        Self {
+            n_fft,
+            hop_length,
+            win_length,
+            normalized,
+            onesided,
+            align_to_window,
+        }
     }
 
     pub fn validate(&self) -> anyhow::Result<()> {
@@ -1025,7 +965,7 @@ impl StftRunConfig {
         Ok(())
     }
 
-    pub fn hash_value(&self) ->u64{
+    pub fn hash_value(&self) -> u64 {
         let mut hasher = DefaultHasher::new();
         self.hash(&mut hasher);
         hasher.finish()
@@ -1034,6 +974,13 @@ impl StftRunConfig {
 
 impl Default for StftRunConfig {
     fn default() -> Self {
-        Self { n_fft: 16000, hop_length: Some(4000), win_length: Some(4000), normalized: false, onesided: true, align_to_window: true }
+        Self {
+            n_fft: 16000,
+            hop_length: Some(4000),
+            win_length: Some(4000),
+            normalized: false,
+            onesided: true,
+            align_to_window: true,
+        }
     }
 }

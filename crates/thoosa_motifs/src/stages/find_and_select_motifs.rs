@@ -1,6 +1,6 @@
 #![allow(unused_assignments)]
-use anyhow::Context as _;
 use crate::motifs_store::MotifsStore;
+use anyhow::Context as _;
 
 use crate::find::FixedFindMotifsConfig;
 use crate::stages::cross_loader::ResourcesConfigInput;
@@ -16,8 +16,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use thoosa_common::nets::common_nets::OptConfig;
 use thoosa_common::parzen::optimizer::{AsyncTPEOptimizer, ConfigurationSpace};
-use thoosa_common::runner::run_ctx::RunCtxImpl;
 use thoosa_common::resources::{SavableResult, Simple};
+use thoosa_common::runner::run_ctx::RunCtxImpl;
 use thoosa_cpu_data_derive::CpuData;
 use thoosa_properties_map::ToHashmap;
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
@@ -56,10 +56,7 @@ pub struct FindAndSelectMotifsInput {
 
 impl FindAndSelectMotifsInput {
     pub fn new(find_resources: String, select_resources: String) -> Self {
-        Self {
-            find_resources,
-            select_resources,
-        }
+        Self { find_resources, select_resources }
     }
 }
 
@@ -79,7 +76,6 @@ impl FindAndSelectMotifsResult {
 
 impl Output for FindAndSelectMotifsResult {}
 
-
 #[derive(Debug)]
 struct FindAndSelectEvalMetrics {
     score_sum: f64,
@@ -91,38 +87,20 @@ impl FindAndSelectEvalMetrics {
     }
 }
 
-
 #[async_trait]
 impl SavableResult for FindAndSelectMotifsResult {
     type Store = dyn MotifsStore;
     type Workspace = dyn crate::motifs_ws::MotifsWorkspace;
     type R = Vec<u32>;
 
-    async fn save(
-        &mut self,
-        store: &Arc<dyn MotifsStore>,
-        _ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
-        _p: Self::P<'_>
-    ) -> anyhow::Result<Vec<u32>> {
+    async fn save(&mut self, store: &Arc<dyn MotifsStore>, _ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, _p: Self::P<'_>) -> anyhow::Result<Vec<u32>> {
+        let best_run_config_ids = self.best_configs.iter().map(|v| v.select_motifs_run_config.id.expect("no select_motifs_run_config")).collect::<Vec<_>>();
 
-
-        let best_run_config_ids = self
-            .best_configs
-            .iter()
-            .map(|v| v.select_motifs_run_config.id.expect("no select_motifs_run_config"))
-            .collect::<Vec<_>>();
-
-        let id = t!(store.save_run_config(
-            Some(&best_run_config_ids),
-            FindAndSelectMotifsRunConfig::type_name(),
-            "OptSelectMotifsRunConfig",
-            HashMap::from([]),
-        )).await?;
+        let id = t!(store.save_run_config(Some(&best_run_config_ids), FindAndSelectMotifsRunConfig::type_name(), "OptSelectMotifsRunConfig", HashMap::from([]),)).await?;
 
         Ok(vec![id])
     }
 }
-
 
 ///for each grid values combo search for optimal opt values (RangeOrValue::Range without step)
 #[derive(Debug)]
@@ -130,9 +108,7 @@ pub struct FindAndSelectMotifsStage {
     ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
     store: Arc<dyn MotifsStore>,
     loader: Arc<RawTensorLoader<RunCtxImpl>>,
-    run_configs: Arc<
-        thoosa_shared::run_configs::TrainingRunConfigs<FindAndSelectMotifsRunConfigFields>,
-    >,
+    run_configs: Arc<thoosa_shared::run_configs::TrainingRunConfigs<FindAndSelectMotifsRunConfigFields>>,
     fixed_find_motifs_config: FixedFindMotifsConfig,
     opt_config: Arc<OptConfig>,
     max_chunk_size: i64,
@@ -159,17 +135,11 @@ impl FindAndSelectMotifsStage {
         }
     }
 
-    async fn save_run_config_with_input<R>(
-        store: &Arc<dyn MotifsStore>,
-        input_run_config_ids: Option<&[RunConfigId]>,
-        run_config: &mut R,
-        descr: &str,
-    ) -> Result<RunConfigId, ThoError>
+    async fn save_run_config_with_input<R>(store: &Arc<dyn MotifsStore>, input_run_config_ids: Option<&[RunConfigId]>, run_config: &mut R, descr: &str) -> Result<RunConfigId, ThoError>
     where
         R: RunConfig + ToHashmap,
     {
-        let run_config_id = t!(store
-            .save_run_config(input_run_config_ids, R::type_name(), descr, run_config.to_properties_iter(None).collect())).await?;
+        let run_config_id = t!(store.save_run_config(input_run_config_ids, R::type_name(), descr, run_config.to_properties_iter(None).collect())).await?;
         run_config.set_id(run_config_id);
         Ok(run_config_id)
     }
@@ -184,48 +154,36 @@ impl FindAndSelectMotifsStage {
         fixed_find_motifs_config: FixedFindMotifsConfig,
         _max_chunk_size: i64,
         _device_idx: usize,
-        mut ctx: C
+        mut ctx: C,
     ) -> Result<FindAndSelectEvalMetrics, ThoError> {
         let find_input = Arc::new(t!(ResourcesConfigInput::new(Simple::new(find_resources.clone())).check(store)).await?);
         //code in FindMotifsStage and SelectMotifsStage expects pre saved run configurations
-        let find_run_config_id = t!(Self::save_run_config_with_input(
-            store,
-            None,
-            &mut run_config.find_motifs_run_config,
-            "FindAndSelectMotifs/find",
-        )).await?;
+        let find_run_config_id = t!(Self::save_run_config_with_input(store, None, &mut run_config.find_motifs_run_config, "FindAndSelectMotifs/find",)).await?;
 
         #[allow(unused_variables)]
-        let select_run_config_id = t!(Self::save_run_config_with_input(
-            store,
-            Some(&[find_run_config_id]),
-            &mut run_config.select_motifs_run_config,
-            "FindAndSelectMotifs/select",
-        )).await?;
+        let select_run_config_id = t!(Self::save_run_config_with_input(store, Some(&[find_run_config_id]), &mut run_config.select_motifs_run_config, "FindAndSelectMotifs/select",)).await?;
 
-        let find_stage: Arc<FindMotifsStage<Simple, RawTensorLoader<C>, C>> = Arc::new(
-            t!(FindMotifsStage::new(
-                ws,
-                store,
-                Arc::clone(&loader),
-                vec![run_config.find_motifs_run_config.clone()],
-                fixed_find_motifs_config,
-                ctx.branch(true),
-            )).await?,
-        );
-        t!(find_stage
-            .run(find_input, ctx.branch(true))).await?;
+        let find_stage: Arc<FindMotifsStage<Simple, RawTensorLoader<C>, C>> = Arc::new(t!(FindMotifsStage::new(ws, store, Arc::clone(&loader), vec![run_config.find_motifs_run_config.clone()], fixed_find_motifs_config, ctx.branch(true),)).await?);
+        t!(find_stage.run(find_input, ctx.branch(true))).await?;
 
         #[allow(unexpected_cfgs)]
         #[cfg(tho_debug_plots)]
-        t!(run_plot(&ws, &store, &loader, &PlotDataArgs::new(DataBy::RunId{ find_motifs_run_config_ids: vec![run_config.find_motifs_run_config.id.unwrap()], select_motifs_run_config_ids: None }), Resolution::Normal, &Cpu, ctx.branch(false))).await?;
+        t!(run_plot(
+            &ws,
+            &store,
+            &loader,
+            &PlotDataArgs::new(DataBy::RunId {
+                find_motifs_run_config_ids: vec![run_config.find_motifs_run_config.id.unwrap()],
+                select_motifs_run_config_ids: None
+            }),
+            Resolution::Normal,
+            &Cpu,
+            ctx.branch(false)
+        ))
+        .await?;
 
         let select_stage = Arc::new(
-            t!(SelectMotifsStage::<
-                RawTensorLoader<C>,
-                MotifLoader<RawTensorLoader<C>, C>,
-                C,
-            >::new(
+            t!(SelectMotifsStage::<RawTensorLoader<C>, MotifLoader<RawTensorLoader<C>, C>, C>::new(
                 ws,
                 store,
                 Arc::clone(&loader),
@@ -234,24 +192,30 @@ impl FindAndSelectMotifsStage {
                 vec![find_run_config_id],
                 // #[cfg(test)]
                 None,
-            )).await?,
+            ))
+            .await?,
         );
 
-        let select_stage_output: Arc<SelectMotifsSavableResult> = t!(Arc::clone(&select_stage)
-            .run(
-                Arc::new(SelectMotifsInput::standalone(t!(ResourcesConfigInput::new(Simple::new(select_resources.clone())).check(store)).await?)),
-                ctx.branch(true)
-            )).await?;
+        let select_stage_output: Arc<SelectMotifsSavableResult> = t!(Arc::clone(&select_stage).run(Arc::new(SelectMotifsInput::standalone(t!(ResourcesConfigInput::new(Simple::new(select_resources.clone())).check(store)).await?)), ctx.branch(true))).await?;
 
-        let mut select_savable: SelectMotifsSavableResult = Arc::into_inner(select_stage_output)
-            .expect("FindAndSelectMotifsStage::run_find_and_select: select output still shared");
+        let mut select_savable: SelectMotifsSavableResult = Arc::into_inner(select_stage_output).expect("FindAndSelectMotifsStage::run_find_and_select: select output still shared");
         let score_sum = select_savable.score_sum();
         t!(select_savable.save(store, ws, ())).await?;
 
-
         #[allow(unexpected_cfgs)]
         #[cfg(tho_debug_plots)]
-        t!(run_plot(&ws, &store, &loader, &PlotDataArgs::new(DataBy::SelectedMotifs { select_motifs_run_config_ids: vec![select_run_config_id] }), Resolution::Normal, &Cpu, ctx.branch(false))).await?;
+        t!(run_plot(
+            &ws,
+            &store,
+            &loader,
+            &PlotDataArgs::new(DataBy::SelectedMotifs {
+                select_motifs_run_config_ids: vec![select_run_config_id]
+            }),
+            Resolution::Normal,
+            &Cpu,
+            ctx.branch(false)
+        ))
+        .await?;
 
         Ok(FindAndSelectEvalMetrics { score_sum })
     }
@@ -287,20 +251,18 @@ impl FindAndSelectMotifsStage {
         let select_resources = select_resources.clone();
         let fixed_find_motifs_config = fixed_find_motifs_config.clone();
 
-        let eval_metrics = panic_to_err_async!({
-            Self::run_find_and_select(
-                &ws,
-                &store,
-                Arc::clone(&loader),
-                &mut run_config,
-                &find_resources,
-                &select_resources,
-                fixed_find_motifs_config,
-                max_chunk_size,
-                device_idx,
-                ctx.branch(false)
-            )
-        })
+        let eval_metrics = panic_to_err_async!(Self::run_find_and_select(
+            &ws,
+            &store,
+            Arc::clone(&loader),
+            &mut run_config,
+            &find_resources,
+            &select_resources,
+            fixed_find_motifs_config,
+            max_chunk_size,
+            device_idx,
+            ctx.branch(false)
+        ))
         .unwrap_or_else(|e| {
             warn!("FindAndSelectMotifsStage::run: failed run_config={run_config:?}: {e:?}");
             FindAndSelectEvalMetrics::failed()
@@ -324,17 +286,11 @@ impl Stage for FindAndSelectMotifsStage {
 }
 
 impl AsyncStage for FindAndSelectMotifsStage {
-    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="FindAndSelectMotifsStage::run"))]
-    async fn run(
-        self: Arc<Self>,
-        input: Self::In<'static>,
-        mut ctx: Self::Ctx,
-    ) -> Result<Self::Out, ThoError> {
-        let find_resources = parse_resources(&input.find_resources)
-            .context("FindAndSelectMotifsStage::run parse find_resources")?;
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "FindAndSelectMotifsStage::run"))]
+    async fn run(self: Arc<Self>, input: Self::In<'static>, mut ctx: Self::Ctx) -> Result<Self::Out, ThoError> {
+        let find_resources = parse_resources(&input.find_resources).context("FindAndSelectMotifsStage::run parse find_resources")?;
 
-        let select_resources = parse_resources(&input.select_resources)
-            .context("FindAndSelectMotifsStage::run parse select_resources")?;
+        let select_resources = parse_resources(&input.select_resources).context("FindAndSelectMotifsStage::run parse select_resources")?;
 
         let const_vals = self.run_configs.grid_run_config_source().const_params().clone();
         let grid_runs = self.run_configs.grid_to_vals_and_opt_params()?;
@@ -345,83 +301,73 @@ impl AsyncStage for FindAndSelectMotifsStage {
         let grid_runs_len = grid_runs.len();
         info!("FindAndSelectMotifsStage::run: grid_runs_len={grid_runs_len:?} opt_max_evals={opt_max_evals}");
 
-        let futures = grid_runs
-            .into_iter()
-            .enumerate()
-            .map(|(grid_idx, (grid_vals, opt_params))| {
-                let min_loss = Arc::new(RwLock::new((f32::MAX, None::<FindAndSelectMotifsRunConfig>)));
-                let min_loss_ref = Arc::clone(&min_loss);
+        let futures = grid_runs.into_iter().enumerate().map(|(grid_idx, (grid_vals, opt_params))| {
+            let min_loss = Arc::new(RwLock::new((f32::MAX, None::<FindAndSelectMotifsRunConfig>)));
+            let min_loss_ref = Arc::clone(&min_loss);
 
-                let const_vals = const_vals.clone();
-                let ws = Arc::clone(&self.ws);
-                let store = Arc::clone(&self.store);
-                let loader = Arc::clone(&self.loader);
-                let find_resources = find_resources.clone();
-                let select_resources = select_resources.clone();
+            let const_vals = const_vals.clone();
+            let ws = Arc::clone(&self.ws);
+            let store = Arc::clone(&self.store);
+            let loader = Arc::clone(&self.loader);
+            let find_resources = find_resources.clone();
+            let select_resources = select_resources.clone();
 
-                let fixed_find_motifs_config = self.fixed_find_motifs_config.clone();
-                let max_chunk_size = self.max_chunk_size;
-                let mut find_and_select_run_find_ctx = find_and_select_run_find_ctx.branch(false);
-                let opt_config = opt_config.clone();
-                async move {
-                    let mut opt = AsyncTPEOptimizer::new(
-                        async |opt_vals| {
-                            t!(Self::eval_opt_config(
-                                const_vals.as_slice(),
-                                grid_vals.as_slice(),
-                                opt_vals,
-                                &min_loss_ref,
-                                &ws,
-                                &store,
-                                &loader,
-                                &find_resources,
-                                &select_resources,
-                                &fixed_find_motifs_config,
-                                max_chunk_size,
-                                device_idx,
-                                grid_idx,
-                                &mut find_and_select_run_find_ctx,
-                            )).await
-                            .1
-                        },
-                        ConfigurationSpace::new(opt_params),
-                        opt_config,
-                        &format!("find_and_select_{}", grid_idx),
-                    );
+            let fixed_find_motifs_config = self.fixed_find_motifs_config.clone();
+            let max_chunk_size = self.max_chunk_size;
+            let mut find_and_select_run_find_ctx = find_and_select_run_find_ctx.branch(false);
+            let opt_config = opt_config.clone();
+            async move {
+                let mut opt = AsyncTPEOptimizer::new(
+                    async |opt_vals| {
+                        t!(Self::eval_opt_config(
+                            const_vals.as_slice(),
+                            grid_vals.as_slice(),
+                            opt_vals,
+                            &min_loss_ref,
+                            &ws,
+                            &store,
+                            &loader,
+                            &find_resources,
+                            &select_resources,
+                            &fixed_find_motifs_config,
+                            max_chunk_size,
+                            device_idx,
+                            grid_idx,
+                            &mut find_and_select_run_find_ctx,
+                        ))
+                        .await
+                        .1
+                    },
+                    ConfigurationSpace::new(opt_params),
+                    opt_config,
+                    &format!("find_and_select_{}", grid_idx),
+                );
 
-                    let optimization = t!(opt.optimize()).await;
+                let optimization = t!(opt.optimize()).await;
 
-                    let guard = thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(min_loss));
+                let guard = thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(min_loss));
 
-                    let (best_loss, best_config) = (guard.0, guard.1.as_ref().map(|v|v.clone()));
-                    if let Err(error) = optimization {
-                        if best_config.is_none() { return Err(error.into()); }
-                        // Partial progress is useful, but must be reported as an interrupted run.
-                        warn!("FindAndSelectMotifsStage: partial success for grid {grid_idx}; optimization stopped early: {error:#}; retaining best_loss={best_loss}");
+                let (best_loss, best_config) = (guard.0, guard.1.as_ref().map(|v| v.clone()));
+                if let Err(error) = optimization {
+                    if best_config.is_none() {
+                        return Err(error.into());
                     }
-
-                    if let Some(best_config) = best_config {
-                        info!("FindAndSelectMotifsStage::run: best_loss={best_loss:?} best_config={best_config:?}");
-                        Ok::<_, ThoError>((grid_idx, Some(best_config)))
-                    } else {
-                        warn!("FindAndSelectMotifsStage::run: no best config for grid_vals={grid_vals:?} best_loss={best_loss:?}");
-                        Ok::<_, ThoError>((grid_idx, None))
-                    }
+                    // Partial progress is useful, but must be reported as an interrupted run.
+                    warn!("FindAndSelectMotifsStage: partial success for grid {grid_idx}; optimization stopped early: {error:#}; retaining best_loss={best_loss}");
                 }
-            });
-        let indexed_best_configs = t!(collect_futures_with_progress(
-            futures,
-            grid_runs_len,
-            FuturesOrdering::Unordered,
-            thoosa_shared::CollectionErrorPolicy::SkipAll,
-            "FindAndSelectMotifsStage::run",
-        )).await?;
 
+                if let Some(best_config) = best_config {
+                    info!("FindAndSelectMotifsStage::run: best_loss={best_loss:?} best_config={best_config:?}");
+                    Ok::<_, ThoError>((grid_idx, Some(best_config)))
+                } else {
+                    warn!("FindAndSelectMotifsStage::run: no best config for grid_vals={grid_vals:?} best_loss={best_loss:?}");
+                    Ok::<_, ThoError>((grid_idx, None))
+                }
+            }
+        });
+        let indexed_best_configs = t!(collect_futures_with_progress(futures, grid_runs_len, FuturesOrdering::Unordered, thoosa_shared::CollectionErrorPolicy::SkipAll, "FindAndSelectMotifsStage::run",)).await?;
 
-        let best_configs = indexed_best_configs
-            .into_iter()
-            .filter_map(|(_, config)| config)
-            .collect::<Vec<_>>();
+        let best_configs = indexed_best_configs.into_iter().filter_map(|(_, config)| config).collect::<Vec<_>>();
 
         Ok(Arc::new(FindAndSelectMotifsResult::new(best_configs)))
     }

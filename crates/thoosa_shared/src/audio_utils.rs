@@ -5,11 +5,7 @@ use std::f32::consts::TAU;
 /// `n`           - number of samples
 /// `sample_rate` - samples per second, e.g. 44_100
 /// `freqs`       - frequencies in Hz
-pub fn compose_freqs(
-    n: usize,
-    sample_rate: usize,
-    freqs: Vec<f32>,
-) -> Vec<f32> {
+pub fn compose_freqs(n: usize, sample_rate: usize, freqs: Vec<f32>) -> Vec<f32> {
     let sample_rate = sample_rate as f32;
 
     let mut signal = vec![0.0_f32; n];
@@ -34,9 +30,9 @@ pub fn compose_freqs(
 
 #[cfg(test)]
 mod tests {
+    use crate::audio_utils::compose_freqs;
     use rustfft::FftPlanner;
     use rustfft::num_complex::Complex;
-    use crate::audio_utils::compose_freqs;
 
     #[test]
     fn test_compose_freqs_has_expected_fft_peaks() {
@@ -45,27 +41,17 @@ mod tests {
 
         let expected_freqs = vec![50.0, 120.0, 300.0];
 
-        let signal = compose_freqs(
-            n,
-            sample_rate,
-            expected_freqs.clone(),
-        );
+        let signal = compose_freqs(n, sample_rate, expected_freqs.clone());
 
         let mut planner = FftPlanner::<f32>::new();
         let fft = planner.plan_fft_forward(n);
 
-        let mut buffer: Vec<Complex<f32>> = signal
-            .into_iter()
-            .map(|x| Complex { re: x, im: 0.0 })
-            .collect();
+        let mut buffer: Vec<Complex<f32>> = signal.into_iter().map(|x| Complex { re: x, im: 0.0 }).collect();
 
         fft.process(&mut buffer);
 
         // For real input, positive frequencies are in bins 0..=n/2.
-        let magnitudes: Vec<f32> = buffer[..=n / 2]
-            .iter()
-            .map(|c| c.norm())
-            .collect();
+        let magnitudes: Vec<f32> = buffer[..=n / 2].iter().map(|c| c.norm()).collect();
 
         let mut peak_bins: Vec<usize> = magnitudes
             .iter()
@@ -78,10 +64,7 @@ mod tests {
 
         peak_bins.sort();
 
-        let expected_bins: Vec<usize> = expected_freqs
-            .iter()
-            .map(|&f| f as usize)
-            .collect();
+        let expected_bins: Vec<usize> = expected_freqs.iter().map(|&f| f as usize).collect();
 
         assert_eq!(peak_bins, expected_bins);
     }

@@ -1,8 +1,8 @@
-use thoosa_common::tch_error::tch_result;
 use log::trace;
 use std::ops::Range;
 use tch::Tensor;
 use thoosa_common::dims::{ChannelsData, LocalSelect};
+use thoosa_common::tch_error::tch_result;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::traits::MonoMetrics;
@@ -10,15 +10,15 @@ use thoosa_shared::{ThoError, mono_key};
 
 #[derive(Clone, Debug, Default)]
 pub struct ChannelsDataVec {
-    pub ranges:Vec<Range<MonoMetrics<1, 2>>>
+    pub ranges: Vec<Range<MonoMetrics<1, 2>>>,
 }
 
 impl LocalSelect<SynKey, ChannelsDataVec> for ThoTensor<ChannelsData, SynKey> {
     type Output = ThoTensor<ChannelsData, SynKey>;
 
     //TODO switch to index_select if lots of ranges
-    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="Select<ChannelsDataVec> for ThoTensor<ChannelsData2, SynKey>::subview"))]
-    fn local_subview(id:&SynKey, t:&Tensor, selector: ChannelsDataVec) -> Result<Self::Output, ThoError> {
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "Select<ChannelsDataVec> for ThoTensor<ChannelsData2, SynKey>::subview"))]
+    fn local_subview(id: &SynKey, t: &Tensor, selector: ChannelsDataVec) -> Result<Self::Output, ThoError> {
         let ChannelsDataVec { ranges } = selector;
         let size: MonoMetrics<1, 2> = t.size().try_into()?;
 
@@ -41,6 +41,3 @@ impl LocalSelect<SynKey, ChannelsDataVec> for ThoTensor<ChannelsData, SynKey> {
         Ok(sub)
     }
 }
-
-
-

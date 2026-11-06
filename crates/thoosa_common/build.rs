@@ -1,9 +1,7 @@
 use std::fs;
 
-
 fn main() {
-    let libtorch = std::env::var("LIBTORCH")
-        .expect("LIBTORCH must be set (see .cargo/config.toml)");
+    let libtorch = std::env::var("LIBTORCH").expect("LIBTORCH must be set (see .cargo/config.toml)");
     let libtorch = libtorch.trim_end_matches('/');
     let mut ld = std::env::var("LD_LIBRARY_PATH").unwrap_or_default();
 
@@ -52,13 +50,7 @@ pub fn parse_debug_plots_rustflags(encoded_rustflags: Option<&str>) -> (&'static
                 has_plain_flag = true;
             } else if let Some(value) = cfg_spec.strip_prefix("tho_debug_plots=") {
                 let value = strip_optional_quotes(value.trim());
-                prefixes.extend(
-                    value
-                        .split(',')
-                        .map(|s| s.trim())
-                        .filter(|s| !s.is_empty())
-                        .map(|s| s.to_string()),
-                );
+                prefixes.extend(value.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).map(|s| s.to_string()));
             }
         }
         i += 1;
@@ -74,11 +66,7 @@ pub fn parse_debug_plots_rustflags(encoded_rustflags: Option<&str>) -> (&'static
 }
 
 fn strip_optional_quotes(s: &str) -> &str {
-    if s.len() >= 2 && s.starts_with('"') && s.ends_with('"') {
-        &s[1..s.len() - 1]
-    } else {
-        s
-    }
+    if s.len() >= 2 && s.starts_with('"') && s.ends_with('"') { &s[1..s.len() - 1] } else { s }
 }
 
 #[cfg(test)]

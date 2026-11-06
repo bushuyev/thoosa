@@ -1,10 +1,9 @@
-use std::{
-    fs,
-    io,
-    path::{Path, PathBuf},
-};
 use log::debug;
 use serde::{Deserialize, Serialize};
+use std::{
+    fs, io,
+    path::{Path, PathBuf},
+};
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct TmpFile {
@@ -14,21 +13,18 @@ pub struct TmpFile {
 }
 
 // Deserialized guards own cleanup just like freshly created guards.
-fn armed() -> bool { true }
+fn armed() -> bool {
+    true
+}
 
 impl TmpFile {
     pub fn new(path: impl Into<PathBuf>) -> Self {
-        Self {
-            path: path.into(),
-            armed: true,
-        }
+        Self { path: path.into(), armed: true }
     }
 
     pub fn path(&self) -> &Path {
         &self.path
     }
-
-
 
     /// Remove immediately and disarm the guard.
     pub fn remove_now(mut self) -> io::Result<()> {
@@ -50,7 +46,9 @@ impl TmpFile {
 
 impl Drop for TmpFile {
     fn drop(&mut self) {
-        if !self.armed { return; }
+        if !self.armed {
+            return;
+        }
         debug!("TmpFile::drop: self.path={:?}", self.path);
 
         match fs::remove_file(&self.path) {
@@ -74,9 +72,7 @@ impl AsRef<Path> for TmpFile {
 mod tests {
     use super::*;
     use std::{
-        env,
-        fs,
-        io,
+        env, fs, io,
         time::{SystemTime, UNIX_EPOCH},
     };
 
@@ -94,14 +90,7 @@ mod tests {
 
     #[test]
     fn removes_file_on_drop() -> io::Result<()> {
-        let path = env::temp_dir().join(format!(
-            "remove_file_on_drop_test_{}_{}.tmp",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let path = env::temp_dir().join(format!("remove_file_on_drop_test_{}_{}.tmp", std::process::id(), SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()));
 
         {
             fs::write(&path, b"temporary test file")?;

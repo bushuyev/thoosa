@@ -1,19 +1,18 @@
+use dashmap::DashMap;
+use pin_project::{pin_project, pinned_drop};
+use std::pin::Pin;
 use std::{
     any::type_name,
     fmt::{Display, Formatter},
     future::Future,
     panic::Location,
     sync::{
-        Arc,
-        LazyLock,
+        Arc, LazyLock,
         atomic::{AtomicU64, Ordering},
     },
     task::{Context, Poll, Wake, Waker},
     time::Instant,
 };
-use std::pin::Pin;
-use dashmap::DashMap;
-use pin_project::{pin_project, pinned_drop};
 
 // Select the expansion when this crate is compiled, so ordinary builds return
 // the original expression without boxing, registry updates, or waker wrapping.
@@ -22,14 +21,18 @@ use pin_project::{pin_project, pinned_drop};
 #[cfg(not(tho_debug))]
 #[macro_export]
 macro_rules! t {
-    ($future:expr $(,)?) => { $future };
+    ($future:expr $(,)?) => {
+        $future
+    };
 }
 
 /// Enable await diagnostics only in builds compiled with `--cfg tho_debug`.
 #[cfg(tho_debug)]
 #[macro_export]
 macro_rules! track_await {
-    ($future:expr $(,)?) => { $crate::tracked_await::track_await($future) };
+    ($future:expr $(,)?) => {
+        $crate::tracked_await::track_await($future)
+    };
 }
 
 // Keep the existing module import path usable for both the macro and the
@@ -101,34 +104,30 @@ impl<F> PinnedDrop for Tracked<F> {
     }
 }
 
-
-
 impl<F> Tracked<F> {
-    pub fn new_at(
-        spawn_location: &'static Location<'static>,
-        inner: F,
-    ) -> Self {
+    pub fn new_at(spawn_location: &'static Location<'static>, inner: F) -> Self {
         let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
 
-        TASKS.insert(id, TaskInfo {
+        TASKS.insert(
             id,
-            ty: type_name::<F>(),
-            spawn_location,
-            state: TaskState::Pending,
-            poll_count: 0,
-            wake_count: 0,
-            last_change: Instant::now(),
-            last_pending: None,
-        });
+            TaskInfo {
+                id,
+                ty: type_name::<F>(),
+                spawn_location,
+                state: TaskState::Pending,
+                poll_count: 0,
+                wake_count: 0,
+                last_change: Instant::now(),
+                last_pending: None,
+            },
+        );
 
         Self { id, inner }
     }
 }
 
 #[track_caller]
-pub fn spawn_tracked<F>(
-    fut: F,
-) -> tokio::task::JoinHandle<F::Output>
+pub fn spawn_tracked<F>(fut: F) -> tokio::task::JoinHandle<F::Output>
 where
     F: Future + Send + 'static,
     F::Output: Send + 'static,
@@ -146,10 +145,7 @@ impl<F: Future> Future for Tracked<F> {
 
         let wake_count_before = mark_polling(id);
 
-        let waker = Waker::from(Arc::new(TrackedWake {
-            id,
-            inner: cx.waker().clone(),
-        }));
+        let waker = Waker::from(Arc::new(TrackedWake { id, inner: cx.waker().clone() }));
         let mut tracked_cx = Context::from_waker(&waker);
 
         match this.inner.poll(&mut tracked_cx) {
@@ -158,26 +154,15 @@ impl<F: Future> Future for Tracked<F> {
                 Poll::Ready(v)
             }
             Poll::Pending => {
-                let woke_during_poll = TASKS
-                    .get(&id)
-                    .map(|e| e.wake_count != wake_count_before)
-                    .unwrap_or(false);
+                let woke_during_poll = TASKS.get(&id).map(|e| e.wake_count != wake_count_before).unwrap_or(false);
 
-                mark_pending(
-                    id,
-                    if woke_during_poll {
-                        TaskState::Woken
-                    } else {
-                        TaskState::Pending
-                    },
-                );
+                mark_pending(id, if woke_during_poll { TaskState::Woken } else { TaskState::Pending });
 
                 Poll::Pending
             }
         }
     }
 }
-
 
 struct TrackedWake {
     id: u64,
@@ -224,9 +209,7 @@ fn mark_woken(id: u64) {
 }
 
 #[track_caller]
-pub fn track_await<F>(
-    fut: F,
-) -> Tracked<Pin<Box<F>>>
+pub fn track_await<F>(fut: F) -> Tracked<Pin<Box<F>>>
 where
     F: Future,
 {
@@ -234,11 +217,7 @@ where
 }
 
 pub fn snapshot_not_ready() -> Vec<TaskInfo> {
-    TASKS
-        .iter()
-        .filter(|e| matches!(e.state, TaskState::Pending | TaskState::Woken))
-        .map(|e| e.value().clone())
-        .collect()
+    TASKS.iter().filter(|e| matches!(e.state, TaskState::Pending | TaskState::Woken)).map(|e| e.value().clone()).collect()
 }
 
 #[cfg(test)]
@@ -262,8 +241,12 @@ mod tests {
             evaluations.set(evaluations.get() + 1);
             std::future::poll_fn(|cx| {
                 polls.set(polls.get() + 1);
-                if polls.get() == 1 { cx.waker().wake_by_ref(); Poll::Pending }
-                else { Poll::Ready(42) }
+                if polls.get() == 1 {
+                    cx.waker().wake_by_ref();
+                    Poll::Pending
+                } else {
+                    Poll::Ready(42)
+                }
             })
         },);
         assert_eq!(evaluations.get(), 1);
@@ -271,7 +254,9 @@ mod tests {
         assert_eq!(futures::executor::block_on(future), 42);
         assert_eq!(evaluations.get(), 1);
         assert_eq!(polls.get(), 2);
-        async fn length(value: &str) -> usize { value.len() }
+        async fn length(value: &str) -> usize {
+            value.len()
+        }
         // Direct expansion must keep the temporary String alive through await.
         assert_eq!(futures::executor::block_on(async { t!(length(&String::from("abc"))).await }), 3);
     }
@@ -283,8 +268,12 @@ mod tests {
         let line = line!() + 1;
         let future = t!(std::future::poll_fn(|cx| {
             polls.set(polls.get() + 1);
-            if polls.get() == 1 { cx.waker().wake_by_ref(); Poll::Pending }
-            else { Poll::Ready(42) }
+            if polls.get() == 1 {
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            } else {
+                Poll::Ready(42)
+            }
         }));
         let id = future.id;
         assert_eq!(TASKS.get(&id).unwrap().spawn_location.line(), line);

@@ -1,0 +1,4 @@
+max_width = 120
+fn_call_width = 60
+indent_style = "Block"
+fn_params_layout = "Tall"

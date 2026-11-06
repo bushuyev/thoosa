@@ -1,6 +1,6 @@
 
 ## General info
-The goal of the application is to asynchronously execute (see AsyncStage) series of tensor-related tasks (SyncStages) on GPU devices and handle OutOfMemory errors (see OOMHandler in crates/thoosa_common/src/runner/oom_handler.rs) by throttling GPU access, processing data in chunks, or otherwise reducing GPU memory usage (see the Adjuster trait in crates/thoosa_shared/src/runner/oom_handler.rs and its implementations).
+The goal of the application is to asynchronously execute (see AsyncStage) series of tensor-related tasks (SyncStages) on GPU devices and handle OutOfMemory errors (see OOMHandler in crates/thoosa_common/src/runner/oom_handler.rs) by throttling GPU access, processing data in chunks, or otherwise reducing GPU memory usage (see the Adjuster trait in crates/thoosa_common/src/runner/oom_handler.rs and its implementations).
 Tensor operations can either be executed in same process as asynchronous code ("Local" mode) or in the separate processed ("IPC" mode, see crates/thoosa_common/src/ipc).
 
 It's important to keep big tensors (or big number of small tensors) between async awaits either in Arc<DevicesWrap<..>> obtained from SomeStage::run_cached (crates/thoosa_common/src/runner/common/cachable.rs) or in TmpCached (crates/thoosa_common/src/runner/tmp_cache.rs) so that GlobalCtx::dump_all_to_cpu (crates/thoosa_common/src/runner/global_ctx.rs) could dump them to CPU when handling OOM.
@@ -24,10 +24,10 @@ Data (run  resources, labels, configuration parameters etc) is kept in sqlite da
 - Workspace root with `crates/Cargo.toml` (Rust 2024, nightly toolchain).
 - Crates:
   - `crates/thoosa_common`: tch-dependent common stuff 
-  - `crates/thoosa_shared`: tch-independent common stuff (tch is added as dependency as temporary workaround, keep its use minimal)
-  - `crates/thoosa_projects`: sample projects - thoosa_hbac is active, thoosa_bird_clef is obsolete
+  - `crates/thoosa_shared`: tch-independent common stuff
+  - `crates/thoosa_projects`: sample projects - thoosa_hbac is active
   - `crates/thoosa_store`: sqlite for keeping run configuration and tracking results 
-  - `crates/thoosa_shims`: couple of cuda shims for gpu-cpu tensors copy
+  - `crates/thoosa_shims`: couple of cuda shims
   - `thoosa_motifs`: time series classification stages and motif search related stuff
 - Build artifacts in `crates/target`. Optional GPU libs configured via `env.sh`.
 
@@ -60,7 +60,7 @@ Notes:
 - Naming: `mod tests { ... }`, test fns `snake_case` describing behavior, prefixed with test_.
 
 ## Misc info
-masks for tensors of all sorts expected to contain false for padded (zeros)) values and true for actual values.
+masks for tensors of all sorts expected to contain false for padded (zeros) values and true for actual values.
 tho_device_idx and ThoDevice (crates/thoosa_common/src/tho_device.rs) represent the devices used by the application during the current run. The CPU is always at index 0, followed by GPUs or, in the future, other devices. Therefore, GPU(0) usually corresponds to tho_device_idx - 1.
 
 ## Motif Search Notes

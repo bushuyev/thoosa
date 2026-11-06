@@ -1,20 +1,18 @@
-#[cfg(test)]
-use std::collections::HashMap;
-use thoosa_common::runner::execution::StageExecution;
-use thoosa_common::runner::sync_stage::ConsumingStage;
-#[cfg(test)]
-use thoosa_common::tch_error::tch_result;
 use crate::motifs_store::MotifsStore;
 #[cfg(test)]
 use crate::stages::cross_batch_clc::CrossBatchFn;
 use crate::stages::cross_batch_clc::{CrossClcResultMerge, CrossInput, CrossUnfoldClcOutput};
+use crate::stages::dists_tracker::DistsMask;
 use crate::stages::prepare_cross_batch::{PrepareCrossBatch, PreparedCrossBatch};
+use crate::stages::slices_iter::SlicesIter;
 use async_trait::async_trait;
 #[cfg(test)]
 use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
 use log::{debug, warn};
 use mockall_double::double;
+#[cfg(test)]
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::future::Future;
 use std::marker::PhantomData;
@@ -24,36 +22,38 @@ use std::vec;
 #[cfg(test)]
 use tch::Device::Cpu;
 use thoosa_common::dims::ChannelsData;
+use thoosa_common::ipc::proxy::DynSyncStageEnum;
+#[cfg(test)]
+use thoosa_common::resources::Simple;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
 use thoosa_common::runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContext, SplitsAdjusterContextImpl};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, SelectRef, ThoDataRef};
-use thoosa_common::runner::tmp_cache::{TmpCached, TmpCachedEntry};
-use thoosa_common::ipc::proxy::DynSyncStageEnum;
-#[cfg(test)]
-use thoosa_common::resources::Simple;
-use thoosa_common::stages::freq_filter::ChannelsDataSelector;
-use thoosa_shared::applicables_runner::{Input};
-#[cfg(test)]
-use thoosa_shared::applicables_runner::Output;
-use thoosa_shared::resource::{Resource, ResourcesConfig};
-use thoosa_shared::ThoError;
+use thoosa_common::runner::execution::StageExecution;
 #[double]
 use thoosa_common::runner::global_ctx::GlobalCtx;
-use crate::stages::dists_tracker::DistsMask;
-use crate::stages::slices_iter::SlicesIter;
 use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoInputAdjuster, NoStageAdjuster, NoopRunnableContext, OOMHandler, input_adjuster, run_ctx_adjuster};
+use thoosa_common::runner::sync_stage::ConsumeResult;
+use thoosa_common::runner::sync_stage::ConsumingStage;
+use thoosa_common::runner::tmp_cache::{TmpCached, TmpCachedEntry};
+use thoosa_common::stages::freq_filter::ChannelsDataSelector;
+#[cfg(test)]
+use thoosa_common::tch_error::tch_result;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_cpu_data_derive::CpuData;
+use thoosa_shared::ThoError;
+use thoosa_shared::applicables_runner::Input;
+#[cfg(test)]
+use thoosa_shared::applicables_runner::Output;
 use thoosa_shared::collect_futures_eta::{CollectEtaInvocationGuard, collect_eta_record_completion};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::mono_key;
+use thoosa_shared::resource::{Resource, ResourcesConfig};
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::tracked_await::t;
 use thoosa_shared::traits::{Adjustable, Data, MaxParallelCtx, OutId, RunCtx, ThoSelector, WithId};
 use thoosa_shared::traits::{AsyncStage, Stage};
-use thoosa_common::runner::sync_stage::ConsumeResult;
 use tokio::task::JoinHandle;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,10 +70,7 @@ pub struct CrossUnfoldClcOutputBuilder<R: Debug> {
 
 impl<R: Debug> CrossUnfoldClcOutputBuilder<R> {
     fn new(merge_mode: CrossUnfoldClcOutputMergeMode) -> Self {
-        Self {
-            partials: Vec::new(),
-            merge_mode,
-        }
+        Self { partials: Vec::new(), merge_mode }
     }
 }
 
@@ -83,7 +80,7 @@ where
 {
     type O = CrossUnfoldClcOutput<R>;
 
-    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="CrossUnfoldClcOutputBuilder::add_partial_output"))]
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "CrossUnfoldClcOutputBuilder::add_partial_output"))]
     async fn add_partial_output(&mut self, o: Self::O) -> Result<(), ThoError> {
         debug!("CrossUnfoldClcOutputBuilder::add_partial_output: o={o:?}");
         match self.merge_mode {
@@ -96,7 +93,7 @@ where
                 let clc_result = o.clc_result();
                 // Copy packed masks to CPU before any merge to avoid GPU OOM.
                 let clc_result = t!(clc_result.to_cpu()).await?;
-                self.partials.push(CrossUnfoldClcOutput::new(clc_result, iter_0, iter_1, mono_key!("CrossUnfoldClcOutput", "stage").into()));//TODO key
+                self.partials.push(CrossUnfoldClcOutput::new(clc_result, iter_0, iter_1, mono_key!("CrossUnfoldClcOutput", "stage").into())); //TODO key
             }
         }
         Ok(())
@@ -104,9 +101,7 @@ where
 
     async fn build(self) -> Result<Self::O, ThoError> {
         let mut iter = self.partials.into_iter();
-        let first = iter
-            .next()
-            .ok_or_else(|| ThoError::new("CrossUnfoldClcOutputBuilder: no partial outputs"))?;
+        let first = iter.next().ok_or_else(|| ThoError::new("CrossUnfoldClcOutputBuilder: no partial outputs"))?;
         let iter_0 = first.iter_0();
         let iter_1 = first.iter_1();
 
@@ -129,31 +124,19 @@ where
             clc_result,
             SlicesIter::new_with_offsets(iter_0_step, iter_0_resources),
             SlicesIter::new_with_offsets(iter_1_step, iter_1_resources),
-            mono_key!("CrossUnfoldClcOutput", "stage").into(),//TODO
+            mono_key!("CrossUnfoldClcOutput", "stage").into(), //TODO
         ))
     }
 }
-
 
 pub struct CrossLoader<ResC, L, CLC, RSV, R, C>
 where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,
     ResC: ResourcesConfig<R = Vec<Resource>> + Debug + Clone,
-    L: for<'i> Cached<
-        In<'i> = Arc<Resource>,
-        Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>,
-        Ctx=C
-    > + OutId + 'static,
-
+    L: for<'i> Cached<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + OutId + 'static,
     R: Debug + Send + Sync + 'static,
-    CLC: for<'i> StageExecution<In<'i> = CrossInput<'i, Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C> + Adjustable + Send + Sync + 'static,
-
-    RSV: for<'i> ConsumingStage<
-        In<'i> = CrossUnfoldClcOutput<R>,
-        Out = (),
-        Ctx=C
-    > + Stage<Ctx=C> + Send + Sync + 'static,
-
+    CLC: for<'i> StageExecution<In<'i> = CrossInput<'i, Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx = C> + Adjustable + Send + Sync + 'static,
+    RSV: for<'i> ConsumingStage<In<'i> = CrossUnfoldClcOutput<R>, Out = (), Ctx = C> + Stage<Ctx = C> + Send + Sync + 'static,
 {
     pub find_motifs_run_config_id: RunConfigId,
     configured_loader: Arc<L>,
@@ -166,7 +149,7 @@ where
     on_all_done: Box<dyn Fn(&Arc<RSV>) -> BoxFuture<'static, Result<(), ThoError>> + Sync + Send>,
     #[expect(dead_code, reason = "Retains stored metadata and its existing construction and diagnostic representation.")]
     output_merge_mode: CrossUnfoldClcOutputMergeMode,
-    step:u32,
+    step: u32,
     pd: PhantomData<(ResC, R, C)>,
 }
 
@@ -174,10 +157,10 @@ impl<ResC, L, CLC, RSV, R, C> Debug for CrossLoader<ResC, L, CLC, RSV, R, C>
 where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,
     ResC: ResourcesConfig<R = Vec<Resource>> + Debug + Clone,
-    L: for<'i> Cached<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=C> + AsyncStage + OutId + 'static,
+    L: for<'i> Cached<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + AsyncStage + OutId + 'static,
     R: Debug + Send + Sync + 'static,
-    CLC: for<'i> StageExecution<In<'i> = CrossInput<'i, Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C> + Adjustable + Send + Sync + 'static,
-    RSV: for<'i> ConsumingStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
+    CLC: for<'i> StageExecution<In<'i> = CrossInput<'i, Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx = C> + Adjustable + Send + Sync + 'static,
+    RSV: for<'i> ConsumingStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx = C> + Stage<Ctx = C, Out = ()> + Send + Sync + 'static,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CrossLoader").finish()
@@ -188,10 +171,10 @@ impl<ResC, L, CLC, RSV, R, C> CrossLoader<ResC, L, CLC, RSV, R, C>
 where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,
     ResC: ResourcesConfig<R = Vec<Resource>> + Debug + Clone,
-    L: for<'i> Cached<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=C> + AsyncStage + OutId + 'static,
+    L: for<'i> Cached<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + AsyncStage + OutId + 'static,
     R: CrossClcResultMerge + Debug + Send + Sync + 'static,
-    CLC: for<'i> StageExecution<In<'i> = CrossInput<'i, Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C> + Adjustable + Send + Sync + 'static,
-    RSV: for<'i> ConsumingStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
+    CLC: for<'i> StageExecution<In<'i> = CrossInput<'i, Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx = C> + Adjustable + Send + Sync + 'static,
+    RSV: for<'i> ConsumingStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx = C> + Stage<Ctx = C, Out = ()> + Send + Sync + 'static,
 {
     pub fn new<ReceiverFactory, OnAllDone, OnBatchDone>(
         find_motifs_run_config_id: RunConfigId, //fod logging
@@ -200,7 +183,7 @@ where
         cross_unfold_clc: Arc<CLC>,
         receiver_factory: ReceiverFactory,
         chunk_size: usize,
-        on_batch_done:OnBatchDone,
+        on_batch_done: OnBatchDone,
         on_all_done: OnAllDone,
         output_merge_mode: CrossUnfoldClcOutputMergeMode,
         step: u32,
@@ -222,7 +205,7 @@ where
             on_all_done: Box::new(on_all_done),
             output_merge_mode,
             pd: Default::default(),
-            step
+            step,
         }
     }
 
@@ -246,19 +229,9 @@ where
     ) -> Result<(), ThoError> {
         debug!("CrossLoader::run_loaded_batch: find_motifs_run_config_id={} t_0_batch={t_0_batch:?} t_1_batch={t_1_batch:?}", self.find_motifs_run_config_id);
         let cross_unfold_clc = Arc::clone(&self.cross_unfold_clc);
-        let batch_1_slice_lengths = t_1_batch
-            .iter()
-            .map(|t| t.size().dim_1())
-            .collect::<Vec<_>>();
+        let batch_1_slice_lengths = t_1_batch.iter().map(|t| t.size().dim_1()).collect::<Vec<_>>();
 
-        let mut input = CrossInputSelectorWrap::new(
-            mono_key!(self.find_motifs_run_config_id, "find_motifs_run_config_id").into(),
-            t_0_batch,
-            t_1_batch,
-            t_0_batch_resources,
-            t_1_batch_resources.clone(),
-            CacheArea::default()
-        );
+        let mut input = CrossInputSelectorWrap::new(mono_key!(self.find_motifs_run_config_id, "find_motifs_run_config_id").into(), t_0_batch, t_1_batch, t_0_batch_resources, t_1_batch_resources.clone(), CacheArea::default());
         input.prepared_outer = prepared_outer;
         debug!("CrossLoader::run_loaded_batch: input={input:?}");
 
@@ -267,26 +240,24 @@ where
 
         match t!(OOMHandler::<'_, '_, _, NoStageAdjuster, _, CrossInputSelector>::new(
             vec![
-                Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(
-                    *MaxParallelStep::FAST,
-                ))),
+                Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(*MaxParallelStep::FAST,))),
                 Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("cross_unfold_clc"))),
                 Adjusters::Input(input_adjuster(CrossLoaderAdjuster::new())),
             ],
             None,
-        ).run(
+        )
+        .run(
             &cross_unfold_clc,
             Arc::clone(&input),
             ctx.branch(false),
             Contexts::new(
                 CrossSplitterContext::new(t_1_batch_resources.len() as i64, batch_1_slice_lengths),
                 NoopRunnableContext {},
-                MaxParallelAndDumpToCpuAdjustableContex::new(
-                    MaxParallelAdjustContextImpl::new(),
-                    DumpToCpuContextImpl::new(),
-                ),
+                MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new(),),
             ),
-        )).await {
+        ))
+        .await
+        {
             Ok(cross_clc_output) => {
                 debug!("CrossLoader::run_loaded_batch: cross_clc_output={cross_clc_output:?}");
 
@@ -300,22 +271,14 @@ where
                 let receiver_ctx = ctx.branch(false);
 
                 *pending_consumer = Some(tokio::task::spawn_blocking(move || {
-                    tracing::info_span!(
-                        "cross_loader::consume_cross_output",
-                        kind = "spawn_blocking",
-                        file = file!(),
-                        line = line!(),
-                        task = "consume cross calculation output",
-                    ).in_scope(|| {
-                        match receiver.consume(cross_clc_output, receiver_ctx) {
-                            ConsumeResult::Ok(()) => Ok(()),
-                            ConsumeResult::Failed { error, .. } => Err(error),
-                        }
+                    tracing::info_span!("cross_loader::consume_cross_output", kind = "spawn_blocking", file = file!(), line = line!(), task = "consume cross calculation output",).in_scope(|| match receiver.consume(cross_clc_output, receiver_ctx) {
+                        ConsumeResult::Ok(()) => Ok(()),
+                        ConsumeResult::Failed { error, .. } => Err(error),
                     })
                 }));
             }
             Err(e) => {
-                let is_resetting = matches!(e,  ThoError::CudaBeingRecovered);
+                let is_resetting = matches!(e, ThoError::CudaBeingRecovered);
                 warn!("CrossLoader::run_loaded_batch: got error  find_motifs_run_config_id={} needs_cuda_ctx_reset={} {e:?}", self.find_motifs_run_config_id, is_resetting);
             }
         };
@@ -323,17 +286,7 @@ where
         Ok(())
     }
 
-    async fn run_inner_batches(
-        &self,
-        resources: &[Arc<Resource>],
-        t_0_batch: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>,
-        t_0_batch_resources: Vec<Arc<Resource>>,
-        outer_batch_last_i: usize,
-        skip_0_i: usize,
-        max_batch: i64,
-        receiver: Arc<RSV>,
-        mut ctx: C,
-    ) -> Result<(), ThoError> {
+    async fn run_inner_batches(&self, resources: &[Arc<Resource>], t_0_batch: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>, t_0_batch_resources: Vec<Arc<Resource>>, outer_batch_last_i: usize, skip_0_i: usize, max_batch: i64, receiver: Arc<RSV>, mut ctx: C) -> Result<(), ThoError> {
         debug!("CrossLoader::run_inner_batches: t_0_batch={t_0_batch:?} skip_0_i={skip_0_i}");
 
         let _prepared_outer = if let Some(stage) = &self.prepare_outer {
@@ -341,17 +294,26 @@ where
 
             let input = Arc::new(CrossInputSelectorWrap::new(
                 mono_key!(self.find_motifs_run_config_id, "prepare_outer_batch").into(),
-                t_0_batch.clone(), vec![], t_0_batch_resources.clone(), vec![], CacheArea::default(),
+                t_0_batch.clone(),
+                vec![],
+                t_0_batch_resources.clone(),
+                vec![],
+                CacheArea::default(),
             ));
 
             // Preparing the outer batch reads each of its cached resource tensors.
 
-            let result = OOMHandler::<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()>::new(vec![
-                Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(*MaxParallelStep::FAST))),
-                Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("prepare_outer_batch"))),
-            ], None).run(stage, input, ctx.branch(false), thoosa_common::runner::oom_handler::WithRunCtxContext::new(
-                MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new()),
-            )).await;
+            let result = OOMHandler::<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()>::new(
+                vec![Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(*MaxParallelStep::FAST))), Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("prepare_outer_batch")))],
+                None,
+            )
+            .run(
+                stage,
+                input,
+                ctx.branch(false),
+                thoosa_common::runner::oom_handler::WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new())),
+            )
+            .await;
 
             match result {
                 Ok(prepared) => Some(Arc::new(prepared_cache.insert_guarded(prepared))),
@@ -384,7 +346,7 @@ where
                 let t_1 = match t!(Arc::clone(&self.configured_loader).run_cached(Arc::new(resource_1.as_ref().clone()), ctx.branch(false))).await {
                     Ok(v) => v,
                     Err(e) => {
-                        let is_resetting = matches!(e,  ThoError::CudaBeingRecovered);
+                        let is_resetting = matches!(e, ThoError::CudaBeingRecovered);
                         warn!("CrossLoader::run_loaded_batch: got error  find_motifs_run_config_id={} needs_cuda_ctx_reset={} {e:?}", self.find_motifs_run_config_id, is_resetting);
 
                         return Err(e);
@@ -396,7 +358,6 @@ where
 
                 if t_1_len > max_batch {
                     if !t_1_batch.is_empty() {
-
                         t!(self.run_loaded_batch(
                             t_0_batch.clone(),
                             t_0_batch_resources.clone(),
@@ -406,21 +367,13 @@ where
                             Arc::clone(&receiver),
                             prepared_outer.clone(),
                             &mut pending_consumer,
-                        )).await?;
+                        ))
+                        .await?;
                         t_1_batch_len = 0;
                         collect_eta_record_completion(cross_loader_inner.id());
                     }
 
-                    t!(self.run_loaded_batch(
-                        t_0_batch.clone(),
-                        t_0_batch_resources.clone(),
-                        vec![t_1],
-                        vec![Arc::clone(resource_1)],
-                        ctx.branch(false),
-                        Arc::clone(&receiver),
-                        prepared_outer.clone(),
-                        &mut pending_consumer,
-                    )).await?;
+                    t!(self.run_loaded_batch(t_0_batch.clone(), t_0_batch_resources.clone(), vec![t_1], vec![Arc::clone(resource_1)], ctx.branch(false), Arc::clone(&receiver), prepared_outer.clone(), &mut pending_consumer,)).await?;
                     collect_eta_record_completion(cross_loader_inner.id());
                     continue;
                 }
@@ -442,13 +395,15 @@ where
                     Arc::clone(&receiver),
                     prepared_outer.clone(),
                     &mut pending_consumer,
-                )).await?;
+                ))
+                .await?;
                 t_1_batch_len = 0;
                 collect_eta_record_completion(cross_loader_inner.id());
             }
 
             Ok::<_, ThoError>(())
-        }.await;
+        }
+        .await;
 
         debug!("CrossLoader::run_inner_batches: result={result:?}");
 
@@ -479,11 +434,8 @@ impl<RC: ResourcesConfig + Debug + Send + Sync + Clone> ResourcesConfigInput<RC>
 
 impl<RC: ResourcesConfig + Debug + Send + Sync + Clone> ResourcesConfigInput<RC> {
     pub fn new(resources_config: RC) -> Self {
-        Self {
-            resources_config,
-        }
+        Self { resources_config }
     }
-
 
     pub fn resources_config(&self) -> &RC {
         &self.resources_config
@@ -500,24 +452,23 @@ impl<ResC: ResourcesConfig + Debug + Send + Sync + Clone> WithId for ResourcesCo
 
 impl<RC: ResourcesConfig + Debug + Send + Sync + Clone> Input for ResourcesConfigInput<RC> {}
 
-
 impl<ResC, L, CLC, RSV, R, C> Stage for CrossLoader<ResC, L, CLC, RSV, R, C>
 where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,
     ResC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + Clone + 'static,
-    L: for<'i> Cached<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=C> + AsyncStage + OutId + 'static,
-    CLC: for<'i> StageExecution<In<'i> = CrossInput<'i, Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C> + Adjustable + Send + Sync + 'static,
-    RSV: for<'i> ConsumingStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
+    L: for<'i> Cached<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + AsyncStage + OutId + 'static,
+    CLC: for<'i> StageExecution<In<'i> = CrossInput<'i, Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx = C> + Adjustable + Send + Sync + 'static,
+    RSV: for<'i> ConsumingStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx = C> + Stage<Ctx = C, Out = ()> + Send + Sync + 'static,
     R: CrossClcResultMerge + Debug + Send + Sync + 'static,
 {
-    type Ctx=C;
+    type Ctx = C;
 
-    type In<'a> = Arc<ResourcesConfigInput<ResC>>
+    type In<'a>
+        = Arc<ResourcesConfigInput<ResC>>
     where
         Self: 'a;
     type Out = Arc<()>;
 }
-
 
 impl<ResC, L, CLC, RSV, R, C> AsyncStage for CrossLoader<ResC, L, CLC, RSV, R, C>
 where
@@ -526,27 +477,18 @@ where
     ResourcesConfigInput<ResC>: Data + WithId + Send + Sync,
     Self::Out: Data + WithId + Send + Sync,
     ResC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + Clone + 'static,
-    L: for<'i> Cached<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=C> + AsyncStage + OutId + 'static,
-    CLC: for<'i> StageExecution<In<'i> = CrossInput<'i, Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C> + Adjustable + Send + Sync + 'static,
-    RSV: for<'i> ConsumingStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
+    L: for<'i> Cached<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + AsyncStage + OutId + 'static,
+    CLC: for<'i> StageExecution<In<'i> = CrossInput<'i, Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx = C> + Adjustable + Send + Sync + 'static,
+    RSV: for<'i> ConsumingStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx = C> + Stage<Ctx = C, Out = ()> + Send + Sync + 'static,
     R: CrossClcResultMerge + Debug + Send + Sync + 'static,
 {
-    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="CrossLoader::run"))]
-    async fn run(
-        self: Arc<Self>,
-        input: Self::In<'static>,
-        mut ctx: Self::Ctx,
-    ) -> Result<Self::Out, ThoError> {
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "CrossLoader::run"))]
+    async fn run(self: Arc<Self>, input: Self::In<'static>, mut ctx: Self::Ctx) -> Result<Self::Out, ThoError> {
         // let chunk_size = self.chunk_size;
         let max_batch = i64::try_from(self.chunk_size).unwrap_or(i64::MAX);
 
         let resources_config = input.resources_config.clone();
-        let resources = t!(resources_config
-            .to_resources(&self.store)).await?
-            .into_iter()
-            .filter(|r| r.length() > self.step)
-            .map(Arc::new)
-            .collect::<Vec<_>>();
+        let resources = t!(resources_config.to_resources(&self.store)).await?.into_iter().filter(|r| r.length() > self.step).map(Arc::new).collect::<Vec<_>>();
 
         debug!("CrossLoader::run:  max_batch={max_batch} resources={resources:?}");
 
@@ -572,32 +514,14 @@ where
                 if !t_0_batch.is_empty() {
                     let pending_last_i = t_0_batch_last_i.expect("CrossLoader::run: missing t_0_batch_last_i for pending batch");
 
-                    t!(self.run_inner_batches(
-                        resources.as_slice(),
-                        std::mem::take(&mut t_0_batch),
-                        std::mem::take(&mut t_0_batch_resources),
-                        pending_last_i,
-                        skip_0_i,
-                        max_batch,
-                        Arc::clone(&receiver),
-                        ctx.branch(false),
-                    )).await?;
+                    t!(self.run_inner_batches(resources.as_slice(), std::mem::take(&mut t_0_batch), std::mem::take(&mut t_0_batch_resources), pending_last_i, skip_0_i, max_batch, Arc::clone(&receiver), ctx.branch(false),)).await?;
                     skip_0_i = pending_last_i;
                     t_0_batch_len = 0;
                     t_0_batch_last_i = None;
                     collect_eta_record_completion(cross_loader_outer.id());
                 }
 
-                t!(self.run_inner_batches(
-                    resources.as_slice(),
-                    vec![t_0],
-                    vec![Arc::clone(resource_0)],
-                    i_0,
-                    skip_0_i,
-                    max_batch,
-                    Arc::clone(&receiver),
-                    ctx.branch(false),
-                )).await?;
+                t!(self.run_inner_batches(resources.as_slice(), vec![t_0], vec![Arc::clone(resource_0)], i_0, skip_0_i, max_batch, Arc::clone(&receiver), ctx.branch(false),)).await?;
                 skip_0_i = i_0;
                 collect_eta_record_completion(cross_loader_outer.id());
                 continue;
@@ -612,16 +536,7 @@ where
                 continue;
             }
 
-            t!(self.run_inner_batches(
-                resources.as_slice(),
-                std::mem::take(&mut t_0_batch),
-                std::mem::take(&mut t_0_batch_resources),
-                i_0,
-                skip_0_i,
-                max_batch,
-                Arc::clone(&receiver),
-                ctx.branch(false),
-            )).await?;
+            t!(self.run_inner_batches(resources.as_slice(), std::mem::take(&mut t_0_batch), std::mem::take(&mut t_0_batch_resources), i_0, skip_0_i, max_batch, Arc::clone(&receiver), ctx.branch(false),)).await?;
 
             skip_0_i = i_0;
             t_0_batch_len = 0;
@@ -639,8 +554,8 @@ where
 #[derive(Debug)]
 struct CrossInputSelectorWrap {
     id: SynKey,
-    batch_0:Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>,
-    batch_1:Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>,
+    batch_0: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>,
+    batch_1: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>,
     resources_0: Vec<Arc<Resource>>,
     resources_1: Vec<Arc<Resource>>,
     #[expect(dead_code, reason = "Retains the shared owner for the lifetime of this stage or input.")]
@@ -648,10 +563,8 @@ struct CrossInputSelectorWrap {
     prepared_outer: Option<Arc<TmpCachedEntry<PreparedCrossBatch>>>,
 }
 
-
 impl Data for CrossInputSelectorWrap {
     type Metrics = i64;
-
 
     fn size(&self) -> Self::Metrics {
         self.resources_1.len() as i64
@@ -662,28 +575,26 @@ impl Data for CrossInputSelectorWrap {
     }
 
     fn mem_size(&self) -> u64 {
-        self.batch_0.iter().map(|batch| batch.mem_size()).sum::<u64>()
-            + self.batch_1.iter().map(|batch| batch.mem_size()).sum::<u64>()
+        self.batch_0.iter().map(|batch| batch.mem_size()).sum::<u64>() + self.batch_1.iter().map(|batch| batch.mem_size()).sum::<u64>()
     }
 }
 
-
 impl CrossInputSelectorWrap {
-    pub fn new(
-        id:SynKey,
-        batch_0: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>,
-        batch_1: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>,
-        resources_0: Vec<Arc<Resource>>,
-        resources_1: Vec<Arc<Resource>>,
-        cache_area: CacheArea,
-    ) -> Self {
-        Self {id, batch_0, batch_1, resources_0, resources_1, cache_area, prepared_outer: None }
+    pub fn new(id: SynKey, batch_0: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>, batch_1: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>, resources_0: Vec<Arc<Resource>>, resources_1: Vec<Arc<Resource>>, cache_area: CacheArea) -> Self {
+        Self {
+            id,
+            batch_0,
+            batch_1,
+            resources_0,
+            resources_1,
+            cache_area,
+            prepared_outer: None,
+        }
     }
 }
 
 #[derive(Debug)]
 struct CrossLoaderAdjuster {
-
     batch_1_adjuster: SplitsAdjuster<Range<i64>, i64>,
     batch_1_slice_adjuster: SplitsAdjuster<Range<i64>, i64>,
 }
@@ -698,16 +609,15 @@ impl CrossLoaderAdjuster {
 }
 
 #[async_trait]
-impl <'a, ST, R> Adjuster<CrossSplitterContext<'a, ST, R>> for CrossLoaderAdjuster
+impl<'a, ST, R> Adjuster<CrossSplitterContext<'a, ST, R>> for CrossLoaderAdjuster
 where
-    ST:Stage<Out=CrossUnfoldClcOutput<R>> + Adjustable + 'a,
+    ST: Stage<Out = CrossUnfoldClcOutput<R>> + Adjustable + 'a,
     ST::In<'a>: Data<Metrics = i64>,
     R: CrossClcResultMerge + Debug + Send + Sync + 'static,
 {
     type A = CrossInputSelector;
 
     async fn adjust(&self, mut adjustable: Self::A, adjust_context: &mut CrossSplitterContext<'a, ST, R>) -> Result<Self::A, AdjusterError<Self::A>> {
-
         match adjust_context.batch_1_mode {
             Batch1SplitMode::Range => {
                 let result = t!(self.batch_1_adjuster.adjust(0i64..0, adjust_context)).await;
@@ -718,9 +628,7 @@ where
 
                         Ok(adjustable)
                     }
-                    Err(_) => {
-                        Err(AdjusterError::AdjustFailed(adjustable))
-                    }
+                    Err(_) => Err(AdjusterError::AdjustFailed(adjustable)),
                 }
             }
             Batch1SplitMode::Slice => {
@@ -736,7 +644,6 @@ where
                 }
             }
         }
-
     }
 
     fn degrade(&self, adjust_context: &mut CrossSplitterContext<'a, ST, R>) -> bool {
@@ -758,13 +665,12 @@ where
 #[derive(Debug)]
 pub enum CrossSplitterContextState<'a, R>
 where
-    R:Stage<Out=CrossUnfoldClcOutput<DistsMask>> + Adjustable + 'a,
+    R: Stage<Out = CrossUnfoldClcOutput<DistsMask>> + Adjustable + 'a,
     <R as Stage>::In<'a>: Data,
-
 {
     Batch0(SplitsAdjusterContextImpl<'a, R, CrossUnfoldClcOutputBuilder<DistsMask>>),
     Batch1(SplitsAdjusterContextImpl<'a, R, CrossUnfoldClcOutputBuilder<DistsMask>>),
-    Slice(SplitsAdjusterContextImpl<'a, R, CrossUnfoldClcOutputBuilder<DistsMask>>)
+    Slice(SplitsAdjusterContextImpl<'a, R, CrossUnfoldClcOutputBuilder<DistsMask>>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -782,11 +688,7 @@ struct SliceAdjusterContext {
 
 impl SliceAdjusterContext {
     fn new() -> Self {
-        Self {
-            input_len: 0,
-            split_len: 0,
-            done_to: 0,
-        }
+        Self { input_len: 0, split_len: 0, done_to: 0 }
     }
 
     fn reset(&mut self, input_len: i64) {
@@ -825,7 +727,7 @@ impl SplitsAdjusterContext for SliceAdjusterContext {
 #[derive(Debug)]
 struct CrossSplitterContext<'a, ST, R>
 where
-    ST:Stage<Out=CrossUnfoldClcOutput<R>> + Adjustable + 'a,
+    ST: Stage<Out = CrossUnfoldClcOutput<R>> + Adjustable + 'a,
     R: CrossClcResultMerge + Debug + Send + Sync + 'static,
     ST::In<'a>: Data<Metrics = i64>,
 {
@@ -837,19 +739,16 @@ where
     slice_ctx: SliceAdjusterContext,
     slice_resource_idx: usize,
     batch_1_slice_lengths: Vec<i64>,
-    pd:PhantomData<&'a ST>
-
+    pd: PhantomData<&'a ST>,
 }
 
-
-impl <'a, ST, R> CrossSplitterContext<'a, ST, R>
+impl<'a, ST, R> CrossSplitterContext<'a, ST, R>
 where
-    ST:Stage<Out=CrossUnfoldClcOutput<R>> + Adjustable + 'a,
+    ST: Stage<Out = CrossUnfoldClcOutput<R>> + Adjustable + 'a,
     R: CrossClcResultMerge + Debug + Send + Sync + 'static,
     ST::In<'a>: Data<Metrics = i64>,
-
 {
-    pub fn new(batch_1_len:<<ST as Stage>::In<'a> as Data>::Metrics, batch_1_slice_lengths: Vec<i64>) -> Self {
+    pub fn new(batch_1_len: <<ST as Stage>::In<'a> as Data>::Metrics, batch_1_slice_lengths: Vec<i64>) -> Self {
         debug!("CrossSplitterContext::new: batch_1_len={batch_1_len:?}");
 
         Self {
@@ -873,11 +772,7 @@ where
         self.batch_1_mode = Batch1SplitMode::Slice;
         self.slice_resource_idx = self.done_to as usize;
 
-        let input_len = self
-            .batch_1_slice_lengths
-            .get(self.slice_resource_idx)
-            .copied()
-            .unwrap_or(0);
+        let input_len = self.batch_1_slice_lengths.get(self.slice_resource_idx).copied().unwrap_or(0);
         self.slice_ctx.reset(input_len);
 
         input_len > 0
@@ -890,18 +785,14 @@ where
         }
 
         self.slice_resource_idx = self.done_to as usize;
-        let input_len = self
-            .batch_1_slice_lengths
-            .get(self.slice_resource_idx)
-            .copied()
-            .unwrap_or(0);
+        let input_len = self.batch_1_slice_lengths.get(self.slice_resource_idx).copied().unwrap_or(0);
         self.slice_ctx.reset(input_len);
     }
 }
 
-impl <'a, ST, R> SplitsAdjusterContext for CrossSplitterContext<'a, ST, R>
+impl<'a, ST, R> SplitsAdjusterContext for CrossSplitterContext<'a, ST, R>
 where
-    ST:Stage<Out=CrossUnfoldClcOutput<R>> + Adjustable + 'a,
+    ST: Stage<Out = CrossUnfoldClcOutput<R>> + Adjustable + 'a,
     R: CrossClcResultMerge + Debug + Send + Sync + 'static,
     ST::In<'a>: Data<Metrics = i64>,
 {
@@ -924,12 +815,11 @@ where
     }
 }
 
-impl <'a, 'z, ST, R> InputContext<'a, ST> for CrossSplitterContext<'z, ST, R>
+impl<'a, 'z, ST, R> InputContext<'a, ST> for CrossSplitterContext<'z, ST, R>
 where
     ST: Stage<Out = CrossUnfoldClcOutput<R>> + Adjustable + 'a,
     R: CrossClcResultMerge + Debug + Send + Sync + 'static,
     ST::In<'z>: Data<Metrics = i64>,
-
 {
     async fn add_partial_output(&mut self, out: ST::Out) -> Result<(), ThoError> {
         debug!("CrossSplitterContext::add_partial_output: out={out:?}");
@@ -961,8 +851,8 @@ where
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum RangeOrSlice {
     Full,
-    Range(Range<i64>), //range of tensors
-    Slice((usize, Range<i64>))//slice of single tensor
+    Range(Range<i64>),          //range of tensors
+    Slice((usize, Range<i64>)), //slice of single tensor
 }
 
 impl Default for RangeOrSlice {
@@ -1003,45 +893,43 @@ impl RangeOrSlice {
             Self::Slice((i, _)) => std::slice::from_ref(&resources[*i]),
         }
     }
-
 }
-
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct CrossInputSelector {
     batch_0_selector: RangeOrSlice,
     batch_1_selector: RangeOrSlice,
-
 }
 
 #[typetag::serde]
 impl ThoSelector for CrossInputSelector {
-    fn clone_box(&self)->Box<dyn ThoSelector> {
+    fn clone_box(&self) -> Box<dyn ThoSelector> {
         Box::new(self.clone())
     }
 }
 
 impl Adjustable for CrossInputSelector {}
 
-
 impl BorrowRef for CrossInputSelectorWrap {
-    fn protect(&self, device: usize) -> thoosa_common::runner::residency::ResidencyLease { thoosa_common::runner::residency::ResidencyLease::combine(self.batch_0.iter().chain(&self.batch_1).map(|value| value.protect(device)).chain(self.prepared_outer.iter().map(|value| value.protect(device)))) }
+    fn protect(&self, device: usize) -> thoosa_common::runner::residency::ResidencyLease {
+        thoosa_common::runner::residency::ResidencyLease::combine(self.batch_0.iter().chain(&self.batch_1).map(|value| value.protect(device)).chain(self.prepared_outer.iter().map(|value| value.protect(device))))
+    }
 
     type Out<'a> = CrossInput<'a, Arc<Resource>>;
 
-    fn borrow_ref<'o>(&'o self, to_tho_device_idx: usize) -> impl Future<Output=Result<Self::Out<'o>, ThoError>> + Send
+    fn borrow_ref<'o>(&'o self, to_tho_device_idx: usize) -> impl Future<Output = Result<Self::Out<'o>, ThoError>> + Send
     where
-        Self: 'o
+        Self: 'o,
     {
         self.select_ref(to_tho_device_idx, None)
     }
 }
 
-impl  SelectRef<CrossInputSelector> for CrossInputSelectorWrap {
-    fn select_ref<'o>(&'o self, to_tho_device_idx: usize, selector: Option<CrossInputSelector>) -> impl Future<Output=Result<<Self as BorrowRef>::Out<'o>, ThoError>> + Send
+impl SelectRef<CrossInputSelector> for CrossInputSelectorWrap {
+    fn select_ref<'o>(&'o self, to_tho_device_idx: usize, selector: Option<CrossInputSelector>) -> impl Future<Output = Result<<Self as BorrowRef>::Out<'o>, ThoError>> + Send
     where
         CrossInputSelector: 'o,
-        Self: 'o
+        Self: 'o,
     {
         async move {
             let selector = selector.unwrap_or_default();
@@ -1055,16 +943,9 @@ impl  SelectRef<CrossInputSelector> for CrossInputSelectorWrap {
             } else {
                 None
             };
-            let mut tensors = if prepared.is_some() { vec![] } else {
-                t!(selector.batch_0_selector.borrow_to(&self.batch_0, to_tho_device_idx)).await?
-            };
+            let mut tensors = if prepared.is_some() { vec![] } else { t!(selector.batch_0_selector.borrow_to(&self.batch_0, to_tho_device_idx)).await? };
             tensors.extend(t!(selector.batch_1_selector.borrow_to(&self.batch_1, to_tho_device_idx)).await?);
-            Ok(CrossInput::from_data_refs(
-                tensors,
-                selector.batch_0_selector.select_resources(&self.resources_0),
-                selector.batch_1_selector.select_resources(&self.resources_1),
-                self.id.clone(),
-            ).with_prepared_outer(prepared))
+            Ok(CrossInput::from_data_refs(tensors, selector.batch_0_selector.select_resources(&self.resources_0), selector.batch_1_selector.select_resources(&self.resources_1), self.id.clone()).with_prepared_outer(prepared))
         }
     }
 }
@@ -1080,13 +961,7 @@ pub mod mock_cross_loader_clc {
     use thoosa_shared::resource::Resource;
     use thoosa_shared::traits::{Adjustable, OutId, RunCtx, Stage, WithId};
 
-    type RunBatchFn<Out, C> = dyn for<'a> Fn(
-        &CrossInput<'a, Arc<Resource>>,
-        &C,
-    ) -> Result<CrossUnfoldClcOutput<Out>, ThoError>
-    + Send
-    + Sync
-    + 'static;
+    type RunBatchFn<Out, C> = dyn for<'a> Fn(&CrossInput<'a, Arc<Resource>>, &C) -> Result<CrossUnfoldClcOutput<Out>, ThoError> + Send + Sync + 'static;
 
     #[derive(Clone)]
     pub struct MockCrossLoaderClc<Out, C>
@@ -1112,7 +987,8 @@ pub mod mock_cross_loader_clc {
     where
         Out: Input + Output + Send + Debug + 'static,
         C: RunCtx + 'static,
-    {}
+    {
+    }
 
     impl<Out, C> OutId for MockCrossLoaderClc<Out, C>
     where
@@ -1139,11 +1015,7 @@ pub mod mock_cross_loader_clc {
         Out: Input + Output + Send + Debug + 'static,
         C: RunCtx + 'static,
     {
-        fn do_run<'s>(
-            self: Arc<Self>,
-            input: &Self::In<'s>,
-            ctx: &Self::Ctx,
-        ) -> Result<Self::Out, ThoError>
+        fn do_run<'s>(self: Arc<Self>, input: &Self::In<'s>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError>
         where
             Self: Sized,
         {
@@ -1168,26 +1040,15 @@ pub mod mock_cross_loader_clc {
     {
         pub fn with_run_batch_fn<F>(mut self, f: F) -> Self
         where
-            F: for<'a> Fn(
-                &CrossInput<'a, Arc<Resource>>,
-                &C,
-            ) -> Result<CrossUnfoldClcOutput<Out>, ThoError>
-            + Send
-            + Sync
-            + 'static,
+            F: for<'a> Fn(&CrossInput<'a, Arc<Resource>>, &C) -> Result<CrossUnfoldClcOutput<Out>, ThoError> + Send + Sync + 'static,
         {
             self.run_batch_fn = Some(Arc::new(f));
             self
         }
 
         pub fn finish(self) -> MockCrossLoaderClc<Out, C> {
-            let run_batch_fn = self
-                .run_batch_fn
-                .expect("MockCrossLoaderClcBuilder requires run_batch_fn to be set");
-            MockCrossLoaderClc {
-                run_batch_fn,
-                _ctx: PhantomData,
-            }
+            let run_batch_fn = self.run_batch_fn.expect("MockCrossLoaderClcBuilder requires run_batch_fn to be set");
+            MockCrossLoaderClc { run_batch_fn, _ctx: PhantomData }
         }
     }
 
@@ -1196,10 +1057,7 @@ pub mod mock_cross_loader_clc {
         Out: Input + Output + Send + Debug + 'static,
         C: RunCtx + 'static,
     {
-        MockCrossLoaderClcBuilder {
-            run_batch_fn: None,
-            _ctx: PhantomData,
-        }
+        MockCrossLoaderClcBuilder { run_batch_fn: None, _ctx: PhantomData }
     }
 }
 
@@ -1209,8 +1067,8 @@ pub mod mock_cross_loader_receiver {
     use mockall::mock;
     use std::fmt::Debug;
     use std::sync::Arc;
-    use thoosa_shared::applicables_runner::{Input, Output};
     use thoosa_common::runner::sync_stage::ConsumeResult;
+    use thoosa_shared::applicables_runner::{Input, Output};
     use thoosa_shared::traits::{RunCtx, Stage};
 
     trait CrossLoaderReceiverMockApi<In, C>
@@ -1244,7 +1102,10 @@ pub mod mock_cross_loader_receiver {
         C: RunCtx + 'static,
     {
         type Ctx = C;
-        type In<'a> = In where Self: 'a;
+        type In<'a>
+            = In
+        where
+            Self: 'a;
         type Out = ();
     }
 
@@ -1253,11 +1114,7 @@ pub mod mock_cross_loader_receiver {
         In: Input + Output + Send + Debug + 'static,
         C: RunCtx + 'static,
     {
-        fn consume<'f>(
-            self: Arc<Self>,
-            out: <Self as Stage>::In<'f>,
-            ctx: <Self as Stage>::Ctx,
-        ) -> ConsumeResult<<Self as Stage>::In<'f>, <Self as Stage>::Out> {
+        fn consume<'f>(self: Arc<Self>, out: <Self as Stage>::In<'f>, ctx: <Self as Stage>::Ctx) -> ConsumeResult<<Self as Stage>::In<'f>, <Self as Stage>::Out> {
             self.consume_owned(out, ctx)
         }
     }
@@ -1281,9 +1138,7 @@ pub mod mock_cross_loader_receiver {
             F: Fn(In, C) -> ConsumeResult<In, ()> + Send + Sync + 'static,
         {
             let receive_fn = Arc::new(f);
-            self.mock
-                .expect_consume_owned()
-                .returning(move |out, ctx| Arc::clone(&receive_fn)(out, ctx));
+            self.mock.expect_consume_owned().returning(move |out, ctx| Arc::clone(&receive_fn)(out, ctx));
             self.consume_configured = true;
             self
         }
@@ -1306,10 +1161,8 @@ pub mod mock_cross_loader_receiver {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
-    use anyhow::Context as _;
     use super::mock_cross_loader_clc;
     use super::mock_cross_loader_receiver;
     use super::*;
@@ -1318,19 +1171,18 @@ mod tests {
     use crate::motif_tracker_store::SlicesMatch;
     use crate::motifs_store::MockMotifsStoreBuilder;
     use crate::stages::cross_batch_clc::{CrossUnfoldClc, CrossUnfoldClcOutput, UnfoldParams};
-    use crate::stages::cross_loader::{
-        CrossLoader, CrossUnfoldClcOutputMergeMode, ResourcesConfigInput,
-    };
+    use crate::stages::cross_loader::{CrossLoader, CrossUnfoldClcOutputMergeMode, ResourcesConfigInput};
     use crate::stages::dists_tracker::{DistsMask, DistsMaskType, DistsTracker};
     use crate::stages::find_motifs_run_config::FindMotifsRunConfig;
     use crate::stages::slices_iter::SlicesIter;
     use crate::stages::tensor_loader::RawTensorLoader;
     use crate::stages::tensor_loader::mock_tensor_loader;
+    use anyhow::Context as _;
     // use thoosa_common::runner::global_ctx::GlobalCtx;
     use futures_util::FutureExt;
     use log::debug;
     use parking_lot::RwLock;
-        use std::fs;
+    use std::fs;
     use std::path::Path;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
@@ -1339,8 +1191,8 @@ mod tests {
     use tch::{Device, Kind, Tensor};
     use thoosa_common::runner::cache_areas::CacheArea;
     use thoosa_common::runner::common::{MockRunCtx, mock_run_ctx};
-    use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::runner::global_ctx::GlobalCtx;
+    use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::runner::run_ctx::RunCtxImpl;
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::tho_tensor::ThoTensor;
@@ -1383,9 +1235,7 @@ mod tests {
 
     impl TestBatchOutput {
         fn new(call_index: usize) -> Self {
-            Self {
-                call_index,
-            }
+            Self { call_index }
         }
     }
 
@@ -1409,9 +1259,7 @@ mod tests {
 
     impl CpuMergeOutput {
         fn new(to_cpu_calls: Arc<AtomicUsize>) -> Self {
-            Self {
-                to_cpu_calls,
-            }
+            Self { to_cpu_calls }
         }
     }
 
@@ -1491,29 +1339,29 @@ mod tests {
         let batch_1_len = 2;
 
         let resources_0 = (0..batch_0_len).map(|i| Arc::new(Resource::new(i, 1, format!("aaa_{}", i), 100))).collect::<Vec<_>>();
-        let batch_0_tensors = (0..batch_0_len).map(|i| {
-            let i = i as i64;
-            Tensor::arange_start(i*1000, (i+1)*1000, FLOAT_CPU).view((1, -1))
-        }).collect::<Vec<_>>();
-        let batch_0 = (0..batch_0_len).map(|i| Ok(Arc::new(DevicesWrap::wrap(ThoTensor::<ChannelsData, SynKey>::new("".into(), batch_0_tensors[i as usize].shallow_clone())?)))).collect::<Result<Vec<_>, ThoError>>()?;
+        let batch_0_tensors = (0..batch_0_len)
+            .map(|i| {
+                let i = i as i64;
+                Tensor::arange_start(i * 1000, (i + 1) * 1000, FLOAT_CPU).view((1, -1))
+            })
+            .collect::<Vec<_>>();
+        let batch_0 = (0..batch_0_len)
+            .map(|i| Ok(Arc::new(DevicesWrap::wrap(ThoTensor::<ChannelsData, SynKey>::new("".into(), batch_0_tensors[i as usize].shallow_clone())?))))
+            .collect::<Result<Vec<_>, ThoError>>()?;
 
-        let resources_1 = (batch_0_len..batch_0_len +batch_1_len).map(|i| Arc::new(Resource::new(i, 1, format!("aaa_{}", i), 100))).collect::<Vec<_>>();
-        let batch_1_tensors = (batch_0_len..batch_0_len +batch_1_len).map(|i| {
-            let i = i as i64;
-            Tensor::arange_start(i*1000, (i+1)*1000, FLOAT_CPU).view((1, -1))
-        }).collect::<Vec<_>>();
+        let resources_1 = (batch_0_len..batch_0_len + batch_1_len).map(|i| Arc::new(Resource::new(i, 1, format!("aaa_{}", i), 100))).collect::<Vec<_>>();
+        let batch_1_tensors = (batch_0_len..batch_0_len + batch_1_len)
+            .map(|i| {
+                let i = i as i64;
+                Tensor::arange_start(i * 1000, (i + 1) * 1000, FLOAT_CPU).view((1, -1))
+            })
+            .collect::<Vec<_>>();
 
-        let batch_1 = (batch_0_len..batch_0_len +batch_1_len).map(|i| Ok(Arc::new(DevicesWrap::wrap(ThoTensor::<ChannelsData, SynKey>::new("".into(), batch_1_tensors[(i -batch_0_len)as usize].shallow_clone())?)))).collect::<Result<Vec<_>, ThoError>>()?;
+        let batch_1 = (batch_0_len..batch_0_len + batch_1_len)
+            .map(|i| Ok(Arc::new(DevicesWrap::wrap(ThoTensor::<ChannelsData, SynKey>::new("".into(), batch_1_tensors[(i - batch_0_len) as usize].shallow_clone())?))))
+            .collect::<Result<Vec<_>, ThoError>>()?;
 
-
-        let input = CrossInputSelectorWrap::new(
-            "".into(),
-            batch_0,
-            batch_1,
-            resources_0.clone(),
-            resources_1.clone(),
-            ca.clone()
-        );
+        let input = CrossInputSelectorWrap::new("".into(), batch_0, batch_1, resources_0.clone(), resources_1.clone(), ca.clone());
         let _cross_loader_adjuster = CrossLoaderAdjuster::new();
 
         let _selector = CrossInputSelector::default();
@@ -1529,8 +1377,6 @@ mod tests {
         assert!(Tensor::arange_start(3000, 4000, FLOAT_CPU).view((1, -1)).allclose(&data.tensors()[3].local()?.to_device(Cpu), 0.02, 0.02, false));
 
         debug!("data={data:?}");
-
-
 
         Ok(())
     }
@@ -1549,21 +1395,10 @@ mod tests {
         let batch_0_tensors = vec![Tensor::arange_start(0, 4, FLOAT_CPU).view((1, -1))];
         let batch_1_tensors = vec![Tensor::arange_start(0, 8, FLOAT_CPU).view((1, -1))];
 
-        let batch_0 = vec![
-            Arc::new(DevicesWrap::wrap(ThoTensor::<ChannelsData, SynKey>::new("".into(), batch_0_tensors[0].shallow_clone())?)),
-        ];
-        let batch_1 = vec![
-            Arc::new(DevicesWrap::wrap(ThoTensor::<ChannelsData, SynKey>::new("".into(), batch_1_tensors[0].shallow_clone())?)),
-        ];
+        let batch_0 = vec![Arc::new(DevicesWrap::wrap(ThoTensor::<ChannelsData, SynKey>::new("".into(), batch_0_tensors[0].shallow_clone())?))];
+        let batch_1 = vec![Arc::new(DevicesWrap::wrap(ThoTensor::<ChannelsData, SynKey>::new("".into(), batch_1_tensors[0].shallow_clone())?))];
 
-        let input = CrossInputSelectorWrap::new(
-            "".into(),
-            batch_0,
-            batch_1,
-            resources_0.clone(),
-            resources_1.clone(),
-            ca.clone(),
-        );
+        let input = CrossInputSelectorWrap::new("".into(), batch_0, batch_1, resources_0.clone(), resources_1.clone(), ca.clone());
 
         let mut context = CrossSplitterContext::<AdjusterStage, TestBatchOutput>::new(1, vec![batch_1_tensors[0].size()[1]]);
         let cross_loader_adjuster = CrossLoaderAdjuster::new();
@@ -1583,7 +1418,6 @@ mod tests {
 
         assert_eq!(data.tensors()[1].size()[1], 4);
 
-
         let dummy_output = CrossUnfoldClcOutput::new(TestBatchOutput::new(0), SlicesIter::new(1, vec![]), SlicesIter::new(1, vec![]), mono_key!("CrossUnfoldClcOutput", "stage").into());
         context.add_partial_output(dummy_output).await?;
 
@@ -1597,7 +1431,6 @@ mod tests {
 
         assert_eq!(data.tensors()[1].size()[1], 4);
 
-
         Ok(())
     }
 
@@ -1610,33 +1443,18 @@ mod tests {
 
         let ca = CacheArea::new(1);
         let resources_0 = vec![Arc::new(Resource::new(0, 1, "r0", 4))];
-        let resources_1 = vec![
-            Arc::new(Resource::new(1, 1, "r1", 6)),
-            Arc::new(Resource::new(2, 1, "r2", 4)),
-        ];
+        let resources_1 = vec![Arc::new(Resource::new(1, 1, "r1", 6)), Arc::new(Resource::new(2, 1, "r2", 4))];
 
         let batch_0_tensors = vec![Tensor::arange_start(0, 4, FLOAT_CPU).view((1, -1))];
-        let batch_1_tensors = vec![
-            Tensor::arange_start(0, 6, FLOAT_CPU).view((1, -1)),
-            Tensor::arange_start(0, 4, FLOAT_CPU).view((1, -1)),
-        ];
+        let batch_1_tensors = vec![Tensor::arange_start(0, 6, FLOAT_CPU).view((1, -1)), Tensor::arange_start(0, 4, FLOAT_CPU).view((1, -1))];
 
-        let batch_0 = vec![
-            Arc::new(DevicesWrap::wrap(ThoTensor::<ChannelsData, SynKey>::new("".into(), batch_0_tensors[0].shallow_clone())?)),
-        ];
+        let batch_0 = vec![Arc::new(DevicesWrap::wrap(ThoTensor::<ChannelsData, SynKey>::new("".into(), batch_0_tensors[0].shallow_clone())?))];
         let batch_1 = vec![
             Arc::new(DevicesWrap::wrap(ThoTensor::<ChannelsData, SynKey>::new("".into(), batch_1_tensors[0].shallow_clone())?)),
             Arc::new(DevicesWrap::wrap(ThoTensor::<ChannelsData, SynKey>::new("".into(), batch_1_tensors[1].shallow_clone())?)),
         ];
 
-        let input = CrossInputSelectorWrap::new(
-            "".into(),
-            batch_0,
-            batch_1,
-            resources_0.clone(),
-            resources_1.clone(),
-            ca.clone(),
-        );
+        let input = CrossInputSelectorWrap::new("".into(), batch_0, batch_1, resources_0.clone(), resources_1.clone(), ca.clone());
 
         let batch_1_lengths = batch_1_tensors.iter().map(|t| t.as_ref().size()[1]).collect::<Vec<_>>();
         let mut context = CrossSplitterContext::<AdjusterStage, TestBatchOutput>::new(2, batch_1_lengths);
@@ -1672,7 +1490,6 @@ mod tests {
         assert_eq!(data.batch_1()[0].id(), resources_1[0].id());
         assert_eq!(data.tensors()[1].size()[1], 3);
 
-
         let dummy_output_1 = CrossUnfoldClcOutput::new(TestBatchOutput::new(1), SlicesIter::new(1, vec![]), SlicesIter::new(1, vec![]), mono_key!("CrossUnfoldClcOutput", "stage").into());
         context.add_partial_output(dummy_output_1).await?;
 
@@ -1687,33 +1504,32 @@ mod tests {
         assert_eq!(data.batch_1()[0].id(), resources_1[1].id());
         assert_eq!(data.tensors()[1].size()[1], 3);
 
-
         Ok(())
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_cross_clc_with_indexes_mask_without_oom() -> anyhow::Result<()> {
-        test_cross_clc(None, 20, |(mask_size, _dist_size)|DistsMaskType::MaskIndexes(mask_size)).await
+        test_cross_clc(None, 20, |(mask_size, _dist_size)| DistsMaskType::MaskIndexes(mask_size)).await
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_cross_clc_with_indexes_mask_with_oom() -> anyhow::Result<()> {
-        test_cross_clc(Some(20), 40, |(mask_size, _dist_size)|DistsMaskType::MaskIndexes(mask_size)).await
+        test_cross_clc(Some(20), 40, |(mask_size, _dist_size)| DistsMaskType::MaskIndexes(mask_size)).await
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_cross_clc_with_packed_mask_without_oom() -> anyhow::Result<()> {
-        test_cross_clc(None, 20, |(mask_size, dist_size)|DistsMaskType::MaskPacked(mask_size, dist_size)).await
+        test_cross_clc(None, 20, |(mask_size, dist_size)| DistsMaskType::MaskPacked(mask_size, dist_size)).await
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_cross_clc_with_packed_mask_with_oom() -> anyhow::Result<()> {
-        test_cross_clc(Some(20), 40, |(mask_size, dist_size)|DistsMaskType::MaskPacked(mask_size, dist_size)).await
+        test_cross_clc(Some(20), 40, |(mask_size, dist_size)| DistsMaskType::MaskPacked(mask_size, dist_size)).await
     }
 
-    async fn test_cross_clc<F>(oom_limit: Option<i64>, chunk_size: usize, mask_type:F) -> anyhow::Result<()>
+    async fn test_cross_clc<F>(oom_limit: Option<i64>, chunk_size: usize, mask_type: F) -> anyhow::Result<()>
     where
-        F:Fn((Vec<i64>, Option<Vec<i64>>))->DistsMaskType + Send + Sync + 'static
+        F: Fn((Vec<i64>, Option<Vec<i64>>)) -> DistsMaskType + Send + Sync + 'static,
     {
         GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
@@ -1729,28 +1545,16 @@ mod tests {
         let store: Arc<dyn MotifsStore> = Arc::new(SqlStore::from_path_(&store_path).await?);
         store.bind_run(store.save_run("test".into()).await?)?;
 
-        let resource_keys: Vec<String> = vec!["111", "222", "333", "444", "555", "666"]
-            .into_iter()
-            .map(|v| v.to_string())
-            .collect();
-
+        let resource_keys: Vec<String> = vec!["111", "222", "333", "444", "555", "666"].into_iter().map(|v| v.to_string()).collect();
 
         let mut ctx = RunCtxImpl::new(1, "test_cross_clc");
 
-        let resource_stats = resource_keys
-            .iter()
-            .map(|key| (key.clone(), (ResourceStats::new(vec![1, tensor_len as u32]), vec![])))
-            .collect::<HashMap<_, _>>();
+        let resource_stats = resource_keys.iter().map(|key| (key.clone(), (ResourceStats::new(vec![1, tensor_len as u32]), vec![]))).collect::<HashMap<_, _>>();
 
         let import_id = store.save_import("test resources".to_string()).await?;
         store.save_resources_labels(&resource_stats, import_id).await?;
 
-        let run_config_id = store.save_run_config(
-            None,
-            &"find_motifs",
-            "test_cross_clc",
-            HashMap::new(),
-        ).await?;
+        let run_config_id = store.save_run_config(None, &"find_motifs", "test_cross_clc", HashMap::new()).await?;
         let run_config = FindMotifsRunConfig::new_with_running_mean(Some(run_config_id), 1, 2, None, None);
         let fixed_config = FixedFindMotifsConfig::new(2, false);
 
@@ -1762,88 +1566,63 @@ mod tests {
 
         let loader = Arc::new(RawTensorLoader::<RunCtxImpl>::new(
             move |key, _| {
-                let i = resources_to_move
-                    .iter()
-                    .position(|v| v.eq(key))
-                    .expect(format!("no {key:?}").as_str())
-                    + 1;
-                let v = (0..tensor_len)
-                    .map(|v| i as f32 + v as f32 / 10.0)
-                    .collect::<Vec<f32>>();
+                let i = resources_to_move.iter().position(|v| v.eq(key)).expect(format!("no {key:?}").as_str()) + 1;
+                let v = (0..tensor_len).map(|v| i as f32 + v as f32 / 10.0).collect::<Vec<f32>>();
                 debug!("executor: key={key:?} i={i} v={v:?}");
 
-                Ok(ThoTensor::new(
-                    SynKey::new([mono_key!(key.id(), format!("resource_id={}", key.id()))]),
-                    Tensor::from_slice(v.as_slice()).view((1, tensor_len as i64)),
-                )?)
+                Ok(ThoTensor::new(SynKey::new([mono_key!(key.id(), format!("resource_id={}", key.id()))]), Tensor::from_slice(v.as_slice()).view((1, tensor_len as i64)))?)
             },
             ThoDevice::from(0usize),
         ));
 
+        let batch_clc_fn: Box<dyn CrossBatchFn<DistsMask, (), RunCtxImpl>> = Box::new(move |t_0: Tensor, t_1: Tensor, _input: &CrossInput<Arc<Resource>>, _ctx: &(), _: &RunCtxImpl| {
+            if let Some(limit) = oom_limit {
+                let batch_1_len = t_1.size()[1];
+                if batch_1_len > limit {
+                    debug!("test_cross_clc, batch_clc, triggering OOM: batch_1_len={batch_1_len} limit={limit}");
+                    oom_triggered_cloned.store(true, Ordering::SeqCst);
+                    return Err(ThoError::oom());
+                }
+            }
+            debug!("test_cross_cls, batch_clc, no OOM: t_0={:?}, t_1={:?}", t_0.size(), t_1.size());
+            let sum_0 = tch_result(t_0.f_sum_dim_intlist(2, false, Kind::Float))?;
+            let sum_1 = tch_result(t_1.f_sum_dim_intlist(2, false, Kind::Float))?;
+            let dists = sum_0.unsqueeze(2) + sum_1.unsqueeze(1);
+            let mask = (sum_0.unsqueeze(2) - sum_1.unsqueeze(1)).lt(0.0);
+            let mask_size = mask.size();
+            let dists_size = Some(dists.size());
+            Ok(DistsMask::new(mask, Some(dists), mask_type((mask_size, dists_size)))?)
+        });
+        let batch_clc = Arc::new(CrossUnfoldClc::new_local(batch_clc_fn, |_| Ok(()), UnfoldParams::new(1, unfold_size, unfold_step)));
 
-        let batch_clc_fn: Box<dyn CrossBatchFn<DistsMask, (), RunCtxImpl>> = Box::new(
-            move |t_0: Tensor, t_1: Tensor, _input: &CrossInput<Arc<Resource>>, _ctx: &(), _: &RunCtxImpl| {
-
-                if let Some(limit) = oom_limit {
-                    let batch_1_len = t_1.size()[1];
-                    if batch_1_len > limit {
-                        debug!("test_cross_clc, batch_clc, triggering OOM: batch_1_len={batch_1_len} limit={limit}");
-                        oom_triggered_cloned.store(true, Ordering::SeqCst);
-                        return Err(ThoError::oom());
+        let cross_loader = Arc::new(
+            CrossLoader::new(
+                1,
+                loader,
+                &store,
+                batch_clc,
+                {
+                    let ws = Arc::clone(&ws);
+                    let store = Arc::clone(&store);
+                    let run_config = run_config.clone();
+                    let fixed_config = fixed_config.clone();
+                    move |_resources: &[Arc<Resource>]| {
+                        // Integration-style test to exercise CrossLoader + DistsTracker end-to-end.
+                        Arc::new(DistsTracker::<RunCtxImpl>::new(&ws, &store, &run_config, &fixed_config, Some(2), None))
                     }
-                }
-                debug!("test_cross_cls, batch_clc, no OOM: t_0={:?}, t_1={:?}", t_0.size(), t_1.size());
-                let sum_0 = tch_result(t_0.f_sum_dim_intlist(2, false, Kind::Float))?;
-                let sum_1 = tch_result(t_1.f_sum_dim_intlist(2, false, Kind::Float))?;
-                let dists = sum_0.unsqueeze(2) + sum_1.unsqueeze(1);
-                let mask = (sum_0.unsqueeze(2) - sum_1.unsqueeze(1)).lt(0.0);
-                let mask_size = mask.size();
-                let dists_size = Some(dists.size());
-                Ok(DistsMask::new(mask, Some(dists), mask_type((mask_size, dists_size)))?)
-            },
+                },
+                chunk_size, //TODO config
+                |batch| async { Ok(batch) }.boxed(),
+                |_receiver| async { Ok(()) }.boxed(),
+                CrossUnfoldClcOutputMergeMode::GpuMerge,
+                0,
+            )
+            .with_outer_preparation(PrepareCrossBatch::new(UnfoldParams::new(1, unfold_size, unfold_step), 1).await?),
         );
-        let batch_clc = Arc::new(CrossUnfoldClc::new_local(
-            batch_clc_fn,
-            |_| Ok(()),
-            UnfoldParams::new(1, unfold_size, unfold_step),
-        ));
-
-        let cross_loader = Arc::new(CrossLoader::new(
-            1,
-            loader,
-            &store,
-            batch_clc,
-            {
-                let ws = Arc::clone(&ws);
-                let store = Arc::clone(&store);
-                let run_config = run_config.clone();
-                let fixed_config = fixed_config.clone();
-                move |_resources: &[Arc<Resource>]| {
-                    // Integration-style test to exercise CrossLoader + DistsTracker end-to-end.
-                    Arc::new(DistsTracker::<RunCtxImpl>::new(
-                        &ws,
-                        &store,
-                        &run_config,
-                        &fixed_config,
-                        Some(2),
-                        None,
-                    ))
-                }
-            },
-            chunk_size, //TODO config
-            |batch| async { Ok(batch) }.boxed(),
-            |_receiver| async {
-                Ok(())
-            }.boxed(),
-            CrossUnfoldClcOutputMergeMode::GpuMerge,
-            0,
-        ).with_outer_preparation(PrepareCrossBatch::new(UnfoldParams::new(1, unfold_size, unfold_step), 1).await?));
 
         let input = Arc::new(ResourcesConfigInput::new(Simple::new(ResourceType::List(resource_keys))));
 
-        let output:Arc<()> = cross_loader
-            .run(input, ctx.branch(false))
-            .await?;
+        let output: Arc<()> = cross_loader.run(input, ctx.branch(false)).await?;
 
         assert_eq!(output.id(), &());
         if oom_limit.is_some() {
@@ -1862,10 +1641,7 @@ mod tests {
                         let sum_0 = slice_sum(base_0, slice_0);
                         let sum_1 = slice_sum(base_1, slice_1);
                         if sum_0 < sum_1 {
-                            expected.insert(
-                                (resource_0.id(), slice_0, resource_1.id(), slice_1),
-                                sum_0 + sum_1,
-                            );
+                            expected.insert((resource_0.id(), slice_0, resource_1.id(), slice_1), sum_0 + sum_1);
                         }
                     }
                 }
@@ -1877,8 +1653,7 @@ mod tests {
         assert!(expected_len > 0);
 
         let slices_path = thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(ws).tmp_path().join(format!("{run_config_id}_0_slices.zstd")));
-        let reader = ChunkedSlicesReader::<SlicesMatch>::new(&slices_path)
-            .with_context(|| format!("read slices file {slices_path:?}"))?;
+        let reader = ChunkedSlicesReader::<SlicesMatch>::new(&slices_path).with_context(|| format!("read slices file {slices_path:?}"))?;
 
         let mut remaining = expected;
         let mut actual_count = 0usize;
@@ -1888,16 +1663,9 @@ mod tests {
                 debug!("entry={entry:?}");
                 actual_count += 1;
                 let key = (entry.0.0, entry.0.1, entry.1.0, entry.1.1);
-                let expected_dist = remaining
-                    .remove(&key)
-                    .unwrap_or_else(|| panic!("unexpected slice match {key:?}"));
+                let expected_dist = remaining.remove(&key).unwrap_or_else(|| panic!("unexpected slice match {key:?}"));
                 let delta = (entry.2 - expected_dist).abs();
-                assert!(
-                    delta < 1e-4,
-                    "dist mismatch for {key:?}: got {}, expected {}",
-                    entry.2,
-                    expected_dist
-                );
+                assert!(delta < 1e-4, "dist mismatch for {key:?}: got {}, expected {}", entry.2, expected_dist);
             }
         }
 
@@ -1916,14 +1684,9 @@ mod tests {
         let resource_b: Resource = (2, 1, "resource_b", 2).into();
         let resources = vec![resource_a.clone(), resource_b.clone()];
 
-
-
         let loader = Arc::new(
             mock_tensor_loader::build()
-                .with_run_cached([
-                    (resource_a.clone(), Tensor::from_slice(&[1.0, 2.0]).view((1,2))),
-                    (resource_b.clone(), Tensor::from_slice(&[3.0, 4.0]).view((1,2))),
-                ])
+                .with_run_cached([(resource_a.clone(), Tensor::from_slice(&[1.0, 2.0]).view((1, 2))), (resource_b.clone(), Tensor::from_slice(&[3.0, 4.0]).view((1, 2)))])
                 .finish(),
         );
 
@@ -1950,11 +1713,7 @@ mod tests {
                     let output = TestBatchOutput::new(call_index);
                     batch_outputs.lock().unwrap().push(output.clone());
 
-                    Ok(CrossUnfoldClcOutput::new(
-                        output,
-                        SlicesIter::new(1, vec![]),
-                        SlicesIter::new(1, vec![]), mono_key!("CrossUnfoldClcOutput", "stage").into(),
-                    ))
+                    Ok(CrossUnfoldClcOutput::new(output, SlicesIter::new(1, vec![]), SlicesIter::new(1, vec![]), mono_key!("CrossUnfoldClcOutput", "stage").into()))
                 })
                 .finish(),
         );
@@ -1964,13 +1723,7 @@ mod tests {
 
         let mut ctx = mock_run_ctx::default(0);
 
-        let mocked_store =
-            MockMotifsStoreBuilder::new()
-                .with_list_resources_by_file_stems(
-                    vec!["resource_a".to_string(), "resource_b".to_string()],
-                    Ok(resources.clone()),
-                )
-                .build();
+        let mocked_store = MockMotifsStoreBuilder::new().with_list_resources_by_file_stems(vec!["resource_a".to_string(), "resource_b".to_string()], Ok(resources.clone())).build();
 
         let cross_loader = Arc::new(CrossLoader::new(
             1,
@@ -1995,9 +1748,7 @@ mod tests {
                 }
             },
             2,
-            |batch|{
-                async {Ok(batch)}.boxed()
-            },
+            |batch| async { Ok(batch) }.boxed(),
             |_p| {
                 async {
                     // cross_loader.receiver;
@@ -2009,14 +1760,9 @@ mod tests {
             0,
         ));
 
-        let input = Arc::new(ResourcesConfigInput::new(Simple::new(ResourceType::List(vec![
-            "resource_a".to_string(),
-            "resource_b".to_string(),
-        ]))));
+        let input = Arc::new(ResourcesConfigInput::new(Simple::new(ResourceType::List(vec!["resource_a".to_string(), "resource_b".to_string()]))));
 
-        let _ = cross_loader
-            .run(input, ctx.branch(false))
-            .await?;
+        let _ = cross_loader.run(input, ctx.branch(false)).await?;
 
         yield_now().await;
         sleep(Duration::from_millis(10)).await;
@@ -2025,34 +1771,22 @@ mod tests {
 
         let expected = vec![
             Observation {
-                tensor_ids: vec![
-                    SynKey::new([mono_key!("resource_a", "resource_a")]),
-                    SynKey::new([mono_key!("resource_a", "resource_a")]),
-                ],
+                tensor_ids: vec![SynKey::new([mono_key!("resource_a", "resource_a")]), SynKey::new([mono_key!("resource_a", "resource_a")])],
                 batch_0_ids: vec![resources[0].id()],
                 batch_1_ids: vec![resources[0].id()],
             },
             Observation {
-                tensor_ids: vec![
-                    SynKey::new([mono_key!("resource_a", "resource_a")]),
-                    SynKey::new([mono_key!("resource_b", "resource_b")]),
-                ],
+                tensor_ids: vec![SynKey::new([mono_key!("resource_a", "resource_a")]), SynKey::new([mono_key!("resource_b", "resource_b")])],
                 batch_0_ids: vec![resources[0].id()],
                 batch_1_ids: vec![resources[1].id()],
             },
             Observation {
-                tensor_ids: vec![
-                    SynKey::new([mono_key!("resource_b", "resource_b")]),
-                    SynKey::new([mono_key!("resource_a", "resource_a")]),
-                ],
+                tensor_ids: vec![SynKey::new([mono_key!("resource_b", "resource_b")]), SynKey::new([mono_key!("resource_a", "resource_a")])],
                 batch_0_ids: vec![resources[1].id()],
                 batch_1_ids: vec![resources[0].id()],
             },
             Observation {
-                tensor_ids: vec![
-                    SynKey::new([mono_key!("resource_b", "resource_b")]),
-                    SynKey::new([mono_key!("resource_b", "resource_b")]),
-                ],
+                tensor_ids: vec![SynKey::new([mono_key!("resource_b", "resource_b")]), SynKey::new([mono_key!("resource_b", "resource_b")])],
                 batch_0_ids: vec![resources[1].id()],
                 batch_1_ids: vec![resources[1].id()],
             },
@@ -2060,18 +1794,10 @@ mod tests {
 
         assert_eq!(observed, expected);
 
-        let produced = produced_outputs
-            .lock()
-            .expect("produced_outputs mutex poisoned")
-            .clone();
-        let received = received_outputs
-            .lock()
-            .expect("received_outputs mutex poisoned")
-            .clone();
+        let produced = produced_outputs.lock().expect("produced_outputs mutex poisoned").clone();
+        let received = received_outputs.lock().expect("received_outputs mutex poisoned").clone();
 
-        let expected_outputs: Vec<TestBatchOutput> = (0..expected.len())
-            .map(TestBatchOutput::new)
-            .collect();
+        let expected_outputs: Vec<TestBatchOutput> = (0..expected.len()).map(TestBatchOutput::new).collect();
 
         assert_eq!(produced, expected_outputs);
         assert_eq!(produced, received);
@@ -2090,10 +1816,7 @@ mod tests {
 
         let loader = Arc::new(
             mock_tensor_loader::build()
-                .with_run_cached([
-                    (resource_small.clone(), Tensor::from_slice(&[1.0, 2.0]).view((1, 2))),
-                    (resource_large.clone(), Tensor::arange(8, (Kind::Float, Device::Cpu)).view((1, 8))),
-                ])
+                .with_run_cached([(resource_small.clone(), Tensor::from_slice(&[1.0, 2.0]).view((1, 2))), (resource_large.clone(), Tensor::arange(8, (Kind::Float, Device::Cpu)).view((1, 8)))])
                 .finish(),
         );
 
@@ -2109,29 +1832,16 @@ mod tests {
                         batch_1_ids: input.batch_1().iter().map(|r| r.as_ref().id()).collect(),
                     });
 
-                    Ok(CrossUnfoldClcOutput::new(
-                        TestBatchOutput::new(0),
-                        SlicesIter::new(1, vec![]),
-                        SlicesIter::new(1, vec![]), mono_key!("CrossUnfoldClcOutput", "stage").into(),
-                    ))
+                    Ok(CrossUnfoldClcOutput::new(TestBatchOutput::new(0), SlicesIter::new(1, vec![]), SlicesIter::new(1, vec![]), mono_key!("CrossUnfoldClcOutput", "stage").into()))
                 })
                 .finish(),
         );
 
-        let receiver = Arc::new(
-            mock_cross_loader_receiver::build::<CrossUnfoldClcOutput<TestBatchOutput>, MockRunCtx>()
-                .with_receive_fn(|_out, _ctx| ConsumeResult::Ok(()))
-                .finish(),
-        );
+        let receiver = Arc::new(mock_cross_loader_receiver::build::<CrossUnfoldClcOutput<TestBatchOutput>, MockRunCtx>().with_receive_fn(|_out, _ctx| ConsumeResult::Ok(())).finish());
 
         let mut ctx = mock_run_ctx::default(1);
 
-        let mocked_store = MockMotifsStoreBuilder::new()
-            .with_list_resources_by_file_stems(
-                vec!["resource_small".to_string(), "resource_large".to_string()],
-                Ok(resources.clone()),
-            )
-            .build();
+        let mocked_store = MockMotifsStoreBuilder::new().with_list_resources_by_file_stems(vec!["resource_small".to_string(), "resource_large".to_string()], Ok(resources.clone())).build();
 
         let cross_loader = Arc::new(CrossLoader::new(
             1,
@@ -2141,51 +1851,34 @@ mod tests {
             move |_resources: &[Arc<Resource>]| Arc::clone(&receiver),
             3,
             |batch| async { Ok(batch) }.boxed(),
-            |_receiver| async {
-                Ok(())
-            }.boxed(),
+            |_receiver| async { Ok(()) }.boxed(),
             CrossUnfoldClcOutputMergeMode::GpuMerge,
             0,
         ));
 
-        let input = Arc::new(ResourcesConfigInput::new(Simple::new(ResourceType::List(vec![
-            "resource_small".to_string(),
-            "resource_large".to_string(),
-        ]))));
+        let input = Arc::new(ResourcesConfigInput::new(Simple::new(ResourceType::List(vec!["resource_small".to_string(), "resource_large".to_string()]))));
 
         let _ = cross_loader.run(input, ctx.branch(false)).await?;
 
         let observed = observations.lock().unwrap().clone();
         let expected = vec![
             Observation {
-                tensor_ids: vec![
-                    SynKey::new([mono_key!("resource_small", "resource_small")]),
-                    SynKey::new([mono_key!("resource_small", "resource_small")]),
-                ],
+                tensor_ids: vec![SynKey::new([mono_key!("resource_small", "resource_small")]), SynKey::new([mono_key!("resource_small", "resource_small")])],
                 batch_0_ids: vec![resource_small.id()],
                 batch_1_ids: vec![resource_small.id()],
             },
             Observation {
-                tensor_ids: vec![
-                    SynKey::new([mono_key!("resource_small", "resource_small")]),
-                    SynKey::new([mono_key!("resource_large", "resource_large")]),
-                ],
+                tensor_ids: vec![SynKey::new([mono_key!("resource_small", "resource_small")]), SynKey::new([mono_key!("resource_large", "resource_large")])],
                 batch_0_ids: vec![resource_small.id()],
                 batch_1_ids: vec![resource_large.id()],
             },
             Observation {
-                tensor_ids: vec![
-                    SynKey::new([mono_key!("resource_large", "resource_large")]),
-                    SynKey::new([mono_key!("resource_small", "resource_small")]),
-                ],
+                tensor_ids: vec![SynKey::new([mono_key!("resource_large", "resource_large")]), SynKey::new([mono_key!("resource_small", "resource_small")])],
                 batch_0_ids: vec![resource_large.id()],
                 batch_1_ids: vec![resource_small.id()],
             },
             Observation {
-                tensor_ids: vec![
-                    SynKey::new([mono_key!("resource_large", "resource_large")]),
-                    SynKey::new([mono_key!("resource_large", "resource_large")]),
-                ],
+                tensor_ids: vec![SynKey::new([mono_key!("resource_large", "resource_large")]), SynKey::new([mono_key!("resource_large", "resource_large")])],
                 batch_0_ids: vec![resource_large.id()],
                 batch_1_ids: vec![resource_large.id()],
             },
@@ -2210,14 +1903,7 @@ mod tests {
         let resource_a: Resource = (1, 1, "resource_a", tensor_len as u32).into();
         let resources = vec![resource_a.clone()];
 
-        let loader = Arc::new(
-            mock_tensor_loader::build()
-                .with_run_cached([(
-                    resource_a.clone(),
-                    Tensor::arange(tensor_len as i64, (Kind::Float, Device::Cpu)).view((1, tensor_len as i64)),
-                )])
-                .finish(),
-        );
+        let loader = Arc::new(mock_tensor_loader::build().with_run_cached([(resource_a.clone(), Tensor::arange(tensor_len as i64, (Kind::Float, Device::Cpu)).view((1, tensor_len as i64)))]).finish());
 
         let observations = Arc::new(Mutex::new(Vec::<SplitObservation>::new()));
         let observed_batches = Arc::clone(&observations);
@@ -2227,11 +1913,7 @@ mod tests {
         let batch_clc = Arc::new(
             mock_cross_loader_clc::build::<TestBatchOutput, MockRunCtx>()
                 .with_run_batch_fn(move |input, _ctx| {
-                    let tensor_lens = input
-                        .tensors()
-                        .iter()
-                        .map(|t| ThoTensor::size(*t)[1])
-                        .collect::<Vec<_>>();
+                    let tensor_lens = input.tensors().iter().map(|t| ThoTensor::size(*t)[1]).collect::<Vec<_>>();
                     let batch_1_len = *tensor_lens.last().unwrap_or(&0);
                     if batch_1_len > max_len {
                         oom_triggered_cloned.store(true, Ordering::SeqCst);
@@ -2246,29 +1928,16 @@ mod tests {
 
                     observed_batches.lock().unwrap().push(observation);
 
-                    Ok(CrossUnfoldClcOutput::new(
-                        TestBatchOutput::new(0),
-                        SlicesIter::new(1, vec![]),
-                        SlicesIter::new(1, vec![]), mono_key!("CrossUnfoldClcOutput", "stage").into(),
-                    ))
+                    Ok(CrossUnfoldClcOutput::new(TestBatchOutput::new(0), SlicesIter::new(1, vec![]), SlicesIter::new(1, vec![]), mono_key!("CrossUnfoldClcOutput", "stage").into()))
                 })
                 .finish(),
         );
 
-        let receiver = Arc::new(
-            mock_cross_loader_receiver::build::<CrossUnfoldClcOutput<TestBatchOutput>, MockRunCtx>()
-                .with_receive_fn(|_out, _ctx| ConsumeResult::Ok(()))
-                .finish(),
-        );
+        let receiver = Arc::new(mock_cross_loader_receiver::build::<CrossUnfoldClcOutput<TestBatchOutput>, MockRunCtx>().with_receive_fn(|_out, _ctx| ConsumeResult::Ok(())).finish());
 
         let mut ctx = mock_run_ctx::default(1);
 
-        let mocked_store = MockMotifsStoreBuilder::new()
-            .with_list_resources_by_file_stems(
-                vec!["resource_a".to_string()],
-                Ok(resources.clone()),
-            )
-            .build();
+        let mocked_store = MockMotifsStoreBuilder::new().with_list_resources_by_file_stems(vec!["resource_a".to_string()], Ok(resources.clone())).build();
 
         let cross_loader = Arc::new(CrossLoader::new(
             1,
@@ -2278,16 +1947,12 @@ mod tests {
             move |_resources: &[Arc<Resource>]| Arc::clone(&receiver),
             chunk_size,
             |batch| async { Ok(batch) }.boxed(),
-            |_receiver| async {
-                Ok(())
-            }.boxed(),
+            |_receiver| async { Ok(()) }.boxed(),
             CrossUnfoldClcOutputMergeMode::GpuMerge,
             1,
         ));
 
-        let input = Arc::new(ResourcesConfigInput::new(Simple::new(ResourceType::List(vec![
-            "resource_a".to_string(),
-        ]))));
+        let input = Arc::new(ResourcesConfigInput::new(Simple::new(ResourceType::List(vec!["resource_a".to_string()]))));
 
         let _ = cross_loader.run(input, ctx.branch(false)).await?;
 
@@ -2316,16 +1981,8 @@ mod tests {
     #[tokio::test]
     async fn test_output_builder_cpu_merge_calls_to_cpu() -> Result<(), ThoError> {
         let to_cpu_calls = Arc::new(AtomicUsize::new(0));
-        let output_0 = CrossUnfoldClcOutput::new(
-            CpuMergeOutput::new(Arc::clone(&to_cpu_calls)),
-            SlicesIter::new(1, vec![]),
-            SlicesIter::new(1, vec![]), mono_key!("CrossUnfoldClcOutput", "stage").into(),
-        );
-        let output_1 = CrossUnfoldClcOutput::new(
-            CpuMergeOutput::new(Arc::clone(&to_cpu_calls)),
-            SlicesIter::new(1, vec![]),
-            SlicesIter::new(1, vec![]), mono_key!("CrossUnfoldClcOutput", "stage").into(),
-        );
+        let output_0 = CrossUnfoldClcOutput::new(CpuMergeOutput::new(Arc::clone(&to_cpu_calls)), SlicesIter::new(1, vec![]), SlicesIter::new(1, vec![]), mono_key!("CrossUnfoldClcOutput", "stage").into());
+        let output_1 = CrossUnfoldClcOutput::new(CpuMergeOutput::new(Arc::clone(&to_cpu_calls)), SlicesIter::new(1, vec![]), SlicesIter::new(1, vec![]), mono_key!("CrossUnfoldClcOutput", "stage").into());
 
         let mut builder = CrossUnfoldClcOutputBuilder::new(CrossUnfoldClcOutputMergeMode::CpuMerge);
         builder.add_partial_output(output_0).await?;
@@ -2341,16 +1998,8 @@ mod tests {
     #[tokio::test]
     async fn test_output_builder_gpu_merge_skips_to_cpu() -> Result<(), ThoError> {
         let to_cpu_calls = Arc::new(AtomicUsize::new(0));
-        let output_0 = CrossUnfoldClcOutput::new(
-            CpuMergeOutput::new(Arc::clone(&to_cpu_calls)),
-            SlicesIter::new(1, vec![]),
-            SlicesIter::new(1, vec![]), mono_key!("CrossUnfoldClcOutput", "stage").into(),
-        );
-        let output_1 = CrossUnfoldClcOutput::new(
-            CpuMergeOutput::new(Arc::clone(&to_cpu_calls)),
-            SlicesIter::new(1, vec![]),
-            SlicesIter::new(1, vec![]), mono_key!("CrossUnfoldClcOutput", "stage").into(),
-        );
+        let output_0 = CrossUnfoldClcOutput::new(CpuMergeOutput::new(Arc::clone(&to_cpu_calls)), SlicesIter::new(1, vec![]), SlicesIter::new(1, vec![]), mono_key!("CrossUnfoldClcOutput", "stage").into());
+        let output_1 = CrossUnfoldClcOutput::new(CpuMergeOutput::new(Arc::clone(&to_cpu_calls)), SlicesIter::new(1, vec![]), SlicesIter::new(1, vec![]), mono_key!("CrossUnfoldClcOutput", "stage").into());
 
         let mut builder = CrossUnfoldClcOutputBuilder::new(CrossUnfoldClcOutputMergeMode::GpuMerge);
         builder.add_partial_output(output_0).await?;
@@ -2362,7 +2011,6 @@ mod tests {
 
         Ok(())
     }
-
 }
 
 #[cfg(test)]

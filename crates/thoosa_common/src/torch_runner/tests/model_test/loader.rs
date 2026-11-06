@@ -23,20 +23,12 @@ pub(crate) struct ABLoader {
 
 impl ABLoader {
     pub(crate) fn new(input_len: i64, feat: i64, kind: Kind) -> Self {
-        Self {
-            input_len,
-            feat,
-            kind,
-        }
+        Self { input_len, feat, kind }
     }
 }
 
-
 impl OutId for ABLoader {
-    fn out_id(
-        &self,
-        input_id: &<Self::In<'static> as WithId>::ID,
-    ) -> <Self::Out as WithId>::ID {
+    fn out_id(&self, input_id: &<Self::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
         ModelTestId(format!("features_{}", input_id.0).leak())
     }
 }
@@ -51,12 +43,7 @@ impl AsyncStage for ABLoader {
     // type RunInput = Arc<Self::In<'static>>;
     // type RunOutput = Arc<DevicesWrap<Self::Out>>;
 
-
-    async fn run(
-        self: Arc<Self>,
-        input: Self::In<'static>,
-        _ctx: Self::Ctx,
-    ) -> Result<Self::Out, ThoError> {
+    async fn run(self: Arc<Self>, input: Self::In<'static>, _ctx: Self::Ctx) -> Result<Self::Out, ThoError> {
         let idx = parse_numeric_part(WithId::id(&input).0).unwrap_or(0.0) as i64;
         let base = if idx % 2 == 0 { 1.0 } else { -1.0 };
         let x = Tensor::ones([self.input_len, self.feat], (self.kind, Device::Cpu)) * base;

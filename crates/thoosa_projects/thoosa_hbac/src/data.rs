@@ -2,10 +2,7 @@ use anyhow::Context as _;
 use log::debug;
 use polars::datatypes::DataType;
 use polars::frame::DataFrame;
-use polars::prelude::{BooleanChunked, Expr, IntoLazy, JoinArgs,
-                      JoinType, LazyCsvReader, LazyFileListReader, LazyFrame, NamedFrom, PlRefPath, ScanArgsParquet, Series, SortMultipleOptions,
-                      col, concat_list, lit,
-};
+use polars::prelude::{BooleanChunked, Expr, IntoLazy, JoinArgs, JoinType, LazyCsvReader, LazyFileListReader, LazyFrame, NamedFrom, PlRefPath, ScanArgsParquet, Series, SortMultipleOptions, col, concat_list, lit};
 use rand::{Rng, RngExt};
 use std::collections::HashMap;
 use std::fs;
@@ -49,21 +46,9 @@ impl Splitter for ByPatientIdSplitter {
         let mut df_sorted = df
             .clone()
             .group_by(["patient_id"])
-            .agg([
-                col("seizure_vote").sum(),
-                col("lpd_vote").sum(),
-                col("gpd_vote").sum(),
-                col("lrda_vote").sum(),
-                col("grda_vote").sum(),
-                col("other_vote").sum(),
-            ])
+            .agg([col("seizure_vote").sum(), col("lpd_vote").sum(), col("gpd_vote").sum(), col("lrda_vote").sum(), col("grda_vote").sum(), col("other_vote").sum()])
             .sort_by_exprs(
-                [col("seizure_vote")
-                    + col("lpd_vote")
-                    + col("gpd_vote")
-                    + col("lrda_vote")
-                    + col("grda_vote")
-                    + col("other_vote")],
+                [col("seizure_vote") + col("lpd_vote") + col("gpd_vote") + col("lrda_vote") + col("grda_vote") + col("other_vote")],
                 SortMultipleOptions {
                     descending: vec![false],
                     maintain_order: true,
@@ -75,43 +60,20 @@ impl Splitter for ByPatientIdSplitter {
             .select([col("patient_id")])
             .collect()?;
 
-        let df_set = df_sorted.with_column(Series::new(
-            "set".into(),
-            (0..df_sorted.shape().0)
-                .map(|_i| {
-                    if rand::random::<f32>() > self.train_frac {
-                        1i32
-                    } else {
-                        0i32
-                    }
-                })
-                .collect::<Vec<_>>(),
-        ).into())?;
+        let df_set = df_sorted.with_column(Series::new("set".into(), (0..df_sorted.shape().0).map(|_i| if rand::random::<f32>() > self.train_frac { 1i32 } else { 0i32 }).collect::<Vec<_>>()).into())?;
 
-        Ok(df.clone().join(
-            df_set.clone().lazy(),
-            [col("patient_id")],
-            [col("patient_id")],
-            JoinArgs::new(JoinType::Left),
-        ))
+        Ok(df.clone().join(df_set.clone().lazy(), [col("patient_id")], [col("patient_id")], JoinArgs::new(JoinType::Left)))
         // Ok(df.clone().with_column(lit(1).alias("set"))) //.collect()?.lazy()
     }
 }
 
-pub fn parquet_to_tensor(
-    base_path: &str,
-    resource_id: &str,
-    device: Device,
-) -> anyhow::Result<Tensor> {
+pub fn parquet_to_tensor(base_path: &str, resource_id: &str, device: Device) -> anyhow::Result<Tensor> {
     let path = format!("{}/train_eegs/{}.parquet", base_path, resource_id);
 
     parquet_to_tensor_by_path(path, device)
 }
 
-pub fn labeled_resourses(
-    base: impl AsRef<Path>,
-    file: impl AsRef<Path>,
-) -> anyhow::Result<HashMap<String, Vec<(String, f32)>>> {
+pub fn labeled_resourses(base: impl AsRef<Path>, file: impl AsRef<Path>) -> anyhow::Result<HashMap<String, Vec<(String, f32)>>> {
     let path = base.as_ref().join(file);
     let eeg_path = path.clone().parent().unwrap().to_path_buf();
     let df = LazyCsvReader::new(PlRefPath::new(path.display().to_string())).finish()?.with_streaming(true);
@@ -179,27 +141,24 @@ pub fn labeled_resourses(
                 )
             },
         )
-        .map(
-            |(eeg_id, seizure_vote, lpd_vote, gpd_vote, lrda_vote, grda_vote, other_vote)| {
-                let sum = (seizure_vote + lpd_vote + gpd_vote + lrda_vote + grda_vote + other_vote)
-                    as f32;
+        .map(|(eeg_id, seizure_vote, lpd_vote, gpd_vote, lrda_vote, grda_vote, other_vote)| {
+            let sum = (seizure_vote + lpd_vote + gpd_vote + lrda_vote + grda_vote + other_vote) as f32;
 
-                (
-                    eeg_id.to_string(),
-                    [
-                        ("seizure".to_string(), seizure_vote as f32 / sum),
-                        ("lpd".to_string(), lpd_vote as f32 / sum),
-                        ("gpd".to_string(), gpd_vote as f32 / sum),
-                        ("lrda".to_string(), lrda_vote as f32 / sum),
-                        ("grda".to_string(), grda_vote as f32 / sum),
-                        ("other".to_string(), other_vote as f32 / sum),
-                    ]
-                    .into_iter()
-                    .filter(|v| v.1 > 0.)
-                    .collect(),
-                )
-            },
-        )
+            (
+                eeg_id.to_string(),
+                [
+                    ("seizure".to_string(), seizure_vote as f32 / sum),
+                    ("lpd".to_string(), lpd_vote as f32 / sum),
+                    ("gpd".to_string(), gpd_vote as f32 / sum),
+                    ("lrda".to_string(), lrda_vote as f32 / sum),
+                    ("grda".to_string(), grda_vote as f32 / sum),
+                    ("other".to_string(), other_vote as f32 / sum),
+                ]
+                .into_iter()
+                .filter(|v| v.1 > 0.)
+                .collect(),
+            )
+        })
         .fold(HashMap::new(), |mut h, v| {
             h.insert(v.0, v.1);
             h
@@ -245,9 +204,7 @@ pub fn eegs_to_tensors() -> anyhow::Result<()> {
 
     // debug!("saved to {}", name);
 
-    let df = LazyCsvReader::new("../../data/train.csv".into())
-        .finish()?
-        .with_streaming(true);
+    let df = LazyCsvReader::new("../../data/train.csv".into()).finish()?.with_streaming(true);
 
     debug!("df={:?}", df.clone().collect()?.head(Some(10)));
 
@@ -262,52 +219,51 @@ pub fn eegs_to_tensors() -> anyhow::Result<()> {
 
     debug!("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
 
-    for (eeg_id, seizure_vote, lpd_vote, gpd_vote, lrda_vote, grda_vote, other_vote) in
-        gr_by_eeg_id_df
-            .column("eeg_id")?
-            .i64()?
-            .iter()
-            // .zip(gr_by_eeg_id_df.column("set")?.i32()?)
-            // .zip(gr_by_eeg_id_df.column("eeg_label_offset_seconds")?.list()?)
-            .zip(gr_by_eeg_id_df.column("seizure_vote")?.i64()?.iter())
-            .zip(gr_by_eeg_id_df.column("lpd_vote")?.i64()?.iter())
-            .zip(gr_by_eeg_id_df.column("gpd_vote")?.i64()?.iter())
-            .zip(gr_by_eeg_id_df.column("lrda_vote")?.i64()?.iter())
-            .zip(gr_by_eeg_id_df.column("grda_vote")?.i64()?.iter())
-            .zip(gr_by_eeg_id_df.column("other_vote")?.i64()?.iter())
-            .map(
-                |(
+    for (eeg_id, seizure_vote, lpd_vote, gpd_vote, lrda_vote, grda_vote, other_vote) in gr_by_eeg_id_df
+        .column("eeg_id")?
+        .i64()?
+        .iter()
+        // .zip(gr_by_eeg_id_df.column("set")?.i32()?)
+        // .zip(gr_by_eeg_id_df.column("eeg_label_offset_seconds")?.list()?)
+        .zip(gr_by_eeg_id_df.column("seizure_vote")?.i64()?.iter())
+        .zip(gr_by_eeg_id_df.column("lpd_vote")?.i64()?.iter())
+        .zip(gr_by_eeg_id_df.column("gpd_vote")?.i64()?.iter())
+        .zip(gr_by_eeg_id_df.column("lrda_vote")?.i64()?.iter())
+        .zip(gr_by_eeg_id_df.column("grda_vote")?.i64()?.iter())
+        .zip(gr_by_eeg_id_df.column("other_vote")?.i64()?.iter())
+        .map(
+            |(
+                (
                     (
                         (
                             (
                                 (
-                                    (
-                                        eeg_id,
-                                        // eeg_label_offset_seconds),
-                                        seizure_vote,
-                                    ),
-                                    lpd_vote,
+                                    eeg_id,
+                                    // eeg_label_offset_seconds),
+                                    seizure_vote,
                                 ),
-                                gpd_vote,
+                                lpd_vote,
                             ),
-                            lrda_vote,
+                            gpd_vote,
                         ),
-                        grda_vote,
+                        lrda_vote,
                     ),
-                    other_vote,
-                )| {
-                    (
-                        eeg_id.unwrap_or_default(),
-                        // eeg_label_offset_seconds.unwrap_or_default(),
-                        seizure_vote.unwrap_or_default(),
-                        lpd_vote.unwrap_or_default(),
-                        gpd_vote.unwrap_or_default(),
-                        lrda_vote.unwrap_or_default(),
-                        grda_vote.unwrap_or_default(),
-                        other_vote.unwrap_or_default(),
-                    )
-                },
-            )
+                    grda_vote,
+                ),
+                other_vote,
+            )| {
+                (
+                    eeg_id.unwrap_or_default(),
+                    // eeg_label_offset_seconds.unwrap_or_default(),
+                    seizure_vote.unwrap_or_default(),
+                    lpd_vote.unwrap_or_default(),
+                    gpd_vote.unwrap_or_default(),
+                    lrda_vote.unwrap_or_default(),
+                    grda_vote.unwrap_or_default(),
+                    other_vote.unwrap_or_default(),
+                )
+            },
+        )
     {
         if count % 1000 == 0 {
             debug!("{} done", count);
@@ -365,18 +321,7 @@ pub struct EEG {
 }
 
 impl EEG {
-    pub fn new(
-        egg_map: Vec<Vec<f32>>,
-        eeg_id: i64,
-        set: i32,
-        fragments_rows: Vec<u32>,
-        seizure_vote: u8,
-        lpd_vote: u8,
-        gpd_vote: u8,
-        lrda_vote: u8,
-        grda_vote: u8,
-        other_vote: u8,
-    ) -> Self {
+    pub fn new(egg_map: Vec<Vec<f32>>, eeg_id: i64, set: i32, fragments_rows: Vec<u32>, seizure_vote: u8, lpd_vote: u8, gpd_vote: u8, lrda_vote: u8, grda_vote: u8, other_vote: u8) -> Self {
         Self {
             egg_map,
             eeg_id,
@@ -404,35 +349,17 @@ impl EEG {
     }
 
     pub fn all_fragemnts_tensor(&self) -> Vec<Tensor> {
-        self.fragments_rows
-            .iter()
-            .map(|i| self.fragment_to_tensor(*i as usize, *i as usize + 50 * 200))
-            .collect()
+        self.fragments_rows.iter().map(|i| self.fragment_to_tensor(*i as usize, *i as usize + 50 * 200)).collect()
     }
 
     pub fn votes_tensor(&self) -> Tensor {
-        Tensor::from_slice(&[
-            self.seizure_vote,
-            self.lpd_vote,
-            self.gpd_vote,
-            self.lrda_vote,
-            self.grda_vote,
-            self.other_vote,
-        ])
-        .totype(Kind::Float)
+        Tensor::from_slice(&[self.seizure_vote, self.lpd_vote, self.gpd_vote, self.lrda_vote, self.grda_vote, self.other_vote]).totype(Kind::Float)
     }
 
     pub fn fragment_to_tensor(&self, i_1: usize, i_2: usize) -> Tensor {
         assert!(i_1 < i_2, "fragment_to_tensor: i_1 < i_2");
 
-        Tensor::stack(
-            self.egg_map
-                .iter()
-                .map(|values| Tensor::from_slice(&values[i_1..i_2]))
-                .collect::<Vec<Tensor>>()
-                .as_slice(),
-            0,
-        )
+        Tensor::stack(self.egg_map.iter().map(|values| Tensor::from_slice(&values[i_1..i_2])).collect::<Vec<Tensor>>().as_slice(), 0)
     }
 }
 
@@ -448,19 +375,10 @@ impl EEGs {
     pub fn good_eegs(base_path: &str) -> anyhow::Result<Series> {
         let good_eegs_filter = Self::good_eegs_filter(base_path)?;
 
-        Ok(good_eegs_filter
-            .collect()?
-            .column("eeg_id")?
-            .as_series()
-            .map(|v| v.clone())
-            .unwrap())
+        Ok(good_eegs_filter.collect()?.column("eeg_id")?.as_series().map(|v| v.clone()).unwrap())
     }
 
-    pub fn good_eegs_of(
-        base_path: &str,
-        kind: &str,
-        limit: Option<usize>,
-    ) -> anyhow::Result<Series> {
+    pub fn good_eegs_of(base_path: &str, kind: &str, limit: Option<usize>) -> anyhow::Result<Series> {
         let good_eegs_filter = Self::good_eegs_filter(base_path)?;
 
         let eeg_id_series = good_eegs_filter
@@ -494,49 +412,19 @@ impl EEGs {
             .finish()?
             .with_streaming(true)
             .group_by([col("eeg_id")])
-            .agg([
-                col("seizure_vote").first(),
-                col("lpd_vote").first(),
-                col("gpd_vote").first(),
-                col("lrda_vote").first(),
-                col("grda_vote").first(),
-                col("other_vote").first(),
-            ])
-            .with_column(
-                concat_list([
-                    "seizure_vote",
-                    "lpd_vote",
-                    "gpd_vote",
-                    "lrda_vote",
-                    "grda_vote",
-                    "other_vote",
-                ])?
-                .alias("all_votes")
-                .alias("all_votes"),
-            )
-            .filter(
-                col("all_votes")
-                    .list()
-                    .max()
-                    .alias("max")
-                    .eq(col("all_votes").list().sum().alias("sum")),
-            ))
+            .agg([col("seizure_vote").first(), col("lpd_vote").first(), col("gpd_vote").first(), col("lrda_vote").first(), col("grda_vote").first(), col("other_vote").first()])
+            .with_column(concat_list(["seizure_vote", "lpd_vote", "gpd_vote", "lrda_vote", "grda_vote", "other_vote"])?.alias("all_votes").alias("all_votes"))
+            .filter(col("all_votes").list().max().alias("max").eq(col("all_votes").list().sum().alias("sum"))))
     }
 
     pub fn load_all_eegs(base_path: &str) -> anyhow::Result<Box<EEGs>> {
         EEGs::load_eegs::<_>(base_path, None, None::<AllTrainSplitter<EEG>>)
     }
-    pub fn load_eegs<S>(
-        base_path: &str,
-        filter: Option<Expr>,
-        splitter: Option<S>,
-    ) -> anyhow::Result<Box<EEGs>>
+    pub fn load_eegs<S>(base_path: &str, filter: Option<Expr>, splitter: Option<S>) -> anyhow::Result<Box<EEGs>>
     where
         S: Splitter<Type = EEG>,
     {
-        let df = LazyCsvReader::new(PlRefPath::new(format!("{}/train.csv", base_path)))
-            .finish()?
-            .with_streaming(true);
+        let df = LazyCsvReader::new(PlRefPath::new(format!("{}/train.csv", base_path))).finish()?.with_streaming(true);
 
         let df = match splitter.as_ref() {
             None => df,
@@ -553,17 +441,7 @@ impl EEGs {
         let mut train_eegs = Vec::with_capacity(gr_by_eeg_id_df.shape().0); //TODO capacity
         let mut valid_eegs = Vec::with_capacity(gr_by_eeg_id_df.shape().0);
 
-        for (
-            eeg_id,
-            set,
-            eeg_label_offset_seconds,
-            seizure_vote,
-            lpd_vote,
-            gpd_vote,
-            lrda_vote,
-            grda_vote,
-            other_vote,
-        ) in gr_by_eeg_id_df
+        for (eeg_id, set, eeg_label_offset_seconds, seizure_vote, lpd_vote, gpd_vote, lrda_vote, grda_vote, other_vote) in gr_by_eeg_id_df
             .column("eeg_id")?
             .i64()?
             .iter()
@@ -575,43 +453,21 @@ impl EEGs {
             .zip(gr_by_eeg_id_df.column("lrda_vote")?.i64()?.iter())
             .zip(gr_by_eeg_id_df.column("grda_vote")?.i64()?.iter())
             .zip(gr_by_eeg_id_df.column("other_vote")?.i64()?.iter())
-            .map(
-                |(
-                    (
-                        (
-                            (
-                                (
-                                    (((eeg_id, set), eeg_label_offset_seconds), seizure_vote),
-                                    lpd_vote,
-                                ),
-                                gpd_vote,
-                            ),
-                            lrda_vote,
-                        ),
-                        grda_vote,
-                    ),
-                    other_vote,
-                )| {
-                    (
-                        eeg_id.unwrap_or_default(),
-                        set.unwrap_or_default(),
-                        eeg_label_offset_seconds.expect("no eeg_label_offset_seconds"),
-                        seizure_vote.unwrap_or_default(),
-                        lpd_vote.unwrap_or_default(),
-                        gpd_vote.unwrap_or_default(),
-                        lrda_vote.unwrap_or_default(),
-                        grda_vote.unwrap_or_default(),
-                        other_vote.unwrap_or_default(),
-                    )
-                },
-            )
+            .map(|((((((((eeg_id, set), eeg_label_offset_seconds), seizure_vote), lpd_vote), gpd_vote), lrda_vote), grda_vote), other_vote)| {
+                (
+                    eeg_id.unwrap_or_default(),
+                    set.unwrap_or_default(),
+                    eeg_label_offset_seconds.expect("no eeg_label_offset_seconds"),
+                    seizure_vote.unwrap_or_default(),
+                    lpd_vote.unwrap_or_default(),
+                    gpd_vote.unwrap_or_default(),
+                    lrda_vote.unwrap_or_default(),
+                    grda_vote.unwrap_or_default(),
+                    other_vote.unwrap_or_default(),
+                )
+            })
         {
-            let fragments_rows = eeg_label_offset_seconds
-                .as_ref()
-                .f64()?
-                .iter()
-                .map(|v| v.expect("no id :(") as u32 * 200)
-                .collect::<Vec<u32>>();
+            let fragments_rows = eeg_label_offset_seconds.as_ref().f64()?.iter().map(|v| v.expect("no id :(") as u32 * 200).collect::<Vec<u32>>();
 
             // debug!("eeg_id ={:?}, fragments_in_mls={:?} seizure_vote={:?}  lpd_vote={:?}, gpd_vote={:?}, lrda_vote={:?}, grda_vote={:?}, other_vote={:?}",
             //                 eeg_id, fragments_in_mls,     seizure_vote,      lpd_vote,      gpd_vote,       lrda_vote,      grda_vote,      other_vote);
@@ -619,10 +475,7 @@ impl EEGs {
             let scan_conf = ScanArgsParquet::default();
             // scan_conf.cache = false;
 
-            let eeg_df = LazyFrame::scan_parquet(
-                PlRefPath::new(format!("{}/train_eegs/{}.parquet", base_path, eeg_id)),
-                scan_conf,
-            )?;
+            let eeg_df = LazyFrame::scan_parquet(PlRefPath::new(format!("{}/train_eegs/{}.parquet", base_path, eeg_id)), scan_conf)?;
 
             let df = eeg_df.collect()?;
 
@@ -634,24 +487,10 @@ impl EEGs {
 
                 match s.dtype() {
                     DataType::Float32 => {
-                        eegs_vec.push(
-                            s.f32()?
-                                .downcast_iter()
-                                .flat_map(|arr| {
-                                    arr.into_iter().map(|v| v.map(|v| *v).unwrap_or(0.0))
-                                })
-                                .collect::<Vec<f32>>(),
-                        );
+                        eegs_vec.push(s.f32()?.downcast_iter().flat_map(|arr| arr.into_iter().map(|v| v.map(|v| *v).unwrap_or(0.0))).collect::<Vec<f32>>());
                     }
                     DataType::Float64 => {
-                        eegs_vec.push(
-                            s.f64()?
-                                .downcast_iter()
-                                .flat_map(|arr| {
-                                    arr.into_iter().map(|v| v.map(|v| *v as f32).unwrap_or(0.0))
-                                })
-                                .collect::<Vec<f32>>(),
-                        );
+                        eegs_vec.push(s.f64()?.downcast_iter().flat_map(|arr| arr.into_iter().map(|v| v.map(|v| *v as f32).unwrap_or(0.0))).collect::<Vec<f32>>());
                     }
                     dtype => {
                         // Input file schemas are runtime data, not programmer invariants.
@@ -673,11 +512,7 @@ impl EEGs {
                 other_vote.try_into().expect("other_vote"),
             );
 
-            match splitter
-                .as_ref()
-                .map(|s| s.split_to(&eeg))
-                .unwrap_or_default()
-            {
+            match splitter.as_ref().map(|s| s.split_to(&eeg)).unwrap_or_default() {
                 Set::Train => {
                     train_eegs.push(eeg);
                 }
@@ -685,15 +520,9 @@ impl EEGs {
                     valid_eegs.push(eeg);
                 }
             }
-
-
         }
 
-        debug!(
-            "tensors.len={}  valid_eegs.len={}",
-            train_eegs.len(),
-            valid_eegs.len()
-        );
+        debug!("tensors.len={}  valid_eegs.len={}", train_eegs.len(), valid_eegs.len());
         std::io::stdout().flush()?;
 
         Ok(Box::new(EEGs {
@@ -751,19 +580,10 @@ impl EEGs {
             a
         });
 
-        (
-            Tensor::stack(eegs.as_slice(), 0),
-            Tensor::stack(votes.as_slice(), 0),
-        )
+        (Tensor::stack(eegs.as_slice(), 0), Tensor::stack(votes.as_slice(), 0))
     }
 
-    fn random_subset(
-        batch_size: usize,
-        data: &Vec<EEG>,
-    ) -> (
-        ThoTensor<Batch<ChannelsData>, DebugId>,
-        Tensor,
-    ) {
+    fn random_subset(batch_size: usize, data: &Vec<EEG>) -> (ThoTensor<Batch<ChannelsData>, DebugId>, Tensor) {
         let mut rng = rand::rng();
 
         use std::collections::HashSet;
@@ -781,26 +601,21 @@ impl EEGs {
             }
         }
 
-        (
-            Tensor::stack(eegs.as_slice(), 0).into(),
-            Tensor::stack(votes.as_slice(), 0),
-        )
+        (Tensor::stack(eegs.as_slice(), 0).into(), Tensor::stack(votes.as_slice(), 0))
     }
 }
 #[cfg(test)]
 mod tests {
     #![allow(unused_imports, dead_code, unused_variables)]
-    use anyhow::Context as _;
     use super::{ByPatientIdSplitter, EEG, parquet_to_tensor};
     use crate::data::EEGs;
+    use anyhow::Context as _;
     use log::LevelFilter::Trace;
     use log::debug;
     use parking_lot::{Mutex, RwLock};
     use plotters::count;
     use plotters::prelude::{BLACK, RED};
-    use polars::prelude::{LazyCsvReader, LazyFileListReader, NamedFrom, Series,
-                          col, concat_list, lit, when,
-    };
+    use polars::prelude::{LazyCsvReader, LazyFileListReader, NamedFrom, Series, col, concat_list, lit, when};
     use std::collections::HashMap;
     use std::fs::OpenOptions;
     use std::io::Write;
@@ -855,7 +670,6 @@ mod tests {
         init_test_logging();
     }
 
-
     // #[test]
     pub fn test_fetch_similarities() -> anyhow::Result<()> {
         // let good_eegs = EEGs::good_eegs("../../data")?;
@@ -863,52 +677,18 @@ mod tests {
             .finish()?
             .with_streaming(true)
             .group_by([col("eeg_id")])
-            .agg([
-                col("seizure_vote").first(),
-                col("lpd_vote").first(),
-                col("gpd_vote").first(),
-                col("lrda_vote").first(),
-                col("grda_vote").first(),
-                col("other_vote").first(),
-            ])
-            .with_column(
-                concat_list([
-                    "seizure_vote",
-                    "lpd_vote",
-                    "gpd_vote",
-                    "lrda_vote",
-                    "grda_vote",
-                    "other_vote",
-                ])?
-                .alias("all_votes")
-                .alias("all_votes"),
-            )
-            .filter(
-                col("all_votes")
-                    .list()
-                    .max()
-                    .alias("max")
-                    .eq(col("all_votes").list().sum().alias("sum")),
-            )
+            .agg([col("seizure_vote").first(), col("lpd_vote").first(), col("gpd_vote").first(), col("lrda_vote").first(), col("grda_vote").first(), col("other_vote").first()])
+            .with_column(concat_list(["seizure_vote", "lpd_vote", "gpd_vote", "lrda_vote", "grda_vote", "other_vote"])?.alias("all_votes").alias("all_votes"))
+            .filter(col("all_votes").list().max().alias("max").eq(col("all_votes").list().sum().alias("sum")))
             .with_column(
                 when(col("seizure_vote").gt(lit(0)))
                     .then(lit("seizure_vote"))
                     .otherwise(
-                        when(col("lpd_vote").gt(lit(0)))
-                            .then(lit("lpd_vote"))
-                            .otherwise(
-                                when(col("gpd_vote").gt(lit(0)))
-                                    .then(lit("gpd_vote"))
-                                    .otherwise(
-                                        when(col("lrda_vote").gt(lit(0)))
-                                            .then(lit("lrda_vote"))
-                                            .otherwise(
-                                                when(col("grda_vote").gt(lit(0)))
-                                                    .then(lit("grda_vote"))
-                                                    .otherwise(lit("other_vote")),
-                                            ),
-                                    ),
-                            ),
+                        when(col("lpd_vote").gt(lit(0))).then(lit("lpd_vote")).otherwise(
+                            when(col("gpd_vote").gt(lit(0)))
+                                .then(lit("gpd_vote"))
+                                .otherwise(when(col("lrda_vote").gt(lit(0))).then(lit("lrda_vote")).otherwise(when(col("grda_vote").gt(lit(0))).then(lit("grda_vote")).otherwise(lit("other_vote")))),
+                        ),
                     )
                     .alias("win_vote"),
             )
@@ -919,13 +699,9 @@ mod tests {
         debug!("df={:?}", df);
 
         //TODO hash + assert
-        df.column("win_vote")?
-            .str()?
-            .iter()
-            .zip(df.column("votes_count")?.u32()?.iter())
-            .for_each(|v| {
-                debug!("v={:?}", v);
-            });
+        df.column("win_vote")?.str()?.iter().zip(df.column("votes_count")?.u32()?.iter()).for_each(|v| {
+            debug!("v={:?}", v);
+        });
 
         Ok(())
     }
@@ -941,15 +717,7 @@ mod tests {
         let eegs = EEGs::load_eegs(
             "../../data",
             // Some(col("eeg_id").eq(lit(1345588872))),
-            Some(col("patient_id").is_in(
-                lit(Series::new(
-                    "eegs_".into(),
-                    &[
-                        44615, 8033, 2641, 10111, 30539, 57503, 13252, 17637, 38015, 58327,
-                    ],
-                )),
-                true,
-            )),
+            Some(col("patient_id").is_in(lit(Series::new("eegs_".into(), &[44615, 8033, 2641, 10111, 30539, 57503, 13252, 17637, 38015, 58327])), true)),
             // Some(col("eeg_id").is_in(lit(good_eegs))),
             // None,
             // Some(col("all_votes").list().max().eq(col("all_votes").list().sum())),
@@ -962,21 +730,7 @@ mod tests {
 
         // debug!("batch_x={:?}", eegs.TRAIN[0].egg_map[0].len());
 
-        plot_series(
-            vec![(
-                format!("0"),
-                BLACK,
-                eegs.train_set[0].egg_map[0]
-                    .iter()
-                    .enumerate()
-                    .map(|(i, v)| (i as f32, *v))
-                    .collect::<Vec<(f32, f32)>>(),
-            )],
-            "EEG",
-            (10_000, 480),
-            &"0.png",
-        )
-        .unwrap();
+        plot_series(vec![(format!("0"), BLACK, eegs.train_set[0].egg_map[0].iter().enumerate().map(|(i, v)| (i as f32, *v)).collect::<Vec<(f32, f32)>>())], "EEG", (10_000, 480), &"0.png").unwrap();
 
         Ok(())
     }
@@ -992,16 +746,7 @@ mod tests {
 
         let t_1 = eeg.fragment_to_tensor(5, 10);
 
-        assert_eq!(
-            Tensor::stack(
-                &[
-                    Tensor::from_slice(&[5.0, 6.0, 7.0, 8.0, 9.0]),
-                    Tensor::from_slice(&[50.0, 60.0, 70.0, 80.0, 90.0])
-                ],
-                0
-            ),
-            t_1
-        );
+        assert_eq!(Tensor::stack(&[Tensor::from_slice(&[5.0, 6.0, 7.0, 8.0, 9.0]), Tensor::from_slice(&[50.0, 60.0, 70.0, 80.0, 90.0])], 0), t_1);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1011,10 +756,7 @@ mod tests {
 
         // fs::remove_file("/tmp/test_main_db.db3").unwrap_or(());
         // let store = Arc::new(SqlStore::from_path("/tmp/test_main_db.db3")?);
-        let sql_store = Arc::new(SqlStore::in_mem_(vec![
-            thoosa_store::create_tables,
-            create_motif_tables
-        ]).await?);
+        let sql_store = Arc::new(SqlStore::in_mem_(vec![thoosa_store::create_tables, create_motif_tables]).await?);
         let store: Arc<dyn MotifsStore> = sql_store.clone();
 
         let _resources = import_resources(
@@ -1023,23 +765,16 @@ mod tests {
             &["seizure", "lpd", "gpd", "lrda", "grda", "other"],
             || super::labeled_resourses(Path::new("test_data/eeg"), "train_10.csv"),
             // None::<Box<dyn Fn(String) -> Result<Tensor, ThoosaError> + Sync + Send>>,
-            |key| {
-
-                Ok(parquet_to_tensor_by_path(format!("test_data/eeg/train_eegs/{}.parquet", key).as_str(), Cpu)?)
-            },
+            |key| Ok(parquet_to_tensor_by_path(format!("test_data/eeg/train_eegs/{}.parquet", key).as_str(), Cpu)?),
             None,
             true,
-            |t: &Transaction|{
-                Ok(())
-            },
-        ).await?;
+            |t: &Transaction| Ok(()),
+        )
+        .await?;
 
         let labels = store.list_labels(false).await?;
 
-        assert_eq!(
-            vec!["seizure", "lpd", "gpd", "lrda", "grda", "other"],
-            labels
-        );
+        assert_eq!(vec!["seizure", "lpd", "gpd", "lrda", "grda", "other"], labels);
 
         Ok(())
     }
@@ -1059,8 +794,16 @@ mod tests {
             vec![
                 // Hyperparameter::UniformFloat { name: TrainMotifNetRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), lower: 0.00001, upper: 0.0001 },
                 // Hyperparameter::UniformInt { name: TrainMotifNetRunConfigFields::Net(MotifNetTypeArgsFields::CosineNet(MotifCosineNetArgsFields::Kernel)), lower: 10, upper: 100 },
-                Hyperparameter::UniformFloat { name: TrainMotifNetRunConfigFields::Net(MotifNetTypeArgsFields::CosineNet(MotifCosineNetArgsFields::A)), lower: 1.0, upper: 10.0 },
-                Hyperparameter::UniformFloat { name: TrainMotifNetRunConfigFields::Net(MotifNetTypeArgsFields::CosineNet(MotifCosineNetArgsFields::B)), lower: 0.0, upper: 0.1 },
+                Hyperparameter::UniformFloat {
+                    name: TrainMotifNetRunConfigFields::Net(MotifNetTypeArgsFields::CosineNet(MotifCosineNetArgsFields::A)),
+                    lower: 1.0,
+                    upper: 10.0,
+                },
+                Hyperparameter::UniformFloat {
+                    name: TrainMotifNetRunConfigFields::Net(MotifNetTypeArgsFields::CosineNet(MotifCosineNetArgsFields::B)),
+                    lower: 0.0,
+                    upper: 0.1,
+                },
             ],
         )
     }
@@ -1080,7 +823,11 @@ mod tests {
             ),
             vec![
                 // Hyperparameter::UniformFloat { name: TrainMotifNetRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), lower: 0.00001, upper: 0.0001 },
-                Hyperparameter::UniformInt { name: TrainMotifNetRunConfigFields::Net(MotifNetTypeArgsFields::LinNet(MotifLinNetArgsFields::Step)), lower: 8, upper: 10 },
+                Hyperparameter::UniformInt {
+                    name: TrainMotifNetRunConfigFields::Net(MotifNetTypeArgsFields::LinNet(MotifLinNetArgsFields::Step)),
+                    lower: 8,
+                    upper: 10,
+                },
             ],
         )
     }
@@ -1103,9 +850,21 @@ mod tests {
             ),
             vec![
                 // Hyperparameter::UniformFloat { name: TrainMotifNetRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), lower: 0.00001, upper: 0.0001 },
-                Hyperparameter::UniformInt { name: TrainMotifNetRunConfigFields::Net(MotifNetTypeArgsFields::ConvNet(MotifConvNetArgsFields::ConvLayers)), lower: 2, upper: 24 },
-                Hyperparameter::UniformInt { name: TrainMotifNetRunConfigFields::Net(MotifNetTypeArgsFields::ConvNet(MotifConvNetArgsFields::HeadLayers)), lower: 2, upper: 24 },
-                Hyperparameter::UniformInt { name: TrainMotifNetRunConfigFields::Net(MotifNetTypeArgsFields::ConvNet(MotifConvNetArgsFields::Channels)), lower: 8, upper: 256 },
+                Hyperparameter::UniformInt {
+                    name: TrainMotifNetRunConfigFields::Net(MotifNetTypeArgsFields::ConvNet(MotifConvNetArgsFields::ConvLayers)),
+                    lower: 2,
+                    upper: 24,
+                },
+                Hyperparameter::UniformInt {
+                    name: TrainMotifNetRunConfigFields::Net(MotifNetTypeArgsFields::ConvNet(MotifConvNetArgsFields::HeadLayers)),
+                    lower: 2,
+                    upper: 24,
+                },
+                Hyperparameter::UniformInt {
+                    name: TrainMotifNetRunConfigFields::Net(MotifNetTypeArgsFields::ConvNet(MotifConvNetArgsFields::Channels)),
+                    lower: 8,
+                    upper: 256,
+                },
             ],
         )
     }
@@ -1138,10 +897,7 @@ mod tests {
                 stride: filter_stride,
                 padding: Padding::zero(),
             }),
-            InputFilter::NotchBandFilter(NotchBandFilterParams {
-                low_hz: 62.0,
-                high_hz: 59.0,
-            }),
+            InputFilter::NotchBandFilter(NotchBandFilterParams { low_hz: 62.0, high_hz: 59.0 }),
         ];
 
         let load_eeg_tensor = |path: &Path| -> anyhow::Result<Tensor> {
@@ -1159,16 +915,13 @@ mod tests {
         let raw_loaded = load_eeg_tensor(Path::new("test_data/eeg").join(target_eeg_file).as_path())?.f_to_device(Cuda(0))?;
         debug!("test_train_motif_nets_cosine_with_filtered_real_eeg: raw_loaded.size={:?}", raw_loaded.size());
 
-        let raw_loaded = Tensor::cat(&[raw_loaded.copy(), raw_loaded], 1);//concatenating to have same slices
+        let raw_loaded = Tensor::cat(&[raw_loaded.copy(), raw_loaded], 1); //concatenating to have same slices
         let raw_loaded_for_apply = raw_loaded.shallow_clone();
 
         let channels = raw_loaded.size()[0] as u32;
         let ws = Arc::new(RwLock::new(thoosa_motifs::motifs_ws::new_motifs_workspace(Path::new("/tmp").join(cdt_for_dir()), WsConfigs::new(channels, raw_loaded.size()[1] as u32, 200))?));
 
-        let raw_tensor = ThoTensor::<ChannelsData, SynKey>::new(
-            SynKey::new([mono_key!("test_train_motif_nets_cosine_with_filtered_real_eeg", "raw")]),
-            raw_loaded,
-        )?;
+        let raw_tensor = ThoTensor::<ChannelsData, SynKey>::new(SynKey::new([mono_key!("test_train_motif_nets_cosine_with_filtered_real_eeg", "raw")]), raw_loaded)?;
 
         /*
         it's applied  when being loaded
@@ -1185,13 +938,7 @@ mod tests {
         if input_len < motif_width as i64 {
             return Err(anyhow::anyhow!("filtered tensor is too short: filtered_len={input_len} motif_width={motif_width}"));
         }
-        let find_motifs_config = FindMotifsRunConfig::new_with_running_mean(
-            Some(find_motifs_run_config_id),
-            1,
-            motif_width,
-            Some(freq_filters.clone()),
-            None,
-        );
+        let find_motifs_config = FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_config_id), 1, motif_width, Some(freq_filters.clone()), None);
         let input_len_adjuster = find_motifs_config.input_len_adjuster();
         let filtered_len = input_len_adjuster(input_len as u32);
 
@@ -1218,33 +965,23 @@ mod tests {
 
         let find_motifs_props = find_motifs_config.to_properties_iter(None).collect();
 
-        let store =             MockMotifsStoreBuilder::new()
+        let store = MockMotifsStoreBuilder::new()
             .with_list_run_config_values([(find_motifs_run_config_id, Ok(find_motifs_props))])
             .with_get_motif_meta([(motif_id, Ok((0usize, find_motifs_run_config_id)))])
-            .with_list_selected_motifs([
-                (vec![select_motifs_run_config_id], Ok(
-                    HashMap::from([(
-                        select_motifs_run_config_id,
-                        selected_motifs
-                    )])
-                ))
-            ])
-            .with_list_motif_slices(
-                motif_id,
-                Some(vec![select_motifs_run_config_id]),
+            .with_list_selected_motifs([(vec![select_motifs_run_config_id], Ok(HashMap::from([(select_motifs_run_config_id, selected_motifs)])))])
+            .with_list_motif_slices(motif_id, Some(vec![select_motifs_run_config_id]), None, None, Ok((0i64, find_motifs_run_config_id, motif_slices, motif_resources_by_id.clone())))
+            .with_list_random_slices_out_of_motif(motif_id, motif_width, None, Ok((0i64, find_motifs_run_config_id, random_slices, random_resources_by_id)))
+            .with_list_trained_nets([(
+                vec![train_motif_nets_run_config_id],
                 None,
                 None,
-                Ok((0i64, find_motifs_run_config_id, motif_slices, motif_resources_by_id.clone())),
-            )
-            .with_list_random_slices_out_of_motif(
-                motif_id,
-                motif_width,
-                None,
-                Ok((0i64, find_motifs_run_config_id, random_slices, random_resources_by_id)),
-            )
-            .with_list_trained_nets([
-                (vec![train_motif_nets_run_config_id], None, None, Ok(vec![TrainedNet { id: 0, run_config_id: train_motif_nets_run_config_id, net_path: trained_net_path.clone(), loss: 0.01 }])),
-            ])
+                Ok(vec![TrainedNet {
+                    id: 0,
+                    run_config_id: train_motif_nets_run_config_id,
+                    net_path: trained_net_path.clone(),
+                    loss: 0.01,
+                }]),
+            )])
             .build();
 
         let loader = Arc::new(RawTensorLoader::<MockRunCtx>::new(
@@ -1256,10 +993,7 @@ mod tests {
                     .ok_or_else(|| anyhow::anyhow!("missing resource tensor for resource_id={}", input_resource.id()))?;
 
                 debug!("input_resource={input_resource:?} t.device={:?}", t.device());
-                ThoTensor::new(
-                    SynKey::new([mono_key!(input_resource.id(), format!("filtered_resource_{}", input_resource.id()))]),
-                    t,
-                )
+                ThoTensor::new(SynKey::new([mono_key!(input_resource.id(), format!("filtered_resource_{}", input_resource.id()))]), t)
             },
             ThoDevice::from(0usize),
         ));
@@ -1271,13 +1005,16 @@ mod tests {
         let train_motif_nets = Arc::new(TrainMotifNets::new(loader, &ws, &store, _test_conv_net_run_configs(Val::Int(10), Val::Int(300), Val::Int(100)), 10, None).await?);
         // let train_motif_nets = Arc::new(TrainMotifNets::new(loader, &ws, &store, _test_lin_net_run_configs(Val::Int(100), Val::Int(300), Val::Int(10))));
 
-        let input = TrainMotifNetInput::new(thoosa_motifs::train_nets::MotifsBy::SelectMotifsRunIds { select_motifs_run_config_ids: vec![select_motifs_run_config_id] }, Arc::new(OptConfig::new(100, 10)), None);
+        let input = TrainMotifNetInput::new(
+            thoosa_motifs::train_nets::MotifsBy::SelectMotifsRunIds {
+                select_motifs_run_config_ids: vec![select_motifs_run_config_id],
+            },
+            Arc::new(OptConfig::new(100, 10)),
+            None,
+        );
 
         let mut run_ctx = mock_run_ctx::default(1);
-        let result = train_motif_nets
-            .run(input, run_ctx.branch(false))
-            .await?;
-
+        let result = train_motif_nets.run(input, run_ctx.branch(false)).await?;
 
         debug!("train_motif_nets: result={result:?}");
         assert!(result.train_motif_nets_results[0].loss < 0.2);
@@ -1288,33 +1025,13 @@ mod tests {
         let saved_path = ws.read().save_motif_net(&0u32, &train_motif_nets_run_config_id, &motif_id, (&train_result.vs).into(), &train_result.params)?;
         assert_eq!(saved_path, trained_net_path);
 
-        let apply_motif_nets = Arc::new(ApplyMotifNets::new(
-            &ws,
-            &store,
-            vec![train_motif_nets_run_config_id],
-            mock_run_ctx::default(1),
-            None,
-            None,
-            1,
-            None,
-            false
-        ).await?);
+        let apply_motif_nets = Arc::new(ApplyMotifNets::new(&ws, &store, vec![train_motif_nets_run_config_id], mock_run_ctx::default(1), None, None, 1, None, false).await?);
 
-        let out = Arc::clone(&apply_motif_nets).run(
-            Arc::new(DevicesWrap::wrap(ThoTensor::new(
-                SynKey::new([mono_key!("raw_loaded_0", "raw_loaded_0")]),
-                raw_loaded_for_apply.shallow_clone(),
-            )?)),
-            mock_run_ctx::default(1),
-        ).await?;
+        let out = Arc::clone(&apply_motif_nets)
+            .run(Arc::new(DevicesWrap::wrap(ThoTensor::new(SynKey::new([mono_key!("raw_loaded_0", "raw_loaded_0")]), raw_loaded_for_apply.shallow_clone())?)), mock_run_ctx::default(1))
+            .await?;
 
-        let out = apply_motif_nets.run(
-            Arc::new(DevicesWrap::wrap(ThoTensor::new(
-                SynKey::new([mono_key!("raw_loaded_1", "raw_loaded_1")]),
-                raw_loaded_for_apply,
-            )?)),
-            mock_run_ctx::default(1),
-        ).await?;
+        let out = apply_motif_nets.run(Arc::new(DevicesWrap::wrap(ThoTensor::new(SynKey::new([mono_key!("raw_loaded_1", "raw_loaded_1")]), raw_loaded_for_apply)?)), mock_run_ctx::default(1)).await?;
         let out = out.load_from_any_device_(1).await?;
         let (top_vals, top_idx) = out.data().local()?.f_i((0, ..))?.f_topk(2, 0, true, true)?;
 
@@ -1353,11 +1070,7 @@ mod tests {
             if path.extension().and_then(|ext| ext.to_str()) != Some("pt") {
                 continue;
             }
-            let file_name = path
-                .file_name()
-                .and_then(|v| v.to_str())
-                .ok_or_else(|| anyhow::anyhow!("invalid file name: {}", path.display()))?
-                .to_string();
+            let file_name = path.file_name().and_then(|v| v.to_str()).ok_or_else(|| anyhow::anyhow!("invalid file name: {}", path.display()))?.to_string();
             if file_name == target_eeg_file {
                 continue;
             }
@@ -1376,13 +1089,7 @@ mod tests {
             }
             let resource = Resource::new(resource_id, 1, file_name, tensor.size()[1] as u32);
             random_resources.push(resource.clone());
-            loader_tensors_map.insert(
-                resource.clone(),
-                ThoTensor::<ChannelsData, SynKey>::new(
-                    SynKey::new([mono_key!(resource.id(), format!("filtered_resource_{}", resource.id()))]),
-                    tensor,
-                )?,
-            );
+            loader_tensors_map.insert(resource.clone(), ThoTensor::<ChannelsData, SynKey>::new(SynKey::new([mono_key!(resource.id(), format!("filtered_resource_{}", resource.id()))]), tensor)?);
         }
         Ok(random_resources)
     }

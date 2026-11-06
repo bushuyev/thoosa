@@ -8,8 +8,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 use thoosa_shared::ThoError;
 
+pub use crate::cuda_result::{CUDA_ERROR_ASSERT, CUDA_ERROR_ILLEGAL_ADDRESS, CUDA_SUCCESS, CuResult};
 use crate::cuda_result::{check_cuda_status, cuda_error_from_last_error, cuda_error_from_status};
-pub use crate::cuda_result::{CuResult, CUDA_ERROR_ASSERT, CUDA_ERROR_ILLEGAL_ADDRESS, CUDA_SUCCESS};
 
 type CudaStreamPtr = *mut c_void;
 type CudaStreamGuardPtr = *mut c_void;
@@ -99,9 +99,12 @@ impl ThoCudaStream {
         self.0.ptr.as_ptr()
     }
 
-    pub fn ptr(&self) -> CudaStreamPtr { self.0.ptr.as_ptr() }
-    pub fn as_mut_ptr(&self) -> *mut c_void { self.0.ptr.as_ptr().cast() }
-
+    pub fn ptr(&self) -> CudaStreamPtr {
+        self.0.ptr.as_ptr()
+    }
+    pub fn as_mut_ptr(&self) -> *mut c_void {
+        self.0.ptr.as_ptr().cast()
+    }
 }
 
 /// RAII guard backed by real `c10::cuda::CUDAStreamGuard` on the C++ side.
@@ -117,10 +120,7 @@ impl ThoStreamGuard {
     pub fn new(stream: &ThoCudaStream) -> Result<Self, ThoError> {
         let ptr = unsafe { tho_stream_guard_new(stream.ffi_ptr()) };
         let ptr = NonNull::new(ptr).ok_or_else(|| cuda_error_from_last_error("tho_stream_guard_new"))?;
-        Ok(Self {
-            ptr,
-            _not_send_or_sync: PhantomData,
-        })
+        Ok(Self { ptr, _not_send_or_sync: PhantomData })
     }
 }
 

@@ -1,6 +1,6 @@
+use crate::nets::common_nets::OptConfig;
 use crate::tch_error::tch_result;
 use anyhow::Context as _;
-use crate::nets::common_nets::OptConfig;
 // use rand_distr::{Uniform, Distribution};
 use crate::parzen::cpe::CategoricalParzenEstimator;
 use crate::parzen::mvpe::MultiVariateParzenEstimator;
@@ -25,11 +25,7 @@ struct RunResult {
 
 impl RunResult {
     pub fn new(loss: f32, eval_config: Vec<Val>, is_satisfied: Option<bool>) -> Self {
-        Self {
-            loss,
-            eval_config,
-            is_satisfied,
-        }
+        Self { loss, eval_config, is_satisfied }
     }
 }
 
@@ -104,11 +100,7 @@ mod run_result_tests {
 }
 pub trait ParzenEstimator: Send {
     fn clc_distr(&self, samples: Tensor, weights: Option<Tensor>) -> anyhow::Result<Box<dyn Distribution>>;
-    fn clc_distr_from_vec(
-        &self,
-        samples: &mut dyn Iterator<Item = Val>,
-        weights: Option<Tensor>,
-    ) -> anyhow::Result<Box<dyn Distribution>>;
+    fn clc_distr_from_vec(&self, samples: &mut dyn Iterator<Item = Val>, weights: Option<Tensor>) -> anyhow::Result<Box<dyn Distribution>>;
 }
 
 pub trait Distribution: Debug + Send {
@@ -141,25 +133,13 @@ impl TreeStructuredParzenEstimator {
         Self::new_with_percentile_strategy(cs, PercentileStrategy::Threshold { upper_bound })
     }
 
-    fn new_with_percentile_strategy<T: FieldName>(
-        cs: &ConfigurationSpace<T>,
-        percentile_strategy: PercentileStrategy,
-    ) -> Self {
+    fn new_with_percentile_strategy<T: FieldName>(cs: &ConfigurationSpace<T>, percentile_strategy: PercentileStrategy) -> Self {
         debug!("TreeStructuredParzenEstimator::new: cs={cs:?}");
 
-        let esitmators:Vec<_> = cs
+        let esitmators: Vec<_> = cs
             .iter()
             .map(|hp| match hp {
-                Hyperparameter::UniformFloat { name, lower, upper } => {
-                    Box::new(NumericalParzenEstimator::new(
-                        Some(name.to_string()),
-                        *lower,
-                        *upper,
-                        BandwidthFactor::default(),
-                        true,
-                        None,
-                    )) as Box<dyn ParzenEstimator>
-                }
+                Hyperparameter::UniformFloat { name, lower, upper } => Box::new(NumericalParzenEstimator::new(Some(name.to_string()), *lower, *upper, BandwidthFactor::default(), true, None)) as Box<dyn ParzenEstimator>,
                 Hyperparameter::UniformInt { name, lower, upper } => {
                     Box::new(NumericalParzenEstimator::new(
                         Some(name.to_string()),
@@ -171,14 +151,10 @@ impl TreeStructuredParzenEstimator {
                     )) as Box<dyn ParzenEstimator>
                 }
 
-                Hyperparameter::Categorical { name, values } => Box::new(
-                    CategoricalParzenEstimator::new(Some(name.to_string()), values.len(), true),
-                )
-                    as Box<dyn ParzenEstimator>,
+                Hyperparameter::Categorical { name, values } => Box::new(CategoricalParzenEstimator::new(Some(name.to_string()), values.len(), true)) as Box<dyn ParzenEstimator>,
             })
             .collect();
         assert!(!esitmators.is_empty(), "estimators are empty");
-
 
         Self {
             observations: BinaryHeap::new(),
@@ -190,14 +166,10 @@ impl TreeStructuredParzenEstimator {
         }
     }
 
-    pub fn update_observations(&mut self, loss: f32, eval_config: &Vec<Val>, is_satisfied: Option<bool>) ->anyhow::Result<()>{
+    pub fn update_observations(&mut self, loss: f32, eval_config: &Vec<Val>, is_satisfied: Option<bool>) -> anyhow::Result<()> {
         // Infinity is an existing missing-constraint sentinel; NaN is never a usable observation.
         anyhow::ensure!(!loss.is_nan(), "optimizer observation loss is NaN");
-        self.observations.push(Reverse(RunResult::new(
-            loss,
-            eval_config.clone(),
-            is_satisfied,
-        )));
+        self.observations.push(Reverse(RunResult::new(loss, eval_config.clone(), is_satisfied)));
 
         let sorted_observations = self.sorted_observations();
         let n_lower = self.n_lower(&sorted_observations, is_satisfied.is_some());
@@ -209,19 +181,12 @@ impl TreeStructuredParzenEstimator {
 
         let (lower_vals, upper_vals) = self.split_observations(&sorted_observations, n_lower);
 
-        let (lower_esitmators, upper_esitmators) = self.esitmators.iter().enumerate().try_fold(
-            (vec![], vec![]),
-            |mut lower_upper_esitmators, (param_i, pe)| {
-                lower_upper_esitmators.0.push(
-                    pe.clc_distr_from_vec(&mut lower_vals.iter().map(|v| v[param_i].clone()), None)?,
-                );
-                lower_upper_esitmators.1.push(
-                    pe.clc_distr_from_vec(&mut upper_vals.iter().map(|v| v[param_i].clone()), None)?,
-                );
+        let (lower_esitmators, upper_esitmators) = self.esitmators.iter().enumerate().try_fold((vec![], vec![]), |mut lower_upper_esitmators, (param_i, pe)| {
+            lower_upper_esitmators.0.push(pe.clc_distr_from_vec(&mut lower_vals.iter().map(|v| v[param_i].clone()), None)?);
+            lower_upper_esitmators.1.push(pe.clc_distr_from_vec(&mut upper_vals.iter().map(|v| v[param_i].clone()), None)?);
 
-                Ok::<_, anyhow::Error>(lower_upper_esitmators)
-            },
-        )?;
+            Ok::<_, anyhow::Error>(lower_upper_esitmators)
+        })?;
 
         self.mvpe_lower.replace(MultiVariateParzenEstimator::new(lower_esitmators)?);
         self.mvpe_upper.replace(MultiVariateParzenEstimator::new(upper_esitmators)?);
@@ -285,14 +250,9 @@ impl TreeStructuredParzenEstimator {
         };
 
         match self.percentile_strategy {
-            PercentileStrategy::Default => {
-                (Self::percentile(sorted_observations.len()) as usize).max(min_num).min(sorted_observations.len())
-            }
+            PercentileStrategy::Default => (Self::percentile(sorted_observations.len()) as usize).max(min_num).min(sorted_observations.len()),
             PercentileStrategy::Threshold { upper_bound } => {
-                let threshold_count = sorted_observations
-                    .iter()
-                    .take_while(|observation| observation.loss <= upper_bound)
-                    .count();
+                let threshold_count = sorted_observations.iter().take_while(|observation| observation.loss <= upper_bound).count();
                 threshold_count.max(min_num).min(sorted_observations.len())
             }
         }
@@ -304,7 +264,10 @@ impl TreeStructuredParzenEstimator {
     }
 
     fn compute_config_loglikelihoods(&self, config_cands: &Vec<Vec<Val>>) -> anyhow::Result<(Tensor, Tensor)> {
-        Ok((self.mvpe_lower.as_ref().context("lower density has not been fitted")?.log_pdf(config_cands)?, self.mvpe_upper.as_ref().context("upper density has not been fitted")?.log_pdf(config_cands)?))
+        Ok((
+            self.mvpe_lower.as_ref().context("lower density has not been fitted")?.log_pdf(config_cands)?,
+            self.mvpe_upper.as_ref().context("upper density has not been fitted")?.log_pdf(config_cands)?,
+        ))
     }
 
     fn compute_probability_improvement(&self, config_cands: &Vec<Vec<Val>>) -> anyhow::Result<Tensor> {
@@ -320,12 +283,10 @@ impl TreeStructuredParzenEstimator {
 mod tree_structured_parzen_estimator_tests {
     use crate::parzen::mvpe::MultiVariateParzenEstimator;
     use crate::parzen::npe::{BandwidthFactor, NumericalParzenEstimator};
-    use crate::parzen::optimizer::{
-        ConfigurationSpace, ParzenEstimator, TreeStructuredParzenEstimator, Val,
-    };
+    use crate::parzen::optimizer::{ConfigurationSpace, ParzenEstimator, TreeStructuredParzenEstimator, Val};
     use log::debug;
     use tch::{Kind, Tensor};
-        use thoosa_shared::hyperparameter::Hyperparameter;
+    use thoosa_shared::hyperparameter::Hyperparameter;
 
     #[test]
     fn test_nan_observation_does_not_mutate_optimizer() -> anyhow::Result<()> {
@@ -353,77 +314,24 @@ mod tree_structured_parzen_estimator_tests {
     }
 
     #[test]
-    fn test_configuration_space() ->anyhow::Result<()> {
-        let cs: ConfigurationSpace<String> = ConfigurationSpace::new(vec![
-            Hyperparameter::UniformFloat {
-                name: "x_0".into(),
-                lower: -1.0,
-                upper: 1.0,
-            },
-            Hyperparameter::UniformFloat {
-                name: "x_1".into(),
-                lower: -2.0,
-                upper: 2.0,
-            },
-        ]);
+    fn test_configuration_space() -> anyhow::Result<()> {
+        let cs: ConfigurationSpace<String> = ConfigurationSpace::new(vec![Hyperparameter::UniformFloat { name: "x_0".into(), lower: -1.0, upper: 1.0 }, Hyperparameter::UniformFloat { name: "x_1".into(), lower: -2.0, upper: 2.0 }]);
 
         let mut tree_structured_parzen_estimator = TreeStructuredParzenEstimator::new(&cs);
 
-        tree_structured_parzen_estimator
-            .update_observations(0.4, &vec![Val::Real(0.4), Val::Real(1.4)], None)?;
-        tree_structured_parzen_estimator
-            .update_observations(0.1, &vec![Val::Real(0.1), Val::Real(1.1)], None)?;
-        tree_structured_parzen_estimator
-            .update_observations(0.3, &vec![Val::Real(0.3), Val::Real(1.3)], None)?;
-        tree_structured_parzen_estimator
-            .update_observations(0.2, &vec![Val::Real(0.2), Val::Real(1.2)], None)?;
+        tree_structured_parzen_estimator.update_observations(0.4, &vec![Val::Real(0.4), Val::Real(1.4)], None)?;
+        tree_structured_parzen_estimator.update_observations(0.1, &vec![Val::Real(0.1), Val::Real(1.1)], None)?;
+        tree_structured_parzen_estimator.update_observations(0.3, &vec![Val::Real(0.3), Val::Real(1.3)], None)?;
+        tree_structured_parzen_estimator.update_observations(0.2, &vec![Val::Real(0.2), Val::Real(1.2)], None)?;
 
         // debug!("{:?}", tree_structured_parzen_estimator.observations);
 
-        assert_eq!(
-            0.1,
-            tree_structured_parzen_estimator
-                .observations
-                .pop()
-                .expect("0.1")
-                .0
-                .loss
-        );
-        assert_eq!(
-            0.2,
-            tree_structured_parzen_estimator
-                .observations
-                .pop()
-                .expect("0.2")
-                .0
-                .loss
-        );
-        assert_eq!(
-            0.3,
-            tree_structured_parzen_estimator
-                .observations
-                .pop()
-                .expect("0.3")
-                .0
-                .loss
-        );
-        assert_eq!(
-            0.4,
-            tree_structured_parzen_estimator
-                .observations
-                .pop()
-                .expect("0.4")
-                .0
-                .loss
-        );
+        assert_eq!(0.1, tree_structured_parzen_estimator.observations.pop().expect("0.1").0.loss);
+        assert_eq!(0.2, tree_structured_parzen_estimator.observations.pop().expect("0.2").0.loss);
+        assert_eq!(0.3, tree_structured_parzen_estimator.observations.pop().expect("0.3").0.loss);
+        assert_eq!(0.4, tree_structured_parzen_estimator.observations.pop().expect("0.4").0.loss);
 
-        assert_eq!(
-            2,
-            tree_structured_parzen_estimator
-                .mvpe_lower
-                .expect("tree_structured_parzen_estimator")
-                .len()
-        );
+        assert_eq!(2, tree_structured_parzen_estimator.mvpe_lower.expect("tree_structured_parzen_estimator").len());
 
         Ok(())
     }
@@ -431,99 +339,43 @@ mod tree_structured_parzen_estimator_tests {
     #[test]
     fn test_compute_probability_improvement() {
         let cs: ConfigurationSpace<String> = ConfigurationSpace::new(vec![
-            Hyperparameter::UniformFloat {
-                name: "x_0".into(),
-                lower: -3.0,
-                upper: 3.0,
-            },
-            Hyperparameter::UniformFloat {
-                name: "x_1".into(),
-                lower: -3.0,
-                upper: 3.0,
-            },
-            Hyperparameter::UniformFloat {
-                name: "x_2".into(),
-                lower: -3.0,
-                upper: 3.0,
-            },
+            Hyperparameter::UniformFloat { name: "x_0".into(), lower: -3.0, upper: 3.0 },
+            Hyperparameter::UniformFloat { name: "x_1".into(), lower: -3.0, upper: 3.0 },
+            Hyperparameter::UniformFloat { name: "x_2".into(), lower: -3.0, upper: 3.0 },
         ]);
         let mut tsp = TreeStructuredParzenEstimator::new(&cs);
 
         let samples = [-1.0, 0.0, 1.0];
 
-        tsp.mvpe_lower = Some(MultiVariateParzenEstimator::new(vec![
-            NumericalParzenEstimator::new(
-                None,
-                -3.0f64,
-                3.0f64,
-                BandwidthFactor::default(),
-                true,
-                None,
-            )
-            .clc_distr(Tensor::from_slice(&samples), None).unwrap(),
-            NumericalParzenEstimator::new(
-                None,
-                -3.0f64,
-                3.0f64,
-                BandwidthFactor::default(),
-                true,
-                None,
-            )
-            .clc_distr(Tensor::from_slice(&samples), None).unwrap(),
-            NumericalParzenEstimator::new(
-                None,
-                -3.0f64,
-                3.0f64,
-                BandwidthFactor::default(),
-                true,
-                None,
-            )
-            .clc_distr(Tensor::from_slice(&samples), None).unwrap(),
-        ]).unwrap());
+        tsp.mvpe_lower = Some(
+            MultiVariateParzenEstimator::new(vec![
+                NumericalParzenEstimator::new(None, -3.0f64, 3.0f64, BandwidthFactor::default(), true, None).clc_distr(Tensor::from_slice(&samples), None).unwrap(),
+                NumericalParzenEstimator::new(None, -3.0f64, 3.0f64, BandwidthFactor::default(), true, None).clc_distr(Tensor::from_slice(&samples), None).unwrap(),
+                NumericalParzenEstimator::new(None, -3.0f64, 3.0f64, BandwidthFactor::default(), true, None).clc_distr(Tensor::from_slice(&samples), None).unwrap(),
+            ])
+            .unwrap(),
+        );
         let samples = [-2.0, 0.0, 2.0];
 
-        tsp.mvpe_upper = Some(MultiVariateParzenEstimator::new(vec![
-            NumericalParzenEstimator::new(
-                None,
-                -3.0f64,
-                3.0f64,
-                BandwidthFactor::default(),
-                true,
-                None,
-            )
-            .clc_distr(Tensor::from_slice(&samples), None).unwrap(),
-            NumericalParzenEstimator::new(
-                None,
-                -3.0f64,
-                3.0f64,
-                BandwidthFactor::default(),
-                true,
-                None,
-            )
-            .clc_distr(Tensor::from_slice(&samples), None).unwrap(),
-            NumericalParzenEstimator::new(
-                None,
-                -3.0f64,
-                3.0f64,
-                BandwidthFactor::default(),
-                true,
-                None,
-            )
-            .clc_distr(Tensor::from_slice(&samples), None).unwrap(),
-        ]).unwrap());
+        tsp.mvpe_upper = Some(
+            MultiVariateParzenEstimator::new(vec![
+                NumericalParzenEstimator::new(None, -3.0f64, 3.0f64, BandwidthFactor::default(), true, None).clc_distr(Tensor::from_slice(&samples), None).unwrap(),
+                NumericalParzenEstimator::new(None, -3.0f64, 3.0f64, BandwidthFactor::default(), true, None).clc_distr(Tensor::from_slice(&samples), None).unwrap(),
+                NumericalParzenEstimator::new(None, -3.0f64, 3.0f64, BandwidthFactor::default(), true, None).clc_distr(Tensor::from_slice(&samples), None).unwrap(),
+            ])
+            .unwrap(),
+        );
 
-        let pi = tsp.compute_probability_improvement(&vec![
-            vec![Val::Real(0.0), Val::Real(1.0), Val::Real(2.0)], //x0
-            vec![Val::Real(0.1), Val::Real(1.1), Val::Real(2.1)], //x1
-            vec![Val::Real(0.2), Val::Real(1.2), Val::Real(2.2)], //x2
-        ]).unwrap();
+        let pi = tsp
+            .compute_probability_improvement(&vec![
+                vec![Val::Real(0.0), Val::Real(1.0), Val::Real(2.0)], //x0
+                vec![Val::Real(0.1), Val::Real(1.1), Val::Real(2.1)], //x1
+                vec![Val::Real(0.2), Val::Real(1.2), Val::Real(2.2)], //x2
+            ])
+            .unwrap();
 
         debug!("pi={pi}");
-        assert!(
-            Tensor::from_slice(&[1.85448311, 4.59934198, -4.30722048])
-                .totype(Kind::Float)
-                .allclose(&pi, 1e-02, 1e-02, false)
-        );
+        assert!(Tensor::from_slice(&[1.85448311, 4.59934198, -4.30722048]).totype(Kind::Float).allclose(&pi, 1e-02, 1e-02, false));
     }
 }
 
@@ -564,10 +416,7 @@ impl TPEObjectiveResult for f32 {
 
 impl TPEObjectiveResult for HashMap<String, f32> {
     fn loss(&self) -> f32 {
-        self
-            .get(TPE_LOSS_METRIC)
-            .copied()
-            .unwrap_or(f32::MAX)
+        self.get(TPE_LOSS_METRIC).copied().unwrap_or(f32::MAX)
     }
 
     fn constraint_loss(&self, constraint_name: &str) -> Option<f32> {
@@ -589,7 +438,7 @@ where
     queued_configs: VecDeque<Vec<Val>>,
     tpe_samplers: HashMap<String, TreeStructuredParzenEstimator>,
     _pd: PhantomData<(T, R)>,
-    descr: String
+    descr: String,
 }
 
 impl<F, T: FieldName, R> AsyncTPEOptimizerImpl<F, T, R>
@@ -600,29 +449,17 @@ where
     const LOSS_METRIC: &str = TPE_LOSS_METRIC;
     const N_EI_CANDIDATES: usize = 24;
 
-    fn new(
-        obj_func: F,
-        cs: ConfigurationSpace<T>,
-        constraints: HashMap<String, f32>,
-        config: OptConfig,
-        descr: &str,
-    ) -> Self {
+    fn new(obj_func: F, cs: ConfigurationSpace<T>, constraints: HashMap<String, f32>, config: OptConfig, descr: &str) -> Self {
         debug!("AsyncTPEOptimizerImpl:new: cs={cs:?} constraints={constraints:?}");
 
-        let mut tpe_samplers = HashMap::from([(
-            Self::LOSS_METRIC.to_string(),
-            TreeStructuredParzenEstimator::new(&cs),
-        )]);
+        let mut tpe_samplers = HashMap::from([(Self::LOSS_METRIC.to_string(), TreeStructuredParzenEstimator::new(&cs))]);
 
         let mut constraint_keys: Vec<String> = constraints.keys().cloned().collect();
         constraint_keys.sort();
 
         for key in &constraint_keys {
             let upper_bound = constraints[key];
-            tpe_samplers.insert(
-                key.clone(),
-                TreeStructuredParzenEstimator::new_with_threshold(&cs, upper_bound),
-            );
+            tpe_samplers.insert(key.clone(), TreeStructuredParzenEstimator::new_with_threshold(&cs, upper_bound));
         }
 
         Self {
@@ -668,11 +505,7 @@ where
                 self.sample()?
             };
 
-            let eval_config_named = eval_config
-                .iter()
-                .zip(self.cs.hyperparameters.iter())
-                .map(|(val, hp)| NamedVal::from((hp.name().clone(), val.clone())))
-                .collect::<Vec<_>>();
+            let eval_config_named = eval_config.iter().zip(self.cs.hyperparameters.iter()).map(|(val, hp)| NamedVal::from((hp.name().clone(), val.clone()))).collect::<Vec<_>>();
 
             debug!("AsyncTPEOptimizerImpl::optimize:sample about to call obj_func  i={i} ");
             let results = t!(self.obj_func.async_call_mut((&eval_config_named.as_slice(),))).await;
@@ -681,11 +514,7 @@ where
             let loss = results.loss();
             let is_satisfied = self.constraint_keys.iter().all(|constraint_name| {
                 let upper_bound = self.constraints[constraint_name];
-                upper_bound.is_infinite()
-                    || results
-                        .constraint_loss(constraint_name)
-                        .map(|constraint_value| constraint_value <= upper_bound)
-                        .unwrap_or(false)
+                upper_bound.is_infinite() || results.constraint_loss(constraint_name).map(|constraint_value| constraint_value <= upper_bound).unwrap_or(false)
             });
             let is_satisfied_opt = (!self.constraint_keys.is_empty()).then_some(is_satisfied);
 
@@ -701,24 +530,19 @@ where
             }
 
             // Keep observation-update failures best-effort.
-            let _ = self.tpe_samplers
-                .get_mut(Self::LOSS_METRIC)
-                .expect("loss sampler missing")
-                .update_observations(loss, &eval_config, is_satisfied_opt);
+            let _ = self.tpe_samplers.get_mut(Self::LOSS_METRIC).expect("loss sampler missing").update_observations(loss, &eval_config, is_satisfied_opt);
 
             for constraint_name in &self.constraint_keys {
-                let constraint_loss = results
-                    .constraint_loss(constraint_name)
-                    .unwrap_or(f32::INFINITY);
-                let _ = self.tpe_samplers
-                    .get_mut(constraint_name)
-                    .expect("constraint sampler missing")
-                    .update_observations(constraint_loss, &eval_config, None);
+                let constraint_loss = results.constraint_loss(constraint_name).unwrap_or(f32::INFINITY);
+                let _ = self.tpe_samplers.get_mut(constraint_name).expect("constraint sampler missing").update_observations(constraint_loss, &eval_config, None);
             }
             collect_eta_record_completion(grids_eta_guard.id());
 
             if self.config.patience > 0 && early_stopping_started && bad_evals >= self.config.patience {
-                info!("AsyncTPEOptimizerImpl::optimize: descr={} early stopping triggered i={i} loss={loss} best_loss={best_loss} bad_evals={bad_evals} patience={} min_delta={}", self.descr, self.config.patience, self.config.min_delta);
+                info!(
+                    "AsyncTPEOptimizerImpl::optimize: descr={} early stopping triggered i={i} loss={loss} best_loss={best_loss} bad_evals={bad_evals} patience={} min_delta={}",
+                    self.descr, self.config.patience, self.config.min_delta
+                );
                 break;
             }
             debug!("AsyncTPEOptimizerImpl::optimize:sample done  i={i} ");
@@ -728,23 +552,18 @@ where
     }
 
     fn sample(&self) -> anyhow::Result<Vec<Val>> {
-        let mut candidate_sets = vec![
-            self.tpe_samplers[Self::LOSS_METRIC].get_config_candidates(Self::N_EI_CANDIDATES)?,
-        ];
+        let mut candidate_sets = vec![self.tpe_samplers[Self::LOSS_METRIC].get_config_candidates(Self::N_EI_CANDIDATES)?];
         for constraint_name in &self.constraint_keys {
             if self.constraints[constraint_name].is_infinite() {
                 continue;
             }
 
-            candidate_sets.push(
-                self.tpe_samplers[constraint_name].get_config_candidates(Self::N_EI_CANDIDATES)?,
-            );
+            candidate_sets.push(self.tpe_samplers[constraint_name].get_config_candidates(Self::N_EI_CANDIDATES)?);
         }
 
         let config_cands = stack_params(candidate_sets);
 
-        let mut pi_config = self.tpe_samplers[Self::LOSS_METRIC]
-            .compute_probability_improvement(&config_cands)?;
+        let mut pi_config = self.tpe_samplers[Self::LOSS_METRIC].compute_probability_improvement(&config_cands)?;
         for constraint_name in &self.constraint_keys {
             if self.constraints[constraint_name].is_infinite() {
                 continue;
@@ -778,13 +597,7 @@ where
         debug!("AsyncTPEOptimizer:new: cs={cs:?}");
 
         Self {
-            inner: AsyncTPEOptimizerImpl::new(
-                obj_func,
-                cs,
-                HashMap::new(),
-                config,
-                descr,
-            ),
+            inner: AsyncTPEOptimizerImpl::new(obj_func, cs, HashMap::new(), config, descr),
         }
     }
 
@@ -813,23 +626,11 @@ impl<F, T: FieldName> AsyncCTPEOptimizer<F, T>
 where
     F: AsyncFnMut(&[NamedVal<T>]) -> HashMap<String, f32>,
 {
-    pub fn new(
-        obj_func: F,
-        cs: ConfigurationSpace<T>,
-        constraints: HashMap<String, f32>,
-        config: OptConfig,
-        descr: &str,
-    ) -> Self {
+    pub fn new(obj_func: F, cs: ConfigurationSpace<T>, constraints: HashMap<String, f32>, config: OptConfig, descr: &str) -> Self {
         debug!("AsyncCTPEOptimizer:new: cs={cs:?} constraints={constraints:?}");
 
         Self {
-            inner: AsyncTPEOptimizerImpl::new(
-                obj_func,
-                cs,
-                constraints,
-                config,
-                descr,
-            ),
+            inner: AsyncTPEOptimizerImpl::new(obj_func, cs, constraints, config, descr),
         }
     }
 
@@ -866,7 +667,7 @@ mod tpe_optimizer_tests {
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
     use tch::Tensor;
-        use thoosa_shared::hyperparameter::Hyperparameter;
+    use thoosa_shared::hyperparameter::Hyperparameter;
     use thoosa_shared::val::NamedVal;
 
     #[ctor::ctor]
@@ -881,10 +682,7 @@ mod tpe_optimizer_tests {
         let params_1 = vec![vec![4., 5.], vec![40., 50.]];
         let r = stack_params(vec![params_0, params_1]);
 
-        assert_eq!(
-            vec![vec![1., 2., 3., 4., 5.], vec![10., 20., 30., 40., 50.],],
-            r
-        );
+        assert_eq!(vec![vec![1., 2., 3., 4., 5.], vec![10., 20., 30., 40., 50.],], r);
         // debug!("r={r:?}");
     }
 
@@ -902,7 +700,7 @@ mod tpe_optimizer_tests {
     }
 
     #[tokio::test]
-    async fn test_optimize_numeric() ->anyhow::Result<()>{
+    async fn test_optimize_numeric() -> anyhow::Result<()> {
         let sphere = sphere(300);
         let mut opt: AsyncTPEOptimizer<_, String> = AsyncTPEOptimizer::new(
             async move |params| sphere(params),
@@ -930,7 +728,7 @@ mod tpe_optimizer_tests {
     }
 
     #[tokio::test]
-    async fn test_optimize_numeric_int()->anyhow::Result<()> {
+    async fn test_optimize_numeric_int() -> anyhow::Result<()> {
         let sphere = sphere(300);
         let mut opt: AsyncTPEOptimizer<_, String> = AsyncTPEOptimizer::new(
             async move |params| sphere(params),
@@ -958,7 +756,7 @@ mod tpe_optimizer_tests {
     }
 
     #[tokio::test]
-    async fn test_optimize_categoric() ->anyhow::Result<()> {
+    async fn test_optimize_categoric() -> anyhow::Result<()> {
         let mut opt: AsyncTPEOptimizer<_, String> = AsyncTPEOptimizer::new(
             async move |params| {
                 debug!("params={params:?}");
@@ -986,16 +784,8 @@ mod tpe_optimizer_tests {
             ConfigurationSpace::new(
                 // (0..3).map(|i|Hyperparameter::UniformFloat {name:format!("x_{}", i), lower: -500.0, upper: 500.0}).collect()
                 vec![
-                    Hyperparameter::UniformFloat {
-                        name: "x_0".into(),
-                        lower: -50.0,
-                        upper: 50.0,
-                    },
-                    Hyperparameter::UniformFloat {
-                        name: "x_1".into(),
-                        lower: -50.0,
-                        upper: 50.0,
-                    },
+                    Hyperparameter::UniformFloat { name: "x_0".into(), lower: -50.0, upper: 50.0 },
+                    Hyperparameter::UniformFloat { name: "x_1".into(), lower: -50.0, upper: 50.0 },
                     Hyperparameter::Categorical {
                         name: "cat".into(),
                         values: vec!["a".into(), "b".into(), "c".into()],
@@ -1017,30 +807,15 @@ mod tpe_optimizer_tests {
     }
 
     #[tokio::test]
-    async fn test_optimize_constrained() ->anyhow::Result<()> {
+    async fn test_optimize_constrained() -> anyhow::Result<()> {
         let mut opt: AsyncCTPEOptimizer<_, String> = AsyncCTPEOptimizer::new(
             async move |params| {
                 let x: f32 = (&params[0]).try_into().unwrap();
                 let y: f32 = (&params[1]).try_into().unwrap();
                 let loss = (x - 3.).powi(2) + (y - 3.).powi(2);
-                HashMap::from([
-                    ("loss".to_string(), loss),
-                    ("c1".to_string(), x),
-                    ("c2".to_string(), y),
-                ])
+                HashMap::from([("loss".to_string(), loss), ("c1".to_string(), x), ("c2".to_string(), y)])
             },
-            ConfigurationSpace::new(vec![
-                Hyperparameter::UniformFloat {
-                    name: "x".into(),
-                    lower: -5.0,
-                    upper: 5.0,
-                },
-                Hyperparameter::UniformFloat {
-                    name: "y".into(),
-                    lower: -5.0,
-                    upper: 5.0,
-                },
-            ]),
+            ConfigurationSpace::new(vec![Hyperparameter::UniformFloat { name: "x".into(), lower: -5.0, upper: 5.0 }, Hyperparameter::UniformFloat { name: "y".into(), lower: -5.0, upper: 5.0 }]),
             HashMap::from([("c1".to_string(), 0.0), ("c2".to_string(), 0.0)]),
             OptConfig::new(300, 10),
             "n/a",
@@ -1061,17 +836,10 @@ mod tpe_optimizer_tests {
         let calls_for_obj = Arc::clone(&calls);
         let mut opt: AsyncTPEOptimizer<_, String> = AsyncTPEOptimizer::new(
             async move |params| {
-                calls_for_obj
-                    .lock()
-                    .unwrap()
-                    .push(params.iter().map(|param| param.val().clone()).collect::<Vec<_>>());
+                calls_for_obj.lock().unwrap().push(params.iter().map(|param| param.val().clone()).collect::<Vec<_>>());
                 0.0
             },
-            ConfigurationSpace::new(vec![Hyperparameter::UniformFloat {
-                name: "lr".into(),
-                lower: 0.0,
-                upper: 10.0,
-            }]),
+            ConfigurationSpace::new(vec![Hyperparameter::UniformFloat { name: "lr".into(), lower: 0.0, upper: 10.0 }]),
             OptConfig::new(2, 0),
             "n/a",
         );
@@ -1091,11 +859,7 @@ mod tpe_optimizer_tests {
                 *calls_for_obj.lock().unwrap() += 1;
                 1.0
             },
-            ConfigurationSpace::new(vec![Hyperparameter::UniformFloat {
-                name: "lr".into(),
-                lower: 0.0,
-                upper: 10.0,
-            }]),
+            ConfigurationSpace::new(vec![Hyperparameter::UniformFloat { name: "lr".into(), lower: 0.0, upper: 10.0 }]),
             OptConfig::new_with_early_stopping(20, 1, 3, 0.001),
             "n/a",
         );
@@ -1114,11 +878,7 @@ mod tpe_optimizer_tests {
                 *calls_for_obj.lock().unwrap() += 1;
                 1.0
             },
-            ConfigurationSpace::new(vec![Hyperparameter::UniformFloat {
-                name: "lr".into(),
-                lower: 0.0,
-                upper: 10.0,
-            }]),
+            ConfigurationSpace::new(vec![Hyperparameter::UniformFloat { name: "lr".into(), lower: 0.0, upper: 10.0 }]),
             OptConfig::new_with_early_stopping(20, 5, 2, 0.001),
             "n/a",
         );
@@ -1131,88 +891,36 @@ mod tpe_optimizer_tests {
     #[test]
     fn test_reusable_configs_validate_sort_dedupe_and_cap() {
         let cs: ConfigurationSpace<String> = ConfigurationSpace::new(vec![
-            Hyperparameter::UniformFloat {
-                name: "lr".into(),
-                lower: 0.0,
-                upper: 1.0,
-            },
-            Hyperparameter::UniformInt {
-                name: "layers".into(),
-                lower: 1,
-                upper: 4,
-            },
-            Hyperparameter::Categorical {
-                name: "kind".into(),
-                values: vec!["a", "b"],
-            },
+            Hyperparameter::UniformFloat { name: "lr".into(), lower: 0.0, upper: 1.0 },
+            Hyperparameter::UniformInt { name: "layers".into(), lower: 1, upper: 4 },
+            Hyperparameter::Categorical { name: "kind".into(), values: vec!["a", "b"] },
         ]);
         let trials = vec![
-            CompletedTrial::new(0.0, HashMap::from([
-                ("lr".to_string(), Val::Real(2.0)),
-                ("layers".to_string(), Val::Int(2)),
-                ("kind".to_string(), Val::Int(0)),
-            ])),
-            CompletedTrial::new(0.05, HashMap::from([
-                ("lr".to_string(), Val::Real(0.4)),
-                ("kind".to_string(), Val::Int(0)),
-            ])),
-            CompletedTrial::new(0.07, HashMap::from([
-                ("lr".to_string(), Val::Real(0.4)),
-                ("layers".to_string(), Val::Int(2)),
-                ("kind".to_string(), Val::Str("z".to_string())),
-            ])),
-            CompletedTrial::new(0.1, HashMap::from([
-                ("lr".to_string(), Val::Real(0.2)),
-                ("layers".to_string(), Val::Int(2)),
-                ("kind".to_string(), Val::Int(0)),
-                ("unused_old_param".to_string(), Val::Bool(true)),
-            ])),
-            CompletedTrial::new(0.2, HashMap::from([
-                ("lr".to_string(), Val::Real(0.2)),
-                ("layers".to_string(), Val::Int(2)),
-                ("kind".to_string(), Val::Int(0)),
-            ])),
-            CompletedTrial::new(0.3, HashMap::from([
-                ("lr".to_string(), Val::Int(0)),
-                ("layers".to_string(), Val::Str("3".to_string())),
-                ("kind".to_string(), Val::Str("b".to_string())),
-            ])),
+            CompletedTrial::new(0.0, HashMap::from([("lr".to_string(), Val::Real(2.0)), ("layers".to_string(), Val::Int(2)), ("kind".to_string(), Val::Int(0))])),
+            CompletedTrial::new(0.05, HashMap::from([("lr".to_string(), Val::Real(0.4)), ("kind".to_string(), Val::Int(0))])),
+            CompletedTrial::new(0.07, HashMap::from([("lr".to_string(), Val::Real(0.4)), ("layers".to_string(), Val::Int(2)), ("kind".to_string(), Val::Str("z".to_string()))])),
+            CompletedTrial::new(0.1, HashMap::from([("lr".to_string(), Val::Real(0.2)), ("layers".to_string(), Val::Int(2)), ("kind".to_string(), Val::Int(0)), ("unused_old_param".to_string(), Val::Bool(true))])),
+            CompletedTrial::new(0.2, HashMap::from([("lr".to_string(), Val::Real(0.2)), ("layers".to_string(), Val::Int(2)), ("kind".to_string(), Val::Int(0))])),
+            CompletedTrial::new(0.3, HashMap::from([("lr".to_string(), Val::Int(0)), ("layers".to_string(), Val::Str("3".to_string())), ("kind".to_string(), Val::Str("b".to_string()))])),
         ];
 
         let reusable_configs = cs.reusable_configs_from_completed_trials(trials, StudyDirection::Minimize, 2);
 
-        assert_eq!(
-            vec![
-                vec![Val::Real(0.2), Val::Int(2), Val::Int(0)],
-                vec![Val::Real(0.0), Val::Int(3), Val::Int(1)],
-            ],
-            reusable_configs
-        );
+        assert_eq!(vec![vec![Val::Real(0.2), Val::Int(2), Val::Int(0)], vec![Val::Real(0.0), Val::Int(3), Val::Int(1)],], reusable_configs);
     }
 
     fn sphere(d_x: i64) -> impl Fn(&[NamedVal<String>]) -> f32 {
         move |params| {
             debug!("params={params:?}");
 
-            let t: Tensor = Tensor::from_slice(
-                params
-                    .into_iter()
-                    .map(|v| <&NamedVal<String> as TryInto<f64>>::try_into(v).unwrap())
-                    .collect::<Vec<f64>>()
-                    .as_slice(),
-            );
-            let loss = t
-                .subtract_scalar(d_x)
-                .pow_tensor_scalar(2)
-                .sum(None)
-                .double_value(&[]) as f32;
+            let t: Tensor = Tensor::from_slice(params.into_iter().map(|v| <&NamedVal<String> as TryInto<f64>>::try_into(v).unwrap()).collect::<Vec<f64>>().as_slice());
+            let loss = t.subtract_scalar(d_x).pow_tensor_scalar(2).sum(None).double_value(&[]) as f32;
 
             debug!("loss={loss:?}");
 
             loss
         }
     }
-
 }
 
 #[derive(Debug, Clone)]
@@ -1255,19 +963,14 @@ impl<T: FieldName> From<&ConfigurationSpace<T>> for HashMap<String, Val> {
 #[allow(dead_code)]
 impl<T: FieldName> ConfigurationSpace<T> {
     pub fn empty() -> Self {
-        Self {
-            hyperparameters: vec![],
-        }
+        Self { hyperparameters: vec![] }
     }
     pub fn new(hyperparameters: Vec<Hyperparameter<T>>) -> Self {
         Self { hyperparameters }
     }
 
     pub fn random_sample(&self) -> Vec<Val> {
-        self.hyperparameters
-            .iter()
-            .map(|hp| hp.random_sample())
-            .collect()
+        self.hyperparameters.iter().map(|hp| hp.random_sample()).collect()
     }
 
     pub fn reusable_configs_from_completed_trials<I>(&self, trials: I, direction: StudyDirection, max_total: usize) -> Vec<Vec<Val>>
@@ -1290,10 +993,7 @@ impl<T: FieldName> ConfigurationSpace<T> {
             return vec![];
         }
 
-        let mut trials = trials
-            .into_iter()
-            .filter(|trial| trial.objective.is_finite())
-            .collect::<Vec<_>>();
+        let mut trials = trials.into_iter().filter(|trial| trial.objective.is_finite()).collect::<Vec<_>>();
         match direction {
             StudyDirection::Minimize => trials.sort_by(|left, right| left.objective.partial_cmp(&right.objective).unwrap_or(Ordering::Equal)),
             StudyDirection::Maximize => trials.sort_by(|left, right| right.objective.partial_cmp(&left.objective).unwrap_or(Ordering::Equal)),
@@ -1331,11 +1031,7 @@ impl<T: FieldName> ConfigurationSpace<T> {
             return None;
         }
 
-        self.hyperparameters
-            .iter()
-            .zip(config)
-            .map(|(hp, val)| Self::normalize_hyperparameter_value(hp, val))
-            .collect()
+        self.hyperparameters.iter().zip(config).map(|(hp, val)| Self::normalize_hyperparameter_value(hp, val)).collect()
     }
 
     fn normalize_hyperparameter_value(hp: &Hyperparameter<T>, val: &Val) -> Option<Val> {

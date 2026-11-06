@@ -1,10 +1,10 @@
+use log::debug;
 use std::ffi::{c_int, c_ulong};
 use std::mem::MaybeUninit;
 use std::ptr;
-use log::debug;
 use tch::Tensor;
-use torch_sys::{C_optimizer, C_tensor};
 use thoosa_shared::ThoError;
+use torch_sys::{C_optimizer, C_tensor};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -59,134 +59,47 @@ pub struct C_SgdParamState {
 }
 
 unsafe extern "C" {
-    pub fn tho_adam_group_count(
-        opt: *const C_optimizer,
-    ) -> c_ulong;
+    pub fn tho_adam_group_count(opt: *const C_optimizer) -> c_ulong;
 
-    pub fn tho_adam_get_defaults(
-        opt: *const C_optimizer,
-        out: *const C_AdamOptions,
-    );
+    pub fn tho_adam_get_defaults(opt: *const C_optimizer, out: *const C_AdamOptions);
 
-    pub fn tho_adam_get_group(
-        opt: *const C_optimizer,
-        group_index: c_ulong,
-        out: *const C_AdamGroup,
-    );
+    pub fn tho_adam_get_group(opt: *const C_optimizer, group_index: c_ulong, out: *const C_AdamGroup);
 
-    pub fn tho_adam_get_param_state(
-        opt: *const C_optimizer,
-        group_index: c_ulong,
-        parameter_index: c_ulong,
-        out: *const C_AdamParamState,
-    );
+    pub fn tho_adam_get_param_state(opt: *const C_optimizer, group_index: c_ulong, parameter_index: c_ulong, out: *const C_AdamParamState);
 
-    pub fn tho_adam_set_defaults(
-        opt: *const C_optimizer,
-        options: *const C_AdamOptions,
-    );
+    pub fn tho_adam_set_defaults(opt: *const C_optimizer, options: *const C_AdamOptions);
 
-    pub fn tho_adam_set_group_options(
-        opt: *const C_optimizer,
-        group_index: c_ulong,
-        options: *const C_AdamOptions,
-    );
+    pub fn tho_adam_set_group_options(opt: *const C_optimizer, group_index: c_ulong, options: *const C_AdamOptions);
 
-    pub fn tho_adam_set_param_state(
-        opt: *const C_optimizer,
-        group_index: c_ulong,
-        parameter_index: c_ulong,
-        has_state: c_int,
-        step: i64,
-        exp_avg: *mut C_tensor,
-        exp_avg_sq: *mut C_tensor,
-        max_exp_avg_sq: *mut C_tensor,
-    );
+    pub fn tho_adam_set_param_state(opt: *const C_optimizer, group_index: c_ulong, parameter_index: c_ulong, has_state: c_int, step: i64, exp_avg: *mut C_tensor, exp_avg_sq: *mut C_tensor, max_exp_avg_sq: *mut C_tensor);
 
-    pub fn tho_adam_w_group_count(
-        opt: *const C_optimizer,
-    ) -> c_ulong;
+    pub fn tho_adam_w_group_count(opt: *const C_optimizer) -> c_ulong;
 
-    pub fn tho_adam_w_get_defaults(
-        opt: *const C_optimizer,
-        out: *const C_AdamOptions,
-    );
+    pub fn tho_adam_w_get_defaults(opt: *const C_optimizer, out: *const C_AdamOptions);
 
-    pub fn tho_adam_w_get_group(
-        opt: *const C_optimizer,
-        group_index: c_ulong,
-        out: *const C_AdamGroup,
-    );
+    pub fn tho_adam_w_get_group(opt: *const C_optimizer, group_index: c_ulong, out: *const C_AdamGroup);
 
-    pub fn tho_adam_w_get_param_state(
-        opt: *const C_optimizer,
-        group_index: c_ulong,
-        parameter_index: c_ulong,
-        out: *const C_AdamParamState,
-    );
+    pub fn tho_adam_w_get_param_state(opt: *const C_optimizer, group_index: c_ulong, parameter_index: c_ulong, out: *const C_AdamParamState);
 
-    pub fn tho_adam_w_set_defaults(
-        opt: *const C_optimizer,
-        options: *const C_AdamOptions,
-    );
+    pub fn tho_adam_w_set_defaults(opt: *const C_optimizer, options: *const C_AdamOptions);
 
-    pub fn tho_adam_w_set_group_options(
-        opt: *const C_optimizer,
-        group_index: c_ulong,
-        options: *const C_AdamOptions,
-    );
+    pub fn tho_adam_w_set_group_options(opt: *const C_optimizer, group_index: c_ulong, options: *const C_AdamOptions);
 
-    pub fn tho_adam_w_set_param_state(
-        opt: *const C_optimizer,
-        group_index: c_ulong,
-        parameter_index: c_ulong,
-        has_state: c_int,
-        step: i64,
-        exp_avg: *mut C_tensor,
-        exp_avg_sq: *mut C_tensor,
-        max_exp_avg_sq: *mut C_tensor,
-    );
+    pub fn tho_adam_w_set_param_state(opt: *const C_optimizer, group_index: c_ulong, parameter_index: c_ulong, has_state: c_int, step: i64, exp_avg: *mut C_tensor, exp_avg_sq: *mut C_tensor, max_exp_avg_sq: *mut C_tensor);
 
-    pub fn tho_sgd_group_count(
-        opt: *const C_optimizer,
-    ) -> c_ulong;
+    pub fn tho_sgd_group_count(opt: *const C_optimizer) -> c_ulong;
 
-    pub fn tho_sgd_get_defaults(
-        opt: *const C_optimizer,
-        out: *const C_SgdOptions,
-    );
+    pub fn tho_sgd_get_defaults(opt: *const C_optimizer, out: *const C_SgdOptions);
 
-    pub fn tho_sgd_get_group(
-        opt: *const C_optimizer,
-        group_index: c_ulong,
-        out: *const C_SgdGroup,
-    );
+    pub fn tho_sgd_get_group(opt: *const C_optimizer, group_index: c_ulong, out: *const C_SgdGroup);
 
-    pub fn tho_sgd_get_param_state(
-        opt: *const C_optimizer,
-        group_index: c_ulong,
-        parameter_index: c_ulong,
-        out: *const C_SgdParamState,
-    );
+    pub fn tho_sgd_get_param_state(opt: *const C_optimizer, group_index: c_ulong, parameter_index: c_ulong, out: *const C_SgdParamState);
 
-    pub fn tho_sgd_set_defaults(
-        opt: *const C_optimizer,
-        options: *const C_SgdOptions,
-    );
+    pub fn tho_sgd_set_defaults(opt: *const C_optimizer, options: *const C_SgdOptions);
 
-    pub fn tho_sgd_set_group_options(
-        opt: *const C_optimizer,
-        group_index: c_ulong,
-        options: *const C_SgdOptions,
-    );
+    pub fn tho_sgd_set_group_options(opt: *const C_optimizer, group_index: c_ulong, options: *const C_SgdOptions);
 
-    pub fn tho_sgd_set_param_state(
-        opt: *const C_optimizer,
-        group_index: c_ulong,
-        parameter_index: c_ulong,
-        has_state: c_int,
-        momentum_buffer: *mut C_tensor,
-    );
+    pub fn tho_sgd_set_param_state(opt: *const C_optimizer, group_index: c_ulong, parameter_index: c_ulong, has_state: c_int, momentum_buffer: *mut C_tensor);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -207,19 +120,12 @@ pub struct AdamParamStateSnapshot {
     pub max_exp_avg_sq: Option<Tensor>,
 }
 
-
-
-
 impl PartialEq for AdamParamStateSnapshot {
     fn eq(&self, other: &Self) -> bool {
         self.step == other.step
-        && self.exp_avg.allclose(&other.exp_avg, 0.01, 0.01, true)
-        && self.exp_avg_sq.allclose(&other.exp_avg_sq, 0.01, 0.01, true)
-        && (
-            self.max_exp_avg_sq.is_none() && other.max_exp_avg_sq.is_none()
-            ||
-            self.max_exp_avg_sq.as_ref().map(|v|other.max_exp_avg_sq.as_ref().map(|other|other.allclose(&v, 0.01, 0.01, true)).unwrap_or(false)).unwrap_or(false)
-        )
+            && self.exp_avg.allclose(&other.exp_avg, 0.01, 0.01, true)
+            && self.exp_avg_sq.allclose(&other.exp_avg_sq, 0.01, 0.01, true)
+            && (self.max_exp_avg_sq.is_none() && other.max_exp_avg_sq.is_none() || self.max_exp_avg_sq.as_ref().map(|v| other.max_exp_avg_sq.as_ref().map(|other| other.allclose(&v, 0.01, 0.01, true)).unwrap_or(false)).unwrap_or(false))
     }
 }
 
@@ -237,7 +143,7 @@ pub struct AdamGroupSnapshot {
 pub struct AdamOptimizerSnapshot {
     pub defaults: AdamOptionsSnapshot,
     pub groups: Vec<AdamGroupSnapshot>,
-    pub tho_device_idx:usize
+    pub tho_device_idx: usize,
 }
 
 // LibTorch's AdamW snapshot fields match Adam exactly, so share the owned Rust representation while keeping optimizer-specific entry points.
@@ -369,15 +275,9 @@ const ADAM_W_SHIM_FNS: AdamShimFns = AdamShimFns {
     set_param_state: tho_adam_w_set_param_state,
 };
 
-fn owned_tensor_from_ptr(
-    ptr: *mut C_tensor,
-    optimizer_name: &str,
-    description: &str,
-) -> Result<Tensor, ThoError> {
+fn owned_tensor_from_ptr(ptr: *mut C_tensor, optimizer_name: &str, description: &str) -> Result<Tensor, ThoError> {
     if ptr.is_null() {
-        return Err(ThoError::new(format!(
-            "C++ {optimizer_name} shim returned a null {description}"
-        )));
+        return Err(ThoError::new(format!("C++ {optimizer_name} shim returned a null {description}")));
     }
 
     // The C++ shim returned `new torch::Tensor(...)`.
@@ -385,29 +285,25 @@ fn owned_tensor_from_ptr(
     Ok(unsafe { Tensor::from_ptr(ptr) })
 }
 
-pub unsafe fn adam_snapshot(c_optimizer: *const C_optimizer, tho_device_idx:usize) -> Result<AdamOptimizerSnapshot, ThoError> {
+pub unsafe fn adam_snapshot(c_optimizer: *const C_optimizer, tho_device_idx: usize) -> Result<AdamOptimizerSnapshot, ThoError> {
     // The concrete shim table preserves LibTorch runtime-type checks while sharing the identical Adam-family snapshot traversal.
     unsafe { adam_like_snapshot(c_optimizer, tho_device_idx, ADAM_SHIM_FNS) }
 }
 
-pub unsafe fn adam_w_snapshot(c_optimizer: *const C_optimizer, tho_device_idx:usize) -> Result<AdamWOptimizerSnapshot, ThoError> {
+pub unsafe fn adam_w_snapshot(c_optimizer: *const C_optimizer, tho_device_idx: usize) -> Result<AdamWOptimizerSnapshot, ThoError> {
     unsafe { adam_like_snapshot(c_optimizer, tho_device_idx, ADAM_W_SHIM_FNS) }
 }
 
-unsafe fn adam_like_snapshot(c_optimizer: *const C_optimizer, tho_device_idx:usize, shims: AdamShimFns) -> Result<AdamOptimizerSnapshot, ThoError> {
+unsafe fn adam_like_snapshot(c_optimizer: *const C_optimizer, tho_device_idx: usize, shims: AdamShimFns) -> Result<AdamOptimizerSnapshot, ThoError> {
     let group_count = unsafe { (shims.group_count)(c_optimizer) };
 
     let mut raw_defaults = MaybeUninit::<C_AdamOptions>::zeroed();
 
-
     unsafe { (shims.get_defaults)(c_optimizer, raw_defaults.as_mut_ptr()) };
-
 
     debug!("raw_defaults={raw_defaults:?}");
 
-    let defaults = AdamOptionsSnapshot::from_ffi(
-        unsafe { raw_defaults.assume_init() },
-    );
+    let defaults = AdamOptionsSnapshot::from_ffi(unsafe { raw_defaults.assume_init() });
 
     debug!("defaults={defaults:?}");
 
@@ -415,7 +311,6 @@ unsafe fn adam_like_snapshot(c_optimizer: *const C_optimizer, tho_device_idx:usi
 
     for group_index in 0..group_count {
         let mut raw_group = MaybeUninit::<C_AdamGroup>::zeroed();
-
 
         unsafe { (shims.get_group)(c_optimizer, group_index, raw_group.as_mut_ptr()) };
 
@@ -427,12 +322,7 @@ unsafe fn adam_like_snapshot(c_optimizer: *const C_optimizer, tho_device_idx:usi
             debug!("parameter_index={parameter_index}");
             let mut raw_state = MaybeUninit::<C_AdamParamState>::zeroed();
 
-            unsafe { (shims.get_param_state)(
-                c_optimizer,
-                group_index,
-                parameter_index,
-                raw_state.as_mut_ptr(),
-            ) };
+            unsafe { (shims.get_param_state)(c_optimizer, group_index, parameter_index, raw_state.as_mut_ptr()) };
 
             let raw_state = unsafe { raw_state.assume_init() };
 
@@ -450,28 +340,11 @@ unsafe fn adam_like_snapshot(c_optimizer: *const C_optimizer, tho_device_idx:usi
              * the already-created Tensor is dropped and its C++ pointer
              * is freed, so this does not leak partially returned state.
              */
-            let exp_avg = owned_tensor_from_ptr(
-                raw_state.exp_avg,
-                shims.optimizer_name,
-                "exp_avg",
-            )?;
+            let exp_avg = owned_tensor_from_ptr(raw_state.exp_avg, shims.optimizer_name, "exp_avg")?;
 
-            let exp_avg_sq = owned_tensor_from_ptr(
-                raw_state.exp_avg_sq,
-                shims.optimizer_name,
-                "exp_avg_sq",
-            )?;
+            let exp_avg_sq = owned_tensor_from_ptr(raw_state.exp_avg_sq, shims.optimizer_name, "exp_avg_sq")?;
 
-            let max_exp_avg_sq =
-                if raw_state.max_exp_avg_sq.is_null() {
-                    None
-                } else {
-                    Some(owned_tensor_from_ptr(
-                        raw_state.max_exp_avg_sq,
-                        shims.optimizer_name,
-                        "max_exp_avg_sq",
-                    )?)
-                };
+            let max_exp_avg_sq = if raw_state.max_exp_avg_sq.is_null() { None } else { Some(owned_tensor_from_ptr(raw_state.max_exp_avg_sq, shims.optimizer_name, "max_exp_avg_sq")?) };
 
             states.push(Some(AdamParamStateSnapshot {
                 step: raw_state.step,
@@ -482,32 +355,19 @@ unsafe fn adam_like_snapshot(c_optimizer: *const C_optimizer, tho_device_idx:usi
         }
 
         groups.push(AdamGroupSnapshot {
-            options: AdamOptionsSnapshot::from_ffi(
-                raw_group.options,
-            ),
+            options: AdamOptionsSnapshot::from_ffi(raw_group.options),
             states,
         });
     }
 
-    Ok(AdamOptimizerSnapshot {
-        defaults,
-        groups,
-        tho_device_idx
-    })
+    Ok(AdamOptimizerSnapshot { defaults, groups, tho_device_idx })
 }
 
-
-pub unsafe fn restore_adam_snapshot(
-    snapshot: &AdamOptimizerSnapshot,
-    c_optimizer: *mut C_optimizer
-) -> Result<(), ThoError> {
+pub unsafe fn restore_adam_snapshot(snapshot: &AdamOptimizerSnapshot, c_optimizer: *mut C_optimizer) -> Result<(), ThoError> {
     unsafe { restore_adam_like_snapshot(snapshot, c_optimizer, ADAM_SHIM_FNS) }
 }
 
-pub unsafe fn restore_adam_w_snapshot(
-    snapshot: &AdamWOptimizerSnapshot,
-    c_optimizer: *mut C_optimizer
-) -> Result<(), ThoError> {
+pub unsafe fn restore_adam_w_snapshot(snapshot: &AdamWOptimizerSnapshot, c_optimizer: *mut C_optimizer) -> Result<(), ThoError> {
     unsafe { restore_adam_like_snapshot(snapshot, c_optimizer, ADAM_W_SHIM_FNS) }
 }
 
@@ -526,24 +386,14 @@ unsafe fn restore_adam_like_snapshot(snapshot: &AdamOptimizerSnapshot, c_optimiz
 
     let raw_defaults = snapshot.defaults.to_ffi();
 
-    unsafe { (shims.set_defaults)(
-        c_optimizer,
-        &raw_defaults,
-    ) };
+    unsafe { (shims.set_defaults)(c_optimizer, &raw_defaults) };
 
     for (group_index, snapshot_group) in snapshot.groups.iter().enumerate() {
-        let mut destination_group =
-            MaybeUninit::<C_AdamGroup>::zeroed();
+        let mut destination_group = MaybeUninit::<C_AdamGroup>::zeroed();
 
+        unsafe { (shims.get_group)(c_optimizer, group_index as c_ulong, destination_group.as_mut_ptr()) };
 
-        unsafe { (shims.get_group)(
-            c_optimizer,
-            group_index as c_ulong,
-            destination_group.as_mut_ptr(),
-        ) };
-
-        let destination_group =
-            unsafe { destination_group.assume_init() };
+        let destination_group = unsafe { destination_group.assume_init() };
 
         if destination_group.parameter_count != snapshot_group.states.len() as u64 {
             return Err(ThoError::new(format!(
@@ -557,56 +407,18 @@ unsafe fn restore_adam_like_snapshot(snapshot: &AdamOptimizerSnapshot, c_optimiz
 
         let raw_options = snapshot_group.options.to_ffi();
 
+        unsafe { (shims.set_group_options)(c_optimizer, group_index as c_ulong, &raw_options) };
 
-        unsafe { (shims.set_group_options)(
-            c_optimizer,
-            group_index as c_ulong,
-            &raw_options,
-        ) };
-
-        for (parameter_index, state) in
-            snapshot_group.states.iter().enumerate()
-        {
+        for (parameter_index, state) in snapshot_group.states.iter().enumerate() {
             match state {
                 None => {
-
-                    unsafe { (shims.set_param_state)(
-                        c_optimizer,
-                        group_index as c_ulong,
-                        parameter_index as c_ulong,
-                        0,
-                        0,
-                        ptr::null_mut(),
-                        ptr::null_mut(),
-                        ptr::null_mut(),
-                    ) };
+                    unsafe { (shims.set_param_state)(c_optimizer, group_index as c_ulong, parameter_index as c_ulong, 0, 0, ptr::null_mut(), ptr::null_mut(), ptr::null_mut()) };
                 }
 
                 Some(state) => {
-                    let max_exp_avg_sq = state
-                        .max_exp_avg_sq
-                        .as_ref()
-                        .map_or(
-                            ptr::null_mut(),
-                            |tensor| {
-                                tensor.as_ptr()
-                                    as *mut C_tensor
-                            },
-                        );
+                    let max_exp_avg_sq = state.max_exp_avg_sq.as_ref().map_or(ptr::null_mut(), |tensor| tensor.as_ptr() as *mut C_tensor);
 
-
-                    unsafe { (shims.set_param_state)(
-                        c_optimizer,
-                        group_index as c_ulong,
-                        parameter_index as c_ulong,
-                        1,
-                        state.step,
-                        state.exp_avg.as_ptr()
-                            as *mut C_tensor,
-                        state.exp_avg_sq.as_ptr()
-                            as *mut C_tensor,
-                        max_exp_avg_sq,
-                    ) };
+                    unsafe { (shims.set_param_state)(c_optimizer, group_index as c_ulong, parameter_index as c_ulong, 1, state.step, state.exp_avg.as_ptr() as *mut C_tensor, state.exp_avg_sq.as_ptr() as *mut C_tensor, max_exp_avg_sq) };
                 }
             }
         }
@@ -650,11 +462,7 @@ pub unsafe fn sgd_snapshot(c_optimizer: *const C_optimizer, tho_device_idx: usiz
         });
     }
 
-    Ok(SgdOptimizerSnapshot {
-        defaults,
-        groups,
-        tho_device_idx,
-    })
+    Ok(SgdOptimizerSnapshot { defaults, groups, tho_device_idx })
 }
 
 pub unsafe fn restore_sgd_snapshot(snapshot: &SgdOptimizerSnapshot, c_optimizer: *mut C_optimizer) -> Result<(), ThoError> {
@@ -689,15 +497,14 @@ pub unsafe fn restore_sgd_snapshot(snapshot: &SgdOptimizerSnapshot, c_optimizer:
     Ok(())
 }
 
-
 #[cfg(test)]
 mod tests {
-    use log::debug;
-    use tch::{Device, Kind, Tensor, nn};
-    use tch::Device::Cuda;
-    use torch_sys::{C_optimizer, C_tensor};
-    use thoosa_shared::ThoError;
     use crate::optimizers::{AdamOptimizerSnapshot, SgdOptimizerSnapshot, adam_snapshot, adam_w_snapshot, restore_adam_snapshot, restore_adam_w_snapshot, restore_sgd_snapshot, sgd_snapshot};
+    use log::debug;
+    use tch::Device::Cuda;
+    use tch::{Device, Kind, Tensor, nn};
+    use thoosa_shared::ThoError;
+    use torch_sys::{C_optimizer, C_tensor};
 
     #[derive(Clone, Copy)]
     enum TestOptimizer {
@@ -751,20 +558,22 @@ mod tests {
         }
 
         fn default_optimizer(self) -> Result<RawOptimizer, ThoError> {
-            let optimizer = unsafe { match self {
-                Self::Adam => {
-                    let config = nn::Adam::default();
-                    torch_sys::ato_adam(0.1, config.beta1, config.beta2, config.wd, config.eps, config.amsgrad)
+            let optimizer = unsafe {
+                match self {
+                    Self::Adam => {
+                        let config = nn::Adam::default();
+                        torch_sys::ato_adam(0.1, config.beta1, config.beta2, config.wd, config.eps, config.amsgrad)
+                    }
+                    Self::AdamW => {
+                        let config = nn::AdamW::default();
+                        torch_sys::ato_adamw(0.1, config.beta1, config.beta2, config.wd, config.eps, config.amsgrad)
+                    }
+                    Self::Sgd => {
+                        let config = nn::Sgd::default();
+                        torch_sys::ato_sgd(0.1, config.momentum, config.dampening, config.wd, i32::from(config.nesterov))
+                    }
                 }
-                Self::AdamW => {
-                    let config = nn::AdamW::default();
-                    torch_sys::ato_adamw(0.1, config.beta1, config.beta2, config.wd, config.eps, config.amsgrad)
-                }
-                Self::Sgd => {
-                    let config = nn::Sgd::default();
-                    torch_sys::ato_sgd(0.1, config.momentum, config.dampening, config.wd, i32::from(config.nesterov))
-                }
-            } };
+            };
             RawOptimizer::new(optimizer, self.name())
         }
     }
@@ -773,11 +582,7 @@ mod tests {
 
     impl RawOptimizer {
         fn new(optimizer: *mut C_optimizer, optimizer_name: &str) -> Result<Self, ThoError> {
-            if optimizer.is_null() {
-                Err(ThoError::new(format!("failed to construct {optimizer_name} optimizer")))
-            } else {
-                Ok(Self(optimizer))
-            }
+            if optimizer.is_null() { Err(ThoError::new(format!("failed to construct {optimizer_name} optimizer"))) } else { Ok(Self(optimizer)) }
         }
     }
 
@@ -789,17 +594,17 @@ mod tests {
     }
 
     #[test]
-    fn test_tho_snapshot_adam_states()-> Result<(), ThoError>{
+    fn test_tho_snapshot_adam_states() -> Result<(), ThoError> {
         do_test_tho_snapshot_optimizer_states(TestOptimizer::Adam)
     }
 
     #[test]
-    fn test_tho_snapshot_adam_w_states()-> Result<(), ThoError>{
+    fn test_tho_snapshot_adam_w_states() -> Result<(), ThoError> {
         do_test_tho_snapshot_optimizer_states(TestOptimizer::AdamW)
     }
 
     #[test]
-    fn test_tho_snapshot_sgd_states()-> Result<(), ThoError>{
+    fn test_tho_snapshot_sgd_states() -> Result<(), ThoError> {
         do_test_tho_snapshot_optimizer_states(TestOptimizer::Sgd)
     }
 
@@ -847,9 +652,7 @@ mod tests {
         let target = Tensor::from_slice(&[3.0_f32]).to_device(device);
 
         let prediction = &input * &weight + &bias;
-        let loss = (&prediction - &target)
-            .pow_tensor_scalar(2)
-            .mean(Kind::Float);
+        let loss = (&prediction - &target).pow_tensor_scalar(2).mean(Kind::Float);
 
         // One step lazily initializes every optimizer's per-parameter tensor state.
         loss.backward();

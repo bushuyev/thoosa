@@ -1,18 +1,22 @@
-use thoosa_common::tch_error::tch_result;
 use super::*;
 use crate::motifs_ws::MotifsWsMockBuilder;
 use crate::stages::apply_motif_nets::{ApplyMotifNetInit, ApplyMotifNetInput, ApplyMotifNetInputWrapper, apply_motif_net_endpoint_init};
 use crate::train_nets::{LabelNetParams, LabelNetTypeParams, MotifNetParams};
+use std::time::Duration;
+use tch::{Device, nn::VarStore};
 use thoosa_common::ipc::cuda_wokrer::{CudaWorker, InitFn};
 use thoosa_common::ipc::worker_msg::OpResult;
 use thoosa_common::nets::common_nets::LinLenNetParams;
 use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
 use thoosa_common::runner::run_ctx::RunCtxImpl;
-use std::time::Duration;
-use tch::{Device, nn::VarStore};
+use thoosa_common::tch_error::tch_result;
 
-fn motif_params() -> MotifNetParams { MotifNetParams::new_lin(4, 1, 1) }
-fn label_params() -> LabelNetParams { LabelNetParams::new(2, LabelNetTypeParams::LinNetParams(LinLenNetParams::new(8, 1))) }
+fn motif_params() -> MotifNetParams {
+    MotifNetParams::new_lin(4, 1, 1)
+}
+fn label_params() -> LabelNetParams {
+    LabelNetParams::new(2, LabelNetTypeParams::LinNetParams(LinLenNetParams::new(8, 1)))
+}
 
 fn motif_module() -> anyhow::Result<ThoModuleWithStore<Batch<Slice>, MotifProbability>> {
     let factory = Arc::new(|path: &tch::nn::Path| motif_params().motif_net(None)?.build_tch_module::<Batch<Slice>, MotifProbability>(path));
@@ -28,7 +32,9 @@ fn label_module(fail_restore: bool) -> anyhow::Result<ThoModuleWithStore<Channel
         let attempt = attempts.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         // Fail after all uploads reached the worker. Both a direct retry and
         // an OOM purge must retain the parent's original CPU backup.
-        if fail_restore && matches!(attempt, 1 | 2) { return Err(ThoError::oom().into()); }
+        if fail_restore && matches!(attempt, 1 | 2) {
+            return Err(ThoError::oom().into());
+        }
         label_params().label_net()?.build_tch_module::<ChannelsMotifsData, Batch<LabelProbability>>(path)
     });
     let mut vs = VarStore::new(Device::Cuda(0));
@@ -60,7 +66,9 @@ async fn restore_guards<S: StageWithState + thoosa_common::ipc::state_transfer::
     for (index, (key, tensor)) in tensors.into_iter().rev().enumerate() {
         stage.set_state_tensor(1, key.clone(), tch_result(tensor.f_to_device(Device::Cuda(0)))?).await?;
         assert!(stage.set_state_tensor(1, key, tch_result(tensor.f_to_device(Device::Cuda(0)))?).await.is_err());
-        if index + 1 < count { assert!(stage.pre_run(1).await.is_err()); }
+        if index + 1 < count {
+            assert!(stage.pre_run(1).await.is_err());
+        }
     }
     drop(stage.pre_run(1).await?);
     Ok(())
@@ -96,9 +104,15 @@ async fn round_trips() -> Result<(), ThoError> {
     let mut expected_motif = None;
     let mut expected_label = None;
     for cycle in 0..3 {
-        let motif_input = Arc::new(DevicesWrap::wrap(ThoTensor::new(mono_key!("motif input", "test").into(), tch_result(tch_result(tch_result(Tensor::f_arange(16, (tch::Kind::Float, Device::Cpu)))?.f_reshape([1, 16]))?.f_div_scalar(16.))?)?));
+        let motif_input = Arc::new(DevicesWrap::wrap(ThoTensor::new(
+            mono_key!("motif input", "test").into(),
+            tch_result(tch_result(tch_result(Tensor::f_arange(16, (tch::Kind::Float, Device::Cpu)))?.f_reshape([1, 16]))?.f_div_scalar(16.))?,
+        )?));
         let motif_output = GlobalCtx::global().execution(1).run_stage(motif.clone(), ApplyMotifNetInputWrapper::new(motif_input), 1, &ctx).await?.copy_to_device(0).await?;
-        let label_input = Arc::new(DevicesWrap::wrap(DataWithExtra::new(ThoTensor::new(mono_key!("label input", "test").into(), tch_result(tch_result(tch_result(Tensor::f_arange(16, (tch::Kind::Float, Device::Cpu)))?.f_reshape([2, 8]))?.f_div_scalar(16.))?)?, vec![8, 6])));
+        let label_input = Arc::new(DevicesWrap::wrap(DataWithExtra::new(
+            ThoTensor::new(mono_key!("label input", "test").into(), tch_result(tch_result(tch_result(Tensor::f_arange(16, (tch::Kind::Float, Device::Cpu)))?.f_reshape([2, 8]))?.f_div_scalar(16.))?)?,
+            vec![8, 6],
+        )));
         if global.is_ipc() && cycle == 1 {
             for _ in 0..2 {
                 let result = GlobalCtx::global().execution(1).run_stage(label.clone(), ApplyLabelNetInputWrapper::new(label_input.clone()), 1, &ctx).await;
@@ -133,8 +147,15 @@ async fn round_trips() -> Result<(), ThoError> {
             let result = ipc.invoke_stage(ipc.worker_id()?, APPLY_MOTIF_NET_ENDPOINT.into(), Some("8101".into()), wire, false).await?;
             let OpResult::Failed(error) = result.status else { panic!("worker retained motif model") };
             assert!(ThoError::from(error).to_string().contains("offloaded"));
-            let input = DataWithExtra::new(ThoTensor::<MotifProbability, SynKey>::new(mono_key!("raw label", "test").into(), tch_result(Tensor::f_ones([2, 8], (tch::Kind::Float, Device::Cpu)))?)?.copy_to_device(1).await?, vec![8, 6]);
-            let wire = ApplyLabelNetInput { id: input.id().clone(), input: ThoDataRef::Borrowed(&input) }.clone_refs()?;
+            let input = DataWithExtra::new(
+                ThoTensor::<MotifProbability, SynKey>::new(mono_key!("raw label", "test").into(), tch_result(Tensor::f_ones([2, 8], (tch::Kind::Float, Device::Cpu)))?)?.copy_to_device(1).await?,
+                vec![8, 6],
+            );
+            let wire = ApplyLabelNetInput {
+                id: input.id().clone(),
+                input: ThoDataRef::Borrowed(&input),
+            }
+            .clone_refs()?;
             let result = ipc.invoke_stage(ipc.worker_id()?, APPLY_LABEL_NET_ENDPOINT.into(), Some("8102".into()), wire, false).await?;
             let OpResult::Failed(error) = result.status else { panic!("worker retained label model") };
             assert!(ThoError::from(error).to_string().contains("offloaded"));
@@ -156,16 +177,22 @@ async fn test_apply_nets_state_local() -> Result<(), ThoError> {
 
 #[test]
 fn test_apply_nets_state_ipc() -> Result<(), ThoError> {
-    thoosa_common::ipc::tests::run_ipc_test(module_path!(), async {
-        tokio::time::timeout(Duration::from_secs(90), round_trips()).await?
-    }, async |sock| {
-        let ws = Arc::new(RwLock::new(MotifsWsMockBuilder::new(None, 1, 100, 16)
-            .with_load_motif_net(vec![(PathBuf::from("motif"), Box::new(motif_params), Box::new(|| motif_module().expect("motif fixture")))])
-            .with_load_label_net(vec![(PathBuf::from("label"), 23, Box::new(label_params), Box::new(|| label_module(true).expect("label fixture")))])
-            .build()));
-        CudaWorker::run_worker(sock, &ws, HashMap::from([
-            (APPLY_MOTIF_NET_ENDPOINT.into(), Box::new(apply_motif_net_endpoint_init) as InitFn<dyn crate::motifs_ws::MotifsWorkspace>),
-            (APPLY_LABEL_NET_ENDPOINT.into(), Box::new(apply_label_net_endpoint_init) as InitFn<dyn crate::motifs_ws::MotifsWorkspace>),
-        ]), thoosa_common::tho_device::ThoDevice::from(1usize)).await
+    thoosa_common::ipc::tests::run_ipc_test(module_path!(), async { tokio::time::timeout(Duration::from_secs(90), round_trips()).await? }, async |sock| {
+        let ws = Arc::new(RwLock::new(
+            MotifsWsMockBuilder::new(None, 1, 100, 16)
+                .with_load_motif_net(vec![(PathBuf::from("motif"), Box::new(motif_params), Box::new(|| motif_module().expect("motif fixture")))])
+                .with_load_label_net(vec![(PathBuf::from("label"), 23, Box::new(label_params), Box::new(|| label_module(true).expect("label fixture")))])
+                .build(),
+        ));
+        CudaWorker::run_worker(
+            sock,
+            &ws,
+            HashMap::from([
+                (APPLY_MOTIF_NET_ENDPOINT.into(), Box::new(apply_motif_net_endpoint_init) as InitFn<dyn crate::motifs_ws::MotifsWorkspace>),
+                (APPLY_LABEL_NET_ENDPOINT.into(), Box::new(apply_label_net_endpoint_init) as InitFn<dyn crate::motifs_ws::MotifsWorkspace>),
+            ]),
+            thoosa_common::tho_device::ThoDevice::from(1usize),
+        )
+        .await
     })
 }

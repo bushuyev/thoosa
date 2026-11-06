@@ -18,9 +18,7 @@ pub struct BatchLengths {
 
 impl BatchLengths {
     pub fn new(lengths: Vec<i64>) -> Self {
-        Self {
-            lengths,
-        }
+        Self { lengths }
     }
 
     pub fn as_slice(&self) -> &[i64] {
@@ -61,7 +59,6 @@ impl<DX: Dims, DY: Dims, C: RunCtx, B: AsyncDataBatch<DX, DY, C>> AsyncDataBatch
     fn valid_batch_stream<'a>(&'a self, ctx: C) -> BoxStream<'a, Result<(ThoBatch<DX>, Option<BatchLengths>, ThoBatch<DY>), ThoError>> {
         self.as_ref().valid_batch_stream(ctx)
     }
-
 }
 
 // The stream owns the producer even before its first poll. Dropping a consumer
@@ -73,7 +70,9 @@ struct Prefetched<T> {
 
 impl<T> Drop for Prefetched<T> {
     fn drop(&mut self) {
-        if let Some(producer) = &self.producer { producer.abort(); }
+        if let Some(producer) = &self.producer {
+            producer.abort();
+        }
     }
 }
 
@@ -86,7 +85,9 @@ impl<T> futures::Stream for Prefetched<T> {
             std::task::Poll::Ready(None) => {}
             other => return other,
         }
-        let Some(producer) = this.producer.as_mut() else { return std::task::Poll::Ready(None); };
+        let Some(producer) = this.producer.as_mut() else {
+            return std::task::Poll::Ready(None);
+        };
         match std::pin::Pin::new(producer).poll(cx) {
             std::task::Poll::Pending => std::task::Poll::Pending,
             std::task::Poll::Ready(result) => {
@@ -103,23 +104,24 @@ where
     T: Send + 'static,
 {
     let (tx, rx) = tokio::sync::mpsc::channel(1);
-    let producer = tokio::spawn(async move {
-        futures_util::pin_mut!(source);
-        loop {
-            // Reserve before polling the source: capacity includes the batch being produced.
-            let Ok(permit) = t!(tx.reserve()).await else { break; };
-            match t!(source.next()).await {
-                Some(item) => { permit.send(item); }
-                None => break,
+    let producer = tokio::spawn(
+        async move {
+            futures_util::pin_mut!(source);
+            loop {
+                // Reserve before polling the source: capacity includes the batch being produced.
+                let Ok(permit) = t!(tx.reserve()).await else {
+                    break;
+                };
+                match t!(source.next()).await {
+                    Some(item) => {
+                        permit.send(item);
+                    }
+                    None => break,
+                }
             }
         }
-    }.instrument(tracing::info_span!(
-        "batches::preload_one",
-        kind = "spawn",
-        file = file!(),
-        line = line!(),
-        task = "preload one batch ahead",
-    )));
+        .instrument(tracing::info_span!("batches::preload_one", kind = "spawn", file = file!(), line = line!(), task = "preload one batch ahead",)),
+    );
     Prefetched { rx, producer: Some(producer) }.boxed()
 }
 
@@ -149,7 +151,9 @@ mod tests {
         use super::preload_one;
         for prefetch in [false, true] {
             let futures = (0..2).map(|index| async move {
-                if index == 1 { panic!("injected batch failure"); }
+                if index == 1 {
+                    panic!("injected batch failure");
+                }
                 Ok::<_, ThoError>(index)
             });
             let mut stream = if prefetch { prefetch_next_batch_stream(futures) } else { preload_one(futures_util::stream::iter(futures).then(|future| future)) };
@@ -181,8 +185,11 @@ mod tests {
             // No source item will ever arrive to wake a channel-only cancellation path.
             drop(stream);
             tokio::time::timeout(Duration::from_secs(5), async {
-                while weak.upgrade().is_some() { tokio::task::yield_now().await; }
-            }).await?;
+                while weak.upgrade().is_some() {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await?;
         }
         Ok(())
     }
@@ -199,11 +206,18 @@ mod tests {
         let mut stream = preload_one(source);
         // Let the producer fill its slot without consuming the first item.
         tokio::time::timeout(Duration::from_secs(5), async {
-            while started.load(Ordering::SeqCst) == 0 { tokio::task::yield_now().await; }
-        }).await?;
-        for _ in 0..10 { tokio::task::yield_now().await; }
+            while started.load(Ordering::SeqCst) == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
         assert_eq!(started.load(Ordering::SeqCst), 1);
-        for expected in 0..3 { assert_eq!(stream.next().await.expect("batch")?, expected); }
+        for expected in 0..3 {
+            assert_eq!(stream.next().await.expect("batch")?, expected);
+        }
         assert!(stream.next().await.is_none());
         Ok(())
     }
@@ -237,7 +251,9 @@ mod tests {
             while started.load(Ordering::SeqCst) < 2 {
                 tokio::task::yield_now().await;
             }
-        }).await.expect("second batch should start in background");
+        })
+        .await
+        .expect("second batch should start in background");
         tokio::time::sleep(Duration::from_millis(20)).await;
         assert_eq!(started.load(Ordering::SeqCst), 2);
 
@@ -311,8 +327,6 @@ pub mod mock_async_data_batch {
     }
 
     pub fn build<DX: Dims, DY: Dims, C: RunCtx>() -> MockAsyncDataBatchBuilder<DX, DY, C> {
-        MockAsyncDataBatchBuilder {
-            mock: Default::default(),
-        }
+        MockAsyncDataBatchBuilder { mock: Default::default() }
     }
 }

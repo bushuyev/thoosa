@@ -1,26 +1,26 @@
-use crate::runner::common::cachable::{CachedPurgeOutput};
+use crate::runner::common::cachable::CachedPurgeOutput;
 #[cfg(test)]
 use crate::runner::common::cachable::DevicesWrap;
 use async_trait::async_trait;
 use dashmap::DashMap;
-use futures_util::{StreamExt};
+use dashmap::mapref::multiple::RefMulti;
+use futures_util::StreamExt;
 use futures_util::stream;
 use log::{debug, info, trace, warn};
+use mockall::Any;
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::hash::Hash;
 #[cfg(test)]
 use std::sync::Arc;
-use dashmap::mapref::multiple::RefMulti;
-use mockall::Any;
 #[cfg(test)]
 use thoosa_shared::CopyToDevice;
 use thoosa_shared::ThoError;
-use thoosa_shared::traits::{CachableIdTr};
+use thoosa_shared::collect_futures_eta::{CollectEtaInvocationGuard, collect_eta_record_completion};
+use thoosa_shared::tracked_await::t;
+use thoosa_shared::traits::CachableIdTr;
 #[cfg(test)]
 use thoosa_shared::traits::Data;
-use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
-use thoosa_shared::tracked_await::t;
 
 pub const PURGE_GPU_CONCURRENCY_LIMIT: usize = 10;
 
@@ -78,34 +78,21 @@ where
 }
 
 #[async_trait]
-pub trait CachePurger: Debug  + Sync + Send {
+pub trait CachePurger: Debug + Sync + Send {
     async fn has_gpu_data(&self, _device_idx: usize) -> bool {
         false
     }
 
-    async fn purge_gpu(
-        &self,
-        _ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>,
-        _device_idx: usize,
-        _name: &str,
-    ) -> Result<(), ThoError> {
+    async fn purge_gpu(&self, _ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, _device_idx: usize, _name: &str) -> Result<(), ThoError> {
         Ok(())
     }
 
     // Recovery removes only the failed device's data; healthy replicas survive.
-    async fn drop_gpu(
-        &self,
-        _device_idx: usize,
-        _name: &str,
-    ) -> Result<(), ThoError> {
+    async fn drop_gpu(&self, _device_idx: usize, _name: &str) -> Result<(), ThoError> {
         Ok(())
     }
 
-    
-    async fn debug_gpu(
-        &self,
-        _device_idx: usize,
-    ) -> Result<u64, ThoError> {
+    async fn debug_gpu(&self, _device_idx: usize) -> Result<u64, ThoError> {
         Ok(0)
     }
 
@@ -114,9 +101,9 @@ pub trait CachePurger: Debug  + Sync + Send {
     }
 }
 
-pub fn check_ids_to_keep<K, V>(ids_to_keep:Option<&HashSet<&dyn CachableIdTr>>, entry:&RefMulti<K, V>)->bool
+pub fn check_ids_to_keep<K, V>(ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, entry: &RefMulti<K, V>) -> bool
 where
-    K:Eq + Hash + CachableIdTr
+    K: Eq + Hash + CachableIdTr,
 {
     ids_to_keep
         .map(|set| {
@@ -126,7 +113,7 @@ where
             let kd: &dyn CachableIdTr = entry.key();
             let keep_this_key = set.contains(kd);
             if keep_this_key {
-                info!("check_ids_to_keep: kd={kd:?}")//TODO remove info
+                info!("check_ids_to_keep: kd={kd:?}") //TODO remove info
             }
             !keep_this_key
         })
@@ -134,8 +121,7 @@ where
 }
 
 #[async_trait]
-impl<K, CO> CachePurger
-    for DashMap<K, thoosa_common::runner::common::cachable::CachedFuture<CO>>
+impl<K, CO> CachePurger for DashMap<K, thoosa_common::runner::common::cachable::CachedFuture<CO>>
 where
     K: CachableIdTr + Clone + Send + Sync + 'static + Eq + Hash,
     CO: CachedPurgeOutput + Debug,
@@ -150,13 +136,8 @@ where
         // and residency guards retain their allocations without Arc-count guesses.
         self.retain(|k, v| {
             debug!("FuturesRunnerMapPurger::purge_cpu: key={k:?}");
-            if !v.has_cache_users() && v.peek()
-                .and_then(|v| v.as_ref().map(|r| {
-                    r.is_on_cpu_before(purge_until)
-                }).ok())
-                .unwrap_or(false)
-            {
-                purged_count+=1;
+            if !v.has_cache_users() && v.peek().and_then(|v| v.as_ref().map(|r| r.is_on_cpu_before(purge_until)).ok()).unwrap_or(false) {
+                purged_count += 1;
                 debug!("FuturesRunnerMapPurger::purge_cpu: key={k:?} removed");
                 false
             } else {
@@ -167,66 +148,44 @@ where
         purged_count
     }
 
-    async fn purge_gpu(
-        &self,
-        ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>,
-        device_idx: usize,
-        name: &str,
-    ) -> Result<(), ThoError> {
+    async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize, name: &str) -> Result<(), ThoError> {
         debug!("FuturesRunnerMapPurger::purge_gpu: ids_to_keep={ids_to_keep:?}");
 
-        let items: Vec<(
-            K,
-            thoosa_common::runner::common::cachable::CachedFuture<CO>,
-        )> = self.iter()
-            .filter(|entry| {
-                check_ids_to_keep(ids_to_keep, entry)
-                && entry.value().peek().is_some()
-                && entry.value().peek().as_ref().map(|v|v.is_ok()).unwrap_or(false)
-            })
+        let items: Vec<(K, thoosa_common::runner::common::cachable::CachedFuture<CO>)> = self
+            .iter()
+            .filter(|entry| check_ids_to_keep(ids_to_keep, entry) && entry.value().peek().is_some() && entry.value().peek().as_ref().map(|v| v.is_ok()).unwrap_or(false))
             .map(|entry| (entry.key().clone(), entry.value().clone()))
             .collect();
 
         let dump_eta_guard = CollectEtaInvocationGuard::new(&format!("purge_gpu_{:?}", name), self.len(), 1);
         let dump_eta_guard_id = dump_eta_guard.id();
-        t!(stream::iter(items)
-
-            .for_each_concurrent(PURGE_GPU_CONCURRENCY_LIMIT, move |(key, fut)| async move {
-                match t!(fut).await {
-                    Ok(v) => {
-                        if let Err(e) = t!(v.dump_to_cpu(device_idx)).await {
-                            warn!("purge_gpu failed: key={key:?} err={e:?}");
-                        } else {
-                            debug!("purge_gpu ok: key={key:?}");
-                        }
+        t!(stream::iter(items).for_each_concurrent(PURGE_GPU_CONCURRENCY_LIMIT, move |(key, fut)| async move {
+            match t!(fut).await {
+                Ok(v) => {
+                    if let Err(e) = t!(v.dump_to_cpu(device_idx)).await {
+                        warn!("purge_gpu failed: key={key:?} err={e:?}");
+                    } else {
+                        debug!("purge_gpu ok: key={key:?}");
                     }
-                    Err(e) => {
-                        if e.is_oom() {
-                            debug!("purge_gpu: Err key={key:?} err={e:?}")
-                        } else {
-                            warn!("purge_gpu: Err key={key:?} err={e:?}")
-                        }
-                    },
                 }
-                collect_eta_record_completion(dump_eta_guard_id);
-            })).await;
+                Err(e) => {
+                    if e.is_oom() {
+                        debug!("purge_gpu: Err key={key:?} err={e:?}")
+                    } else {
+                        warn!("purge_gpu: Err key={key:?} err={e:?}")
+                    }
+                }
+            }
+            collect_eta_record_completion(dump_eta_guard_id);
+        }))
+        .await;
 
         Ok(())
     }
 
     // #[cfg(any(debug_assertions, tho_debug))]
     async fn debug_gpu(&self, device_idx: usize) -> Result<u64, ThoError> {
-        let items: Vec<(K, CO)> = self
-            .iter()
-            .filter_map(|entry| {
-                entry
-                    .value()
-                    .peek()
-                    .and_then(|value| value.as_ref().ok())
-                    .cloned()
-                    .map(|output| (entry.key().clone(), output))
-            })
-            .collect();
+        let items: Vec<(K, CO)> = self.iter().filter_map(|entry| entry.value().peek().and_then(|value| value.as_ref().ok()).cloned().map(|output| (entry.key().clone(), output))).collect();
 
         let mut gpu_size = 0;
         for (key, output) in items {
@@ -246,12 +205,7 @@ where
         info!("FuturesRunnerMapPurger::drop_gpu: running name={name:?}");
 
         //because of "implementation of `dashmap::Map` is not general enough"
-        let items: Vec<(
-            K,
-            thoosa_common::runner::common::cachable::CachedFuture<CO>,
-        )> = self.iter()
-            .map(|entry| (entry.key().clone(), entry.value().clone()))
-            .collect();
+        let items: Vec<(K, thoosa_common::runner::common::cachable::CachedFuture<CO>)> = self.iter().map(|entry| (entry.key().clone(), entry.value().clone())).collect();
 
         let dump_eta_guard = CollectEtaInvocationGuard::new(&format!("drop_gpu_{:?}", name), self.len(), 1);
         let dump_eta_guard_id = dump_eta_guard.id();
@@ -267,7 +221,7 @@ where
                 debug!("FuturesRunnerMapPurger::drop_gpu: running name={name:?} key={key:?} is_on_device={}", output.is_on_device(device_idx));
 
                 if output.is_on_device(device_idx) {
-                    let r= output.drop_device(device_idx).await;
+                    let r = output.drop_device(device_idx).await;
 
                     debug!("FuturesRunnerMapPurger::drop_gpu: running name={name:?} key={key:?} r={r:?}");
 
@@ -324,6 +278,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use async_trait::async_trait;
     use dashmap::DashMap;
     use futures_util::future::{FutureExt, ready};
@@ -331,7 +286,6 @@ mod tests {
     use std::time::Duration;
     use thoosa_shared::applicables_runner::Output;
     use thoosa_shared::traits::{CachableIdTr, DummyWithId as DummyCachableId, WithId};
-    use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
 
     #[tokio::test]
     async fn test_recovery_invalidates_only_affected_pending_cache_work_without_waiters() {
@@ -344,11 +298,16 @@ mod tests {
         let map: DashMap<DummyCachableId, CachedFuture<Wrapped>> = DashMap::new();
         let (started, started_rx) = tokio::sync::oneshot::channel();
         let failed_gate = Arc::clone(&first);
-        let failed = CachedFuture::for_device(async move {
-            let _activity = CudaActivityScope::for_operation(&failed_gate)?;
-            started.send(()).unwrap();
-            std::future::pending::<Result<Wrapped, ThoError>>().await
-        }.boxed().shared(), Some(Arc::clone(&first)));
+        let failed = CachedFuture::for_device(
+            async move {
+                let _activity = CudaActivityScope::for_operation(&failed_gate)?;
+                started.send(()).unwrap();
+                std::future::pending::<Result<Wrapped, ThoError>>().await
+            }
+            .boxed()
+            .shared(),
+            Some(Arc::clone(&first)),
+        );
         map.insert(DummyCachableId("failed"), failed.clone());
         let healthy = CachedFuture::for_device(std::future::pending::<Result<Wrapped, ThoError>>().boxed().shared(), Some(Arc::clone(&second)));
         map.insert(DummyCachableId("healthy"), healthy.clone());
@@ -373,19 +332,24 @@ mod tests {
         use crate::runner::common::cachable::CachedFuture;
         let gate = Arc::new(thoosa_shared::CudaActivityGate::new(1));
         let failing_gate = Arc::clone(&gate);
-        let future = CachedFuture::for_device(async move {
-            failing_gate.request_pause(ThoError::CudaBeingRecovered).unwrap();
-            Ok(42)
-        }.boxed().shared(), Some(Arc::clone(&gate)));
+        let future = CachedFuture::for_device(
+            async move {
+                failing_gate.request_pause(ThoError::CudaBeingRecovered).unwrap();
+                Ok(42)
+            }
+            .boxed()
+            .shared(),
+            Some(Arc::clone(&gate)),
+        );
         assert!(matches!(future.await.unwrap_err().what(), ThoError::CudaBeingRecovered));
         tokio::time::timeout(Duration::from_secs(2), gate.wait_until_idle()).await.unwrap();
     }
 
     #[tokio::test]
     async fn test_recovery_cache_cleanup_preserves_healthy_devices_and_pending_entries() {
+        use crate::ipc::worker_msg::CudaWorkerId;
         use crate::runner::global_ctx::{MockGlobalCtx, mock_global_ctx};
         use crate::tho_tensor::ThoTensor;
-        use crate::ipc::worker_msg::CudaWorkerId;
         use thoosa_shared::CudaDeviceGeneration;
         let global = MockGlobalCtx::global_context();
         let installed = MockGlobalCtx::is_installed_context();
@@ -393,7 +357,19 @@ mod tests {
         let mock = Box::leak(Box::new(mock_global_ctx::build().with_device_count(3).finish()));
         global.expect().return_const(&*mock);
         type Wrapped = Arc<DevicesWrap<ThoTensor<crate::dims::AnyDims, DummyCachableId>>>;
-        let tensor = |device, id| Arc::new(DevicesWrap::wrap(ThoTensor::new_ref(DummyCachableId(id), 42, vec![1], tch::Kind::Float, None, CudaWorkerId { device_idx: device, generation: CudaDeviceGeneration(0) })));
+        let tensor = |device, id| {
+            Arc::new(DevicesWrap::wrap(ThoTensor::new_ref(
+                DummyCachableId(id),
+                42,
+                vec![1],
+                tch::Kind::Float,
+                None,
+                CudaWorkerId {
+                    device_idx: device,
+                    generation: CudaDeviceGeneration(0),
+                },
+            )))
+        };
         let failed: Wrapped = tensor(1, "failed");
         let healthy: Wrapped = tensor(2, "healthy");
         let cpu: Wrapped = Arc::new(DevicesWrap::wrap(ThoTensor::new(DummyCachableId("cpu"), tch::Tensor::f_from_slice(&[1f32]).unwrap()).unwrap()));
@@ -444,11 +420,7 @@ mod tests {
             loop {
                 let prev = self.max_purge.load(Ordering::SeqCst);
                 if cur > prev {
-                    if self
-                        .max_purge
-                        .compare_exchange(prev, cur, Ordering::SeqCst, Ordering::SeqCst)
-                        .is_ok()
-                    {
+                    if self.max_purge.compare_exchange(prev, cur, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
                         break;
                     }
                 } else {
@@ -463,7 +435,6 @@ mod tests {
 
     impl Data for DummyOutput {
         type Metrics = [usize; 1];
-
 
         fn size(&self) -> Self::Metrics {
             [1]
@@ -485,17 +456,13 @@ mod tests {
         }
     }
 
-    impl Output for DummyOutput {  }
+    impl Output for DummyOutput {}
 
     #[tokio::test(flavor = "multi_thread")]
     async fn tasks_are_throttled_and_complete() -> Result<(), ThoError> {
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
 
-
-        let map: DashMap<
-            DummyCachableId,
-            thoosa_common::runner::common::cachable::CachedFuture<Arc<DevicesWrap<DummyOutput>>>,
-        > = DashMap::new();
+        let map: DashMap<DummyCachableId, thoosa_common::runner::common::cachable::CachedFuture<Arc<DevicesWrap<DummyOutput>>>> = DashMap::new();
 
         let futures_active = Arc::new(AtomicUsize::new(0));
         let max_futures = Arc::new(AtomicUsize::new(0));
@@ -505,8 +472,7 @@ mod tests {
 
         let total = PURGE_GPU_CONCURRENCY_LIMIT * 4;
         for i in 0..total {
-            let key: DummyCachableId =
-                DummyCachableId::from(format!("key_{i}").leak() as &'static str);
+            let key: DummyCachableId = DummyCachableId::from(format!("key_{i}").leak() as &'static str);
 
             let out = DummyOutput {
                 id: DummyCachableId::from(format!("out_{i}").leak() as &'static str),
@@ -522,10 +488,7 @@ mod tests {
                 loop {
                     let prev = max_c.load(Ordering::SeqCst);
                     if cur > prev {
-                        if max_c
-                            .compare_exchange(prev, cur, Ordering::SeqCst, Ordering::SeqCst)
-                            .is_ok()
-                        {
+                        if max_c.compare_exchange(prev, cur, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
                             break;
                         }
                     } else {
@@ -577,10 +540,7 @@ mod tests {
             max_purge,
         }));
 
-        let map: DashMap<
-            DummyCachableId,
-            thoosa_common::runner::common::cachable::CachedFuture<Arc<DevicesWrap<DummyOutput>>>,
-        > = DashMap::new();
+        let map: DashMap<DummyCachableId, thoosa_common::runner::common::cachable::CachedFuture<Arc<DevicesWrap<DummyOutput>>>> = DashMap::new();
         map.insert(keep_key.clone(), ready(Ok(Arc::clone(&keep_wrapper))).boxed().shared().into());
         map.insert(drop_key, ready(Ok(Arc::clone(&drop_wrapper))).boxed().shared().into());
 

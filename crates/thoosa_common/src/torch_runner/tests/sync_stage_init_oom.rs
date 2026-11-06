@@ -1,11 +1,11 @@
 use async_trait::async_trait;
-use parking_lot::{RwLock};
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use thoosa_shared::ThoError;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::traits::{MaxParallelCtx, Stage};
-use thoosa_shared::ThoError;
 
 use crate::ipc::cuda_wokrer::{AllTensors, WorkerStageInput, WorkerStageOutput};
 use crate::ipc::proxy::DynSyncStageEnum;
@@ -62,7 +62,10 @@ impl SyncStageInit<RunCtxImpl, DynSyncStageEnum<ConstructorStage, ConstructorIni
             return Err(ThoError::oom());
         }
         let workspace_max_input = ws.read().max_input();
-        Ok(Arc::new(DynSyncStageEnum::Local(Arc::new(ConstructorStage { max_other_parallel: run_context.max_other_parallel(), workspace_max_input }))))
+        Ok(Arc::new(DynSyncStageEnum::Local(Arc::new(ConstructorStage {
+            max_other_parallel: run_context.max_other_parallel(),
+            workspace_max_input,
+        }))))
     }
 }
 
@@ -72,17 +75,9 @@ async fn test_sync_stage_constructor_retries_after_run_context_adjustment() -> R
     let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1234)?));
     let calls = Arc::new(AtomicUsize::new(0));
     let sync_init = ConstructorInit { calls: Arc::clone(&calls) };
-    let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(
-        vec![Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(*MaxParallelStep::FAST)))],
-        None,
-    );
+    let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(vec![Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(*MaxParallelStep::FAST)))], None);
 
-    let stage: Arc<DynSyncStageEnum<ConstructorStage, ConstructorInit>> = oom_handler.new_stage(
-        sync_init,
-        RunCtxImpl::new(1, "sync_stage_init_oom"),
-        WithRunCtxContext::new(MaxParallelAdjustContextImpl::new()),
-        &ws,
-    ).await?;
+    let stage: Arc<DynSyncStageEnum<ConstructorStage, ConstructorInit>> = oom_handler.new_stage(sync_init, RunCtxImpl::new(1, "sync_stage_init_oom"), WithRunCtxContext::new(MaxParallelAdjustContextImpl::new()), &ws).await?;
 
     let DynSyncStageEnum::Local(stage) = stage.as_ref() else {
         return Err(ThoError::new("constructor test unexpectedly produced a proxy stage"));

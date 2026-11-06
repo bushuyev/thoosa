@@ -5,7 +5,6 @@ use std::fmt::Debug;
 use thoosa_shared::ThoError;
 pub mod cachable;
 
-
 #[derive(Debug)]
 pub enum DropIf {
     Always,
@@ -54,11 +53,10 @@ pub mod mock_run_ctx {
 
     pub struct MockRunCtxBuilder {
         mock: MockRunCtx,
-        device_idx: Option<usize>
+        device_idx: Option<usize>,
     }
 
     impl MockRunCtxBuilder {
-
         pub fn with_id(mut self, id: u32) -> Self {
             self.mock.expect_id().return_const(mono_key!(id, "mock_run_ctx"));
             self
@@ -75,42 +73,28 @@ pub mod mock_run_ctx {
             self
         }
 
-        pub fn with_add_purge_gpu_closure(mut self) -> Self{
+        pub fn with_add_purge_gpu_closure(mut self) -> Self {
             self.mock.expect_add_purge_gpu_closure().withf(|_cl| true).times(0..).returning(|_cl| ());
 
             self
         }
 
         pub fn with_set_max_other_parallel(mut self) -> Self {
-            self.mock.expect_set_max_other_parallel()
-                .with(always())
-                .return_const(());
+            self.mock.expect_set_max_other_parallel().with(always()).return_const(());
 
             self
         }
 
-
         pub fn with_branch(mut self, depth: u32) -> Self {
-            self.mock.expect_branch()
+            self.mock
+                .expect_branch()
                 // .with(always(), always())
-                .returning(move |_with_new_cache_area:bool| {
-
+                .returning(move |_with_new_cache_area: bool| {
                     debug!("with_branch: depth={depth}");
 
-                    let builder = build()
-                        .with_id(depth)
-                        .with_device_idx(self.device_idx.unwrap_or(0))
-                        .with_max_other_parallel(MAX_PARALLEL)
-                        .with_set_max_other_parallel()
-                        .with_add_purge_gpu_closure();
+                    let builder = build().with_id(depth).with_device_idx(self.device_idx.unwrap_or(0)).with_max_other_parallel(MAX_PARALLEL).with_set_max_other_parallel().with_add_purge_gpu_closure();
 
-                    if depth == 0 {
-                        builder.finish()
-                    } else {
-                        builder
-                        .with_branch(depth - 1)
-                        .finish()
-                    }
+                    if depth == 0 { builder.finish() } else { builder.with_branch(depth - 1).finish() }
                 });
 
             self
@@ -123,7 +107,7 @@ pub mod mock_run_ctx {
 
     pub fn build() -> MockRunCtxBuilder {
         let mock = super::MockRunCtx::new();
-        MockRunCtx::name_context().expect().return_const("MockRunCtx");//TODO return ctx
+        MockRunCtx::name_context().expect().return_const("MockRunCtx"); //TODO return ctx
         MockRunCtxBuilder { mock, device_idx: None }
     }
 
@@ -142,4 +126,3 @@ pub mod mock_run_ctx {
 }
 
 pub use mock_run_ctx::MockRunCtx;
-

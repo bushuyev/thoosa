@@ -76,7 +76,13 @@ where
     N: Debug,
 {
     fn new(target_dir: PathBuf, exported_model_run_config_ids: Vec<RunConfigId>, dependency_model_run_config_ids: Vec<RunConfigId>, copied_models: Vec<PathBuf>, converted: Vec<ConvertedNet<N>>) -> Self {
-        Self { target_dir, exported_model_run_config_ids, dependency_model_run_config_ids, copied_models, converted }
+        Self {
+            target_dir,
+            exported_model_run_config_ids,
+            dependency_model_run_config_ids,
+            copied_models,
+            converted,
+        }
     }
 
     pub fn target_dir(&self) -> &Path {
@@ -150,7 +156,12 @@ where
     S: ExportStore + ?Sized + 'static,
 {
     pub fn new(ws: &Arc<RwLock<Box<W>>>, store: &Arc<S>, args: ExportArgs) -> Self {
-        Self { ws: Arc::clone(ws), store: Arc::clone(store), args, pd: PhantomData }
+        Self {
+            ws: Arc::clone(ws),
+            store: Arc::clone(store),
+            args,
+            pd: PhantomData,
+        }
     }
 }
 
@@ -190,17 +201,18 @@ where
         t!(self.store.export_model_records(target_store_path, exported_model_run_config_ids.clone())).await?;
 
         let converted = if let Some(target_precision) = self.args.target_precision {
-            let output = t!(Arc::new(ConvertPrecisionStage::<C, W, W::ModelType>::new(
-                &target_ws,
-                ConvertPrecisionArgs::new(ConvertPrecisionBy::Type(W::all_model_type()), target_precision),
-            ))
-            .run(ConvertPrecisionInput::new(), ctx.branch(true))).await?;
+            let output = t!(Arc::new(ConvertPrecisionStage::<C, W, W::ModelType>::new(&target_ws, ConvertPrecisionArgs::new(ConvertPrecisionBy::Type(W::all_model_type()), target_precision),)).run(ConvertPrecisionInput::new(), ctx.branch(true))).await?;
             output.converted().to_vec()
         } else {
             Vec::new()
         };
 
-        info!("Export::run: exported target_dir={:?} exported_model_run_config_ids={exported_model_run_config_ids:?} dependency_model_run_config_ids={dependency_model_run_config_ids:?} copied_models={} converted={}", self.args.target_dir, copied_models.len(), converted.len());
+        info!(
+            "Export::run: exported target_dir={:?} exported_model_run_config_ids={exported_model_run_config_ids:?} dependency_model_run_config_ids={dependency_model_run_config_ids:?} copied_models={} converted={}",
+            self.args.target_dir,
+            copied_models.len(),
+            converted.len()
+        );
         Ok(Arc::new(ExportOutput::new(self.args.target_dir.clone(), exported_model_run_config_ids, dependency_model_run_config_ids, copied_models, converted)))
     }
 }

@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 #[cfg(any(debug_assertions, tho_debug))]
 use std::borrow::Cow;
 use std::fmt;
@@ -6,55 +7,47 @@ use std::hash::{Hash, Hasher};
 use std::ops::Add;
 use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;
-use serde::{Deserialize, Serialize};
-use thoosa_digest_id_derive::DigestHash;
+use thoosa_digest_id::DigestHash;
 use thoosa_named_derive::Named;
 use thoosa_shared::traits::DataId;
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Serialize, Deserialize)]
 pub enum ElvVal {
-    Path(PathBuf),//for LoadNet - so that it can be loaded by path in CudaWorker avoiding SqlStore there for getting path by net_id
+    Path(PathBuf), //for LoadNet - so that it can be loaded by path in CudaWorker avoiding SqlStore there for getting path by net_id
     Str(String),
     Num(usize),
     Bool(bool),
-    DigestHash(blake3::Hash)
+    DigestHash(blake3::Hash),
 }
 
-impl ::thoosa_digest_id::DigestHash for ElvVal
-{
-    fn update_digest(&self, __digest_hasher: &mut ::thoosa_digest_id::blake3::Hasher ) {
-        ::thoosa_digest_id::__private::begin_enum(__digest_hasher, "thoosa.ElvVal:v1" );
+impl DigestHash for ElvVal {
+    fn update_digest(&self, digest_hasher: &mut blake3::Hasher) {
+        ::thoosa_digest_id::inner::begin_enum(digest_hasher, "thoosa.ElvVal:v1");
         match self {
             Self::Path(__digest_field_0) => {
-                ::thoosa_digest_id::__private::variant(__digest_hasher, "Path", 1usize );
-                ::thoosa_digest_id::__private::field(__digest_hasher, "0",
-                );
-                // <&str as ::thoosa_digest_id::DigestHash>::update_digest(__digest_field_0.as_os_str().as_bytes(), __digest_hasher );
-                __digest_hasher.update(&__digest_field_0.as_os_str().as_bytes());
+                ::thoosa_digest_id::inner::variant(digest_hasher, "Path", 1usize);
+                ::thoosa_digest_id::inner::field(digest_hasher, "0");
+                digest_hasher.update(&__digest_field_0.as_os_str().as_bytes());
             }
             Self::Str(__digest_field_0) => {
-                ::thoosa_digest_id::__private::variant(__digest_hasher, "Str", 1usize );
-                ::thoosa_digest_id::__private::field(__digest_hasher, "0",
-                );
-                <String as ::thoosa_digest_id::DigestHash>::update_digest(__digest_field_0, __digest_hasher );
+                ::thoosa_digest_id::inner::variant(digest_hasher, "Str", 1usize);
+                ::thoosa_digest_id::inner::field(digest_hasher, "0");
+                <String as ::thoosa_digest_id::DigestHash>::update_digest(__digest_field_0, digest_hasher);
             }
             Self::Num(__digest_field_0) => {
-                ::thoosa_digest_id::__private::variant(__digest_hasher, "Num", 1usize );
-                ::thoosa_digest_id::__private::field(__digest_hasher, "0",
-                );
-                <usize as ::thoosa_digest_id::DigestHash>::update_digest(__digest_field_0, __digest_hasher );
+                ::thoosa_digest_id::inner::variant(digest_hasher, "Num", 1usize);
+                ::thoosa_digest_id::inner::field(digest_hasher, "0");
+                <usize as ::thoosa_digest_id::DigestHash>::update_digest(__digest_field_0, digest_hasher);
             }
             Self::Bool(__digest_field_0) => {
-                ::thoosa_digest_id::__private::variant(__digest_hasher, "Bool", 1usize );
-                ::thoosa_digest_id::__private::field(__digest_hasher, "0",
-                );
-                <bool as ::thoosa_digest_id::DigestHash>::update_digest(__digest_field_0, __digest_hasher );
+                ::thoosa_digest_id::inner::variant(digest_hasher, "Bool", 1usize);
+                ::thoosa_digest_id::inner::field(digest_hasher, "0");
+                <bool as ::thoosa_digest_id::DigestHash>::update_digest(__digest_field_0, digest_hasher);
             }
-            Self::DigestHash(__digest_field_0)
-            => {
-                ::thoosa_digest_id::__private::variant(__digest_hasher, "DigestHash", 1usize );
-                ::thoosa_digest_id::__private::field(__digest_hasher, "0" );
-                __digest_hasher.update(&__digest_field_0.as_slice());
+            Self::DigestHash(__digest_field_0) => {
+                ::thoosa_digest_id::inner::variant(digest_hasher, "DigestHash", 1usize);
+                ::thoosa_digest_id::inner::field(digest_hasher, "0");
+                digest_hasher.update(&__digest_field_0.as_slice());
             }
         }
     }
@@ -103,7 +96,6 @@ impl TryFrom<i32> for ElvVal {
     }
 }
 
-
 impl From<String> for ElvVal {
     fn from(value: String) -> Self {
         ElvVal::Str(value)
@@ -134,7 +126,6 @@ impl From<blake3::Hash> for ElvVal {
     }
 }
 
-
 #[derive(Debug, Clone, DigestHash, Named, Serialize, Deserialize)]
 #[digest(tag = "thoosa.MonoKey:v1")]
 pub struct MonoKey {
@@ -146,7 +137,6 @@ pub struct MonoKey {
 
 impl Display for MonoKey {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-       
         write!(f, "{}", self.val)?;
 
         Ok(())
@@ -164,10 +154,7 @@ impl From<&str> for MonoKey {
 }
 
 impl MonoKey {
-    pub fn new(
-        val: ElvVal,
-        #[cfg(any(debug_assertions, tho_debug))] name: Cow<'static, str>,
-    ) -> Self {
+    pub fn new(val: ElvVal, #[cfg(any(debug_assertions, tho_debug))] name: Cow<'static, str>) -> Self {
         Self {
             val,
             #[cfg(any(debug_assertions, tho_debug))]
@@ -194,10 +181,7 @@ macro_rules! mono_key {
     ($val:expr, $name:literal $(,)?) => {{
         #[cfg(any(debug_assertions, tho_debug))]
         {
-            thoosa_shared::comp_id::MonoKey::new(
-                ($val).into(),
-                ::std::borrow::Cow::Borrowed($name),
-            )
+            thoosa_shared::comp_id::MonoKey::new(($val).into(), ::std::borrow::Cow::Borrowed($name))
         }
         #[cfg(not(any(debug_assertions, tho_debug)))]
         {
@@ -208,10 +192,7 @@ macro_rules! mono_key {
     ($val:expr, $name:expr $(,)?) => {{
         #[cfg(any(debug_assertions, tho_debug))]
         {
-            thoosa_shared::comp_id::MonoKey::new(
-                ($val).into(),
-                ::std::borrow::Cow::Owned(::std::string::String::from($name)),
-            )
+            thoosa_shared::comp_id::MonoKey::new(($val).into(), ::std::borrow::Cow::Owned(::std::string::String::from($name)))
         }
         #[cfg(not(any(debug_assertions, tho_debug)))]
         {
@@ -233,15 +214,15 @@ impl Hash for MonoKey {
     }
 }
 
-
 /// ✅ Dynamic-length key, stored as a boxed slice (one allocation, no capacity slack).
 #[derive(Eq, PartialEq, Hash, Clone, DigestHash, Named, Serialize, Deserialize)]
 #[digest(tag = "thoosa.SynKey:v1")]
-pub struct SynKey {//σύνθετος
+pub struct SynKey {
+    //σύνθετος
     pub vals: Box<[MonoKey]>,
 }
 
-impl Display for SynKey{
+impl Display for SynKey {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         for val in self.vals.iter() {
             write!(f, "/{}", val)?;
@@ -270,7 +251,7 @@ fn fmt_elv_val(val: &ElvVal, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         ElvVal::Str(value) => write!(f, "{value}"),
         ElvVal::Bool(value) => write!(f, "{value}"),
         ElvVal::Path(value) => write!(f, "{}", value.to_string_lossy()),
-        ElvVal::DigestHash(value) => write!(f, "{value}")
+        ElvVal::DigestHash(value) => write!(f, "{value}"),
     }
 }
 
@@ -310,7 +291,7 @@ fn fmt_mono_key(mono: &MonoKey, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 }
 
 impl SynKey {
-    pub fn new<I:Into<Box<[MonoKey]>>>(vals: I) -> Self {
+    pub fn new<I: Into<Box<[MonoKey]>>>(vals: I) -> Self {
         Self { vals: vals.into() }
     }
 
@@ -352,17 +333,13 @@ impl From<MonoKey> for SynKey {
 
 impl From<&str> for SynKey {
     fn from(value: &str) -> Self {
-        Self {
-            vals: Box::new([mono_key!(value, value)])
-        }
+        Self { vals: Box::new([mono_key!(value, value)]) }
     }
 }
 
 impl From<String> for SynKey {
     fn from(value: String) -> Self {
-        Self {
-            vals: Box::new([mono_key!(value.clone(), value)])
-        }
+        Self { vals: Box::new([mono_key!(value.clone(), value)]) }
     }
 }
 
@@ -411,17 +388,11 @@ impl Add<MonoKey> for &SynKey {
     }
 }
 
-
 impl Add<&MonoKey> for MonoKey {
     type Output = SynKey;
 
     fn add(self, rhs: &MonoKey) -> Self::Output {
-        SynKey {
-            vals: Box::new([
-                self,
-                rhs.clone()
-            ]),
-        }
+        SynKey { vals: Box::new([self, rhs.clone()]) }
     }
 }
 
@@ -429,29 +400,17 @@ impl Add<MonoKey> for MonoKey {
     type Output = SynKey;
 
     fn add(self, rhs: MonoKey) -> Self::Output {
-        SynKey {
-            vals: Box::new([
-                self.clone(),
-                rhs
-            ]),
-        }
+        SynKey { vals: Box::new([self.clone(), rhs]) }
     }
 }
-
 
 impl Add<MonoKey> for &MonoKey {
     type Output = SynKey;
 
     fn add(self, rhs: MonoKey) -> Self::Output {
-        SynKey {
-            vals: Box::new([
-                self.clone(),
-                rhs
-            ]),
-        }
+        SynKey { vals: Box::new([self.clone(), rhs]) }
     }
 }
-
 
 impl Add<&SynKey> for &MonoKey {
     type Output = SynKey;
@@ -475,8 +434,6 @@ impl Add<&SynKey> for MonoKey {
     }
 }
 
-
-
 impl From<(u32, &str)> for SynKey {
     fn from(value: (u32, &str)) -> Self {
         SynKey::from([mono_key!(value.0, value.1)])
@@ -484,14 +441,11 @@ impl From<(u32, &str)> for SynKey {
 }
 
 pub mod hashmap_as_vec {
-    use std::collections::HashMap;
-    use serde::{Deserializer, Serializer};
     use super::*;
+    use serde::{Deserializer, Serializer};
+    use std::collections::HashMap;
 
-    pub fn serialize<S, K, V>(
-        value: &HashMap<K, V>,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error>
+    pub fn serialize<S, K, V>(value: &HashMap<K, V>, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
         K: Serialize,
@@ -500,9 +454,7 @@ pub mod hashmap_as_vec {
         value.iter().collect::<Vec<_>>().serialize(serializer)
     }
 
-    pub fn deserialize<'de, D, K, V>(
-        deserializer: D,
-    ) -> Result<HashMap<K, V>, D::Error>
+    pub fn deserialize<'de, D, K, V>(deserializer: D) -> Result<HashMap<K, V>, D::Error>
     where
         D: Deserializer<'de>,
         K: Deserialize<'de> + Eq + Hash,
@@ -525,8 +477,8 @@ mod tests {
         assert_eq!(key.len(), 2);
     }
 
-    use log::debug;
     use crate::comp_id::SynKey;
+    use log::debug;
 
     #[ctor::ctor]
     fn init() {
@@ -558,13 +510,6 @@ mod tests {
         let key_c = &key_a + &key_b;
         debug!("key_c={key_c:?}");
 
-        assert_eq!(
-            key_c.as_slice(),
-            &[
-                mono_key!(0u32, "key1"),
-                mono_key!(1u32, "key2"),
-                mono_key!(2u32, "key3"),
-            ]
-        );
+        assert_eq!(key_c.as_slice(), &[mono_key!(0u32, "key1"), mono_key!(1u32, "key2"), mono_key!(2u32, "key3"),]);
     }
 }

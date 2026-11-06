@@ -11,12 +11,6 @@ use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
 
 use tokio::net::UnixStream;
 
-
-
-
-
-
-
 /// Sends one duplicated reference to `fd` over a connected Unix domain socket.
 pub async fn send_fd(stream: &UnixStream, fd: BorrowedFd<'_>) -> io::Result<()> {
     loop {
@@ -41,7 +35,10 @@ pub async fn recv_fd(stream: &UnixStream) -> io::Result<OwnedFd> {
 
 pub fn send_fd_once(socket_fd: RawFd, fd: RawFd) -> io::Result<()> {
     let marker = [0x46u8];
-    let mut iov = libc::iovec { iov_base: marker.as_ptr().cast_mut().cast::<c_void>(), iov_len: marker.len() };
+    let mut iov = libc::iovec {
+        iov_base: marker.as_ptr().cast_mut().cast::<c_void>(),
+        iov_len: marker.len(),
+    };
     let control_len = unsafe {
         // SAFETY: CMSG_SPACE is a pure size calculation.
         libc::CMSG_SPACE(size_of::<libc::c_int>() as u32) as usize
@@ -79,7 +76,10 @@ pub fn send_fd_once(socket_fd: RawFd, fd: RawFd) -> io::Result<()> {
 
 fn recv_fd_once(socket_fd: RawFd) -> io::Result<OwnedFd> {
     let mut marker = [0u8; 1];
-    let mut iov = libc::iovec { iov_base: marker.as_mut_ptr().cast::<c_void>(), iov_len: marker.len() };
+    let mut iov = libc::iovec {
+        iov_base: marker.as_mut_ptr().cast::<c_void>(),
+        iov_len: marker.len(),
+    };
     let control_len = unsafe {
         // SAFETY: CMSG_SPACE is a pure size calculation.
         libc::CMSG_SPACE(size_of::<libc::c_int>() as u32) as usize

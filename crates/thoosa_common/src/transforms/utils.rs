@@ -20,9 +20,7 @@ pub fn complex_conv(signal: &Tensor, wavelet_real: &Tensor, wavelet_imag: &Tenso
     let conv_real = signal.conv1d(&w_real, None::<Tensor>, 1, 1, 1, 1);
     let conv_imag = signal.conv1d(&w_imag, None::<Tensor>, 1, 1, 1, 1);
 
-    (conv_real.pow_tensor_scalar(2.0) + conv_imag.pow_tensor_scalar(2.0))
-        .sqrt()
-        .squeeze()
+    (conv_real.pow_tensor_scalar(2.0) + conv_imag.pow_tensor_scalar(2.0)).sqrt().squeeze()
 }
 
 pub fn sin_t(t: &Tensor, fr: f64) -> Tensor {

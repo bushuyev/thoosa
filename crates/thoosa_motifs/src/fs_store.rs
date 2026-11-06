@@ -1,9 +1,10 @@
-use crate::motif_tracker_store::{filter_groups_by_slices_count, IdSlice, MotifTrackerStore, SlicesMatch};
+use crate::motif_tracker_store::{IdSlice, MotifTrackerStore, SlicesMatch, filter_groups_by_slices_count};
 use crate::motifs_store::MotifsStore;
-use async_trait::async_trait;
 use anyhow::Context;
+use async_trait::async_trait;
 use bytemuck::{AnyBitPattern, Pod};
 use log::{debug, trace};
+use parking_lot::Mutex;
 use std::convert::TryInto;
 use std::fmt::{Debug, Formatter};
 use std::fs::File;
@@ -12,10 +13,9 @@ use std::io::{BufReader, Read, Seek, SeekFrom, Write};
 use std::marker::PhantomData;
 use std::mem::size_of;
 use std::path::{Path, PathBuf};
-use thoosa_shared::run_configs::RunConfigId;
-use thoosa_shared::group_slices_try;
 use std::sync::Arc;
-use parking_lot::Mutex;
+use thoosa_shared::group_slices_try;
+use thoosa_shared::run_configs::RunConfigId;
 use zstd::stream::write::Encoder;
 
 const FILE_MAGIC: [u8; 8] = *b"THOSCHNK";
@@ -128,11 +128,7 @@ pub struct FileMotifTrackerStore {
 
 impl Debug for FileMotifTrackerStore {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("FileMotifTrackerStore")
-            .field("run_config_id", &self.run_config_id)
-            .field("channel", &self.channel)
-            .field("path", &self.path)
-            .finish()
+        f.debug_struct("FileMotifTrackerStore").field("run_config_id", &self.run_config_id).field("channel", &self.channel).field("path", &self.path).finish()
     }
 }
 
@@ -178,21 +174,24 @@ impl MotifTrackerStore for FileMotifTrackerStore {
             let writer = writer.lock();
             writer.shutdown()?;
             let mut slice_id = 0u32;
-            let pairs = ChunkedSlicesReader::<SlicesMatch>::new(&path)?.flat_map(|chunk| -> Box<dyn Iterator<Item = io::Result<SlicesMatch>>> {
-                match chunk {
-                    Ok(chunk) => Box::new(chunk.into_iter().map(Ok)),
-                    Err(error) => Box::new(std::iter::once(Err(error))),
-                }
-            }).map(|pair| {
-                let pair = pair?;
-                slice_id = slice_id.checked_add(1).ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "too many slice pairs"))?;
-                Ok::<_, io::Error>((IdSlice(slice_id, pair.0.0, pair.0.1), IdSlice(slice_id, pair.1.0, pair.1.1)))
-            });
+            let pairs = ChunkedSlicesReader::<SlicesMatch>::new(&path)?
+                .flat_map(|chunk| -> Box<dyn Iterator<Item = io::Result<SlicesMatch>>> {
+                    match chunk {
+                        Ok(chunk) => Box::new(chunk.into_iter().map(Ok)),
+                        Err(error) => Box::new(std::iter::once(Err(error))),
+                    }
+                })
+                .map(|pair| {
+                    let pair = pair?;
+                    slice_id = slice_id.checked_add(1).ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "too many slice pairs"))?;
+                    Ok::<_, io::Error>((IdSlice(slice_id, pair.0.0, pair.0.1), IdSlice(slice_id, pair.1.0, pair.1.1)))
+                });
             let groups = group_slices_try(pairs)?;
             Ok((groups.len(), filter_groups_by_slices_count(min_slices_counts, max_slices_counts, groups)))
-        }).await?
-            // Keep the original I/O error available for downcasting while identifying its file.
-            .with_context(|| format!("loading motif slice groups from {}", self.path.display()))?;
+        })
+        .await?
+        // Keep the original I/O error available for downcasting while identifying its file.
+        .with_context(|| format!("loading motif slice groups from {}", self.path.display()))?;
         let motif_ids = store.save_groups_as_motifs(self.run_config_id, self.channel as i64, groups).await?;
 
         debug!("MotifTrackerStore::load_slices_into_groups: motif_ids={motif_ids:?}");
@@ -261,17 +260,16 @@ impl<T: AnyBitPattern> Iterator for ChunkedSlicesReader<T> {
                 Ok(0) if read == 0 => {
                     debug!("ChunkedSlicesReader::next: end of chunk stream self.file_path={:?}", self.file_path);
 
-                    return None
-                },
+                    return None;
+                }
                 Ok(0) => {
-
                     return Some(Err(io::Error::new(io::ErrorKind::UnexpectedEof, "truncated chunk header")));
                 }
                 Ok(n) => {
                     trace!("ChunkedSlicesReader::next: read {n} bytes from {:?}", self.file_path);
 
                     read += n
-                },
+                }
                 Err(e) => return Some(Err(e)),
             }
         }
@@ -280,7 +278,6 @@ impl<T: AnyBitPattern> Iterator for ChunkedSlicesReader<T> {
     }
 }
 
-
 impl<T: AnyBitPattern> ChunkedSlicesReader<T> {
     fn read_chunk(&mut self, header: [u8; CHUNK_HEADER_SIZE]) -> io::Result<Vec<T>> {
         let decompressed_len = u64::from_le_bytes(header[0..8].try_into().unwrap());
@@ -288,9 +285,7 @@ impl<T: AnyBitPattern> ChunkedSlicesReader<T> {
         let compressed_len = u64::from_le_bytes(header[16..24].try_into().unwrap());
         let element_size = size_of::<T>() as u64;
         // Validate all header relationships before allocating or entering zstd.
-        if element_size == 0 || item_count == 0 || decompressed_len > MAX_CHUNK_BYTES as u64
-            || item_count.checked_mul(element_size) != Some(decompressed_len)
-            || compressed_len == 0 || compressed_len > MAX_COMPRESSED_BYTES as u64 {
+        if element_size == 0 || item_count == 0 || decompressed_len > MAX_CHUNK_BYTES as u64 || item_count.checked_mul(element_size) != Some(decompressed_len) || compressed_len == 0 || compressed_len > MAX_COMPRESSED_BYTES as u64 {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "invalid or oversized slice chunk"));
         }
         let remaining = self.reader.get_ref().metadata()?.len().saturating_sub(self.reader.stream_position()?);
@@ -312,8 +307,7 @@ impl<T: AnyBitPattern> ChunkedSlicesReader<T> {
         if decompressed.len() != decompressed_len {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "unexpected decompressed chunk length"));
         }
-        bytemuck::try_cast_slice(&decompressed).map(|slice: &[T]| slice.to_vec())
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, format!("invalid slice payload: {error}")))
+        bytemuck::try_cast_slice(&decompressed).map(|slice: &[T]| slice.to_vec()).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, format!("invalid slice payload: {error}")))
     }
 }
 
@@ -335,12 +329,16 @@ mod tests {
             file.write_all(&FILE_MAGIC)?;
             file.write_all(&FILE_VERSION.to_le_bytes())?;
             file.write_all(&[0; 4])?;
-            for value in [decoded, count, compressed_len] { file.write_all(&value.to_le_bytes())?; }
+            for value in [decoded, count, compressed_len] {
+                file.write_all(&value.to_le_bytes())?;
+            }
             file.write_all(payload)
         }
     }
     impl Drop for TestFile {
-        fn drop(&mut self) { let _ = std::fs::remove_file(&self.0); }
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
     }
 
     #[tokio::test]
@@ -355,13 +353,17 @@ mod tests {
                 writer: Arc::new(Mutex::new(ChunkedWriter::new(file, 1)?)),
                 path: path.0.clone(),
             };
-            if case == "truncated header" { tracker.writer.lock().file.set_len(16 + 8)?; }
+            if case == "truncated header" {
+                tracker.writer.lock().file.set_len(16 + 8)?;
+            }
             // No save expectation: malformed input must return its path and original
             // I/O cause, without persisting partial groups or removing the source file.
             let store = crate::motifs_store::MockMotifsStoreBuilder::new().build();
             let error = tracker.load_slices_into_groups(store.as_ref(), None, None).await.unwrap_err();
             let source = error.downcast_ref::<io::Error>().expect("original I/O error");
-            if case != "corrupt payload" { assert_eq!(source.kind(), io::ErrorKind::UnexpectedEof, "{case}"); }
+            if case != "corrupt payload" {
+                assert_eq!(source.kind(), io::ErrorKind::UnexpectedEof, "{case}");
+            }
             assert!(error.to_string().contains(&path.0.display().to_string()), "missing path for {case}: {error:#}");
             assert!(path.0.exists(), "source file must be retained for {case}");
         }

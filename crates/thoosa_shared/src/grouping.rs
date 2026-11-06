@@ -1,8 +1,8 @@
 //! Connected components of similar motif slices, including fallible file input.
+use log::trace;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::hash::Hash;
-use log::trace;
 
 struct GroupSlicesBuilder<T> {
     pairs_groups: HashMap<T, usize>,
@@ -33,8 +33,12 @@ where
                 let b = self.root(b);
                 self.parents[a.max(b)] = a.min(b);
             }
-            (Some(group), None) => { self.pairs_groups.insert(pair.1, group); }
-            (None, Some(group)) => { self.pairs_groups.insert(pair.0, group); }
+            (Some(group), None) => {
+                self.pairs_groups.insert(pair.1, group);
+            }
+            (None, Some(group)) => {
+                self.pairs_groups.insert(pair.0, group);
+            }
             (None, None) => {
                 // IDs index allocated storage, so they cannot wrap independently of capacity.
                 let group = self.parents.len();
@@ -55,7 +59,8 @@ where
 }
 
 //group of similar slices - motif
-pub fn group_slices<T>(pairs: impl Iterator<Item = (T, T)>) -> HashMap<usize, HashSet<T>> //TODO replace with group_slices_try
+pub fn group_slices<T>(pairs: impl Iterator<Item = (T, T)>) -> HashMap<usize, HashSet<T>>
+//TODO replace with group_slices_try
 where
     T: Hash + Eq + Debug,
 {
@@ -67,9 +72,7 @@ where
     builder.finish()
 }
 
-pub fn group_slices_try<T, E>(
-    pairs: impl Iterator<Item = Result<(T, T), E>>,
-) -> Result<HashMap<usize, HashSet<T>>, E>
+pub fn group_slices_try<T, E>(pairs: impl Iterator<Item = Result<(T, T), E>>) -> Result<HashMap<usize, HashSet<T>>, E>
 where
     T: Hash + Eq + Debug,
 {
@@ -81,4 +84,3 @@ where
     }
     Ok(builder.finish())
 }
-

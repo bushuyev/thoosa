@@ -1,5 +1,5 @@
-use std::cmp::min;
 use async_trait::async_trait;
+use std::cmp::min;
 use thoosa_common::runner::adjusters::max_parallel::MAX_PARALLEL;
 use thoosa_common::runner::global_ctx::{GlobalCtx, RegisteredCacheHandle};
 use thoosa_shared::traits::MaxParallelCtx;
@@ -24,66 +24,59 @@ use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::utils::TrainListener;
 use thoosa_cpu_data_derive::CpuData;
 use thoosa_properties_map::ToHashmap;
+use thoosa_shared::ThoError;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::collect_futures_eta::{CollectEtaInvocationGuard, collect_eta_record_completion};
 use thoosa_shared::hyperparameter::FieldName;
+use thoosa_shared::now_ms;
 use thoosa_shared::run_configs::RunConfig;
 use thoosa_shared::tmp_file::TmpFile;
 use thoosa_shared::tracked_await::t;
 use thoosa_shared::traits::{Adjustable, AsyncStage, RunCtx, Stage};
 use thoosa_shared::val::NamedVal;
-use thoosa_shared::ThoError;
-use thoosa_shared::now_ms;
 use tracing::Instrument;
 
 #[derive(Debug, CpuData)]
 #[cpu_data(shallow)]
-pub struct TrainNetInput{
-}
+pub struct TrainNetInput {}
 
 impl TrainNetInput {
     pub fn new() -> Self {
-        Self {  }
+        Self {}
     }
 }
-impl Input for TrainNetInput {
-
-}
-
-
+impl Input for TrainNetInput {}
 
 #[derive(Debug, CpuData)]
 #[cpu_data(shallow)]
 pub struct TrainNetOutput<N, R>
 where
-    N:Debug + Send + Sync + 'static,
-    R:Debug + Send + Sync + 'static,
+    N: Debug + Send + Sync + 'static,
+    R: Debug + Send + Sync + 'static,
 {
     // The worker saves weights directly; only the temporary path crosses back
     // into the async orchestration and result-saving layers.
     pub var_store_path: TmpFile,
-    pub node_params:N,
-    pub run_config:R,
-    pub min_loss:f32
+    pub node_params: N,
+    pub run_config: R,
+    pub min_loss: f32,
 }
 
 impl<N, R> TrainNetOutput<N, R>
 where
-    N:Debug + Send + Sync + 'static,
-    R:Debug + Send + Sync + 'static,
+    N: Debug + Send + Sync + 'static,
+    R: Debug + Send + Sync + 'static,
 {
-    pub fn new(var_store_path: TmpFile, node_params: N, run_config: R, min_loss:f32) -> Self {
-        Self {  var_store_path, node_params, run_config, min_loss }
+    pub fn new(var_store_path: TmpFile, node_params: N, run_config: R, min_loss: f32) -> Self {
+        Self { var_store_path, node_params, run_config, min_loss }
     }
 }
 
-
 impl<N, R> Output for TrainNetOutput<N, R>
 where
-    N:Debug + Send + Sync + 'static,
-    R:Debug + Send + Sync + 'static,
+    N: Debug + Send + Sync + 'static,
+    R: Debug + Send + Sync + 'static,
 {
-
 }
 
 #[async_trait]
@@ -112,10 +105,14 @@ where
     F: FnMut() -> Fut,
     Fut: Future<Output = Result<T, ThoError>>,
 {
-    let Some(gate) = gate else { return train().await; };
+    let Some(gate) = gate else {
+        return train().await;
+    };
     // An admitted ancestor must unwind before recovery can finish. Only the
     // outer async trial, which owns no CUDA activity, can wait and retry safely.
-    if thoosa_shared::CudaActivityScope::current().is_some() { return train().await; }
+    if thoosa_shared::CudaActivityScope::current().is_some() {
+        return train().await;
+    }
     loop {
         gate.wait_if_paused().await?;
         let generation = gate.device_generation();
@@ -137,7 +134,9 @@ where
                 // A reset is not a bad hyperparameter trial: rebuild all state
                 // on the replacement worker before publishing any loss to TPE.
                 gate.wait_if_paused().await?;
-                if gate.device_generation() == generation { return Err(error); }
+                if gate.device_generation() == generation {
+                    return Err(error);
+                }
                 warn!("Retrying training trial after CUDA device {} recovered from generation {}: {error:#}", gate.device_idx(), generation.0);
             }
             result => return result,
@@ -150,22 +149,22 @@ where
     C: RunCtx + Adjustable + 'static,
     DX: Dims + 'static,
     DY: Dims + 'static,
-    B:AsyncDataBatch<DX, DY, C> + 'static,
-    BF:Fn(C, &RC)->BoxFuture<Result<B, ThoError>> +  Send + Sync + 'static,
+    B: AsyncDataBatch<DX, DY, C> + 'static,
+    BF: Fn(C, &RC) -> BoxFuture<Result<B, ThoError>> + Send + Sync + 'static,
     P: FieldName + Send + Sync + 'static,
     RC: RunConfig + TryFrom<std::vec::IntoIter<NamedVal<P>>, Error = anyhow::Error> + Clone + Send + Sync + 'static + AsRef<CommonTrainingRunConfig>,
     NP: Default + Debug + Send + Sync + 'static,
     FC: Fn(&RC) -> u32 + Send + Sync + 'static,
 {
-    batch:BF,
+    batch: BF,
     train_step_factory: Arc<dyn TrainStepFactory<DX, DY, C, NP, RC>>,
-    opt_config:Arc<OptConfig>,
-    run_config_source: Arc<thoosa_shared::run_configs::TrainingRunConfigs<P> >,
-    epochs:FC,
+    opt_config: Arc<OptConfig>,
+    run_config_source: Arc<thoosa_shared::run_configs::TrainingRunConfigs<P>>,
+    epochs: FC,
     validation_step: u32,
-    descr:String,
+    descr: String,
     reusable_completed_trials: Vec<CompletedTrial>,
-    pd:PhantomData<(C, DX, DY, BF, P, RC)>
+    pd: PhantomData<(C, DX, DY, BF, P, RC)>,
 }
 
 impl<C, B, BF, DX, DY, P, RC, NP, FC> Debug for TrainNet<C, B, BF, DX, DY, P, RC, NP, FC>
@@ -173,8 +172,8 @@ where
     C: RunCtx + Adjustable + 'static,
     DX: Dims + 'static,
     DY: Dims + 'static,
-    B:AsyncDataBatch<DX, DY, C> + 'static,
-    BF:Fn(C, &RC)->BoxFuture<Result<B, ThoError>> +  Send + Sync + 'static,
+    B: AsyncDataBatch<DX, DY, C> + 'static,
+    BF: Fn(C, &RC) -> BoxFuture<Result<B, ThoError>> + Send + Sync + 'static,
     P: FieldName + Send + Sync + 'static,
     RC: RunConfig + TryFrom<std::vec::IntoIter<NamedVal<P>>, Error = anyhow::Error> + Clone + Send + Sync + 'static + AsRef<CommonTrainingRunConfig>,
     NP: Default + Debug + Send + Sync + 'static,
@@ -191,22 +190,24 @@ where
     DX: Dims + 'static,
     DY: Dims + 'static,
     B: AsyncDataBatch<DX, DY, C> + 'static,
-    BF:Fn(C, &RC)->BoxFuture<Result<B, ThoError>> +  Send + Sync + 'static,
+    BF: Fn(C, &RC) -> BoxFuture<Result<B, ThoError>> + Send + Sync + 'static,
     P: FieldName + Send + Sync + 'static,
-    RC: RunConfig + WithCommonTrainingRunConfig+ TryFrom<std::vec::IntoIter<NamedVal<P>>, Error = anyhow::Error> + Clone + Send + Sync + 'static + AsRef<CommonTrainingRunConfig>,
+    RC: RunConfig + WithCommonTrainingRunConfig + TryFrom<std::vec::IntoIter<NamedVal<P>>, Error = anyhow::Error> + Clone + Send + Sync + 'static + AsRef<CommonTrainingRunConfig>,
     NP: Default + Debug + Send + Sync + 'static,
     FC: Fn(&RC) -> u32 + Send + Sync + 'static,
 {
-    pub fn new(
-        batch: BF,
-        train_step_factory: Arc<dyn TrainStepFactory<DX, DY, C, NP, RC>>,
-        opt_config: Arc<OptConfig>,
-        run_config_source: Arc<thoosa_shared::run_configs::TrainingRunConfigs<P>>,
-        epochs: FC,
-        validation_step: u32,
-        descr: String
-    ) -> Self {
-        Self { batch, train_step_factory, pd: PhantomData, opt_config, run_config_source, epochs, validation_step, descr, reusable_completed_trials: vec![] }
+    pub fn new(batch: BF, train_step_factory: Arc<dyn TrainStepFactory<DX, DY, C, NP, RC>>, opt_config: Arc<OptConfig>, run_config_source: Arc<thoosa_shared::run_configs::TrainingRunConfigs<P>>, epochs: FC, validation_step: u32, descr: String) -> Self {
+        Self {
+            batch,
+            train_step_factory,
+            pd: PhantomData,
+            opt_config,
+            run_config_source,
+            epochs,
+            validation_step,
+            descr,
+            reusable_completed_trials: vec![],
+        }
     }
 
     pub fn with_reusable_completed_trials(mut self, reusable_completed_trials: Vec<CompletedTrial>) -> Self {
@@ -214,15 +215,8 @@ where
         self
     }
 
-    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TrainNet::run_inner"))]
-    fn run_inner(
-        self: Arc<Self>,
-        mut ctx: C,
-        _tho_device_idx: usize,
-        run_config: RC,
-        validation_step: u32,
-        descr:String
-    ) -> BoxFuture<'static, Result<(TmpFile, f32, NP), ThoError>> {
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "TrainNet::run_inner"))]
+    fn run_inner(self: Arc<Self>, mut ctx: C, _tho_device_idx: usize, run_config: RC, validation_step: u32, descr: String) -> BoxFuture<'static, Result<(TmpFile, f32, NP), ThoError>> {
         Box::pin(async move {
             debug!("TrainNet::run_inner: descr={descr} validation_step={validation_step}");
 
@@ -243,10 +237,7 @@ where
             let patience = run_config.as_ref().patience;
             let min_delta = run_config.as_ref().min_delta;
 
-
-            let batch = (self.batch)(ctx.branch(false), &run_config)
-                .instrument(tracing::debug_span!("run_inner/self.batch", file = file!(),line = line!()))
-                .await?;
+            let batch = (self.batch)(ctx.branch(false), &run_config).instrument(tracing::debug_span!("run_inner/self.batch", file = file!(), line = line!())).await?;
 
             debug!("TrainNet::run_inner: descr={descr} device={device:?} epochs={epochs}");
 
@@ -267,19 +258,25 @@ where
                 let epoch_result = async {
                     let batches = batch.train_batch_stream(ctx.branch(false));
                     let batch_eta_guard = CollectEtaInvocationGuard::new(&format!("epoch_{idx}_batches_in_{descr}"), batch.num_batches(), 1);
-                    train_step.run_batches(batches, ctx.branch(false), true, max_other_parallel, prefetch, |_| {
-                        collect_eta_record_completion(batch_eta_guard.id());
-                    }).await?;
+                    train_step
+                        .run_batches(batches, ctx.branch(false), true, max_other_parallel, prefetch, |_| {
+                            collect_eta_record_completion(batch_eta_guard.id());
+                        })
+                        .await?;
                     let mut valid_loss = None;
                     if idx % validation_step == 0 || idx == epochs - 1 {
                         let batches = batch.valid_batch_stream(ctx.branch(false));
                         let mut sum = 0.0;
                         let mut count = 0;
-                        train_step.run_batches(batches, ctx.branch(false), false, max_other_parallel, prefetch, |loss| {
-                            sum += loss;
-                            count += 1;
-                        }).await?;
-                        if count > 0 { valid_loss = Some(sum / count as f32); }
+                        train_step
+                            .run_batches(batches, ctx.branch(false), false, max_other_parallel, prefetch, |loss| {
+                                sum += loss;
+                                count += 1;
+                            })
+                            .await?;
+                        if count > 0 {
+                            valid_loss = Some(sum / count as f32);
+                        }
                     }
                     let checkpoint = train_step.save_epoch_checkpoint(ctx.tho_device_idx()).await?;
                     if valid_loss.is_some_and(|loss| loss < best_valid_loss - min_delta) {
@@ -287,12 +284,13 @@ where
                         train_step.checkpoint(ctx.branch(false), max_other_parallel).await?;
                     }
                     Ok::<_, ThoError>((checkpoint, valid_loss))
-                }.await;
+                }
+                .await;
 
                 collect_eta_record_completion(epochs_eta_guard.id());
                 match epoch_result {
                     Ok((checkpoint, valid_loss)) => {
-                        if max_other_parallel < MAX_PARALLEL as usize  {
+                        if max_other_parallel < MAX_PARALLEL as usize {
                             max_other_parallel = min(max_other_parallel * 2, MAX_PARALLEL as usize);
                         }
                         recovery_checkpoint = checkpoint;
@@ -304,11 +302,25 @@ where
                                 best_saved = true;
                             } else {
                                 bad_epochs += 1;
-                                if bad_epochs >= patience { break; }
+                                if bad_epochs >= patience {
+                                    break;
+                                }
                             }
                         }
                     }
-                    Err(error) if (error.is_oom() || error.is_retryable_oom() || matches!(error.what(), ThoError::Data { kind: thoosa_shared::DataErrorKind::OOMHandlingFailed, .. })) && !error.needs_cuda_recovery() && !error.is_cuda_recovery_failed() => {
+                    Err(error)
+                        if (error.is_oom()
+                            || error.is_retryable_oom()
+                            || matches!(
+                                error.what(),
+                                ThoError::Data {
+                                    kind: thoosa_shared::DataErrorKind::OOMHandlingFailed,
+                                    ..
+                                }
+                            ))
+                            && !error.needs_cuda_recovery()
+                            && !error.is_cuda_recovery_failed() =>
+                    {
                         aborted_epochs += 1;
                         // Retrying a memory-constrained trial with the same extra
                         // resident batch can OOM even with exclusive GPU access.
@@ -322,7 +334,6 @@ where
                         train_step.schedule_epoch_restore(Arc::clone(&recovery_checkpoint), ctx.tho_device_idx()).await?;
                         max_other_parallel /= 2;
                         warn!("TrainNet: discarded epoch={idx} after OOM; completed={completed_epochs} aborted={aborted_epochs} next_max_other_parallel={max_other_parallel} error={error:#}");
-
                     }
                     Err(error) => return Err(error),
                 }
@@ -337,7 +348,6 @@ where
 
             Ok((best_checkpoint, best_valid_loss, params))
         })
-
     }
 }
 
@@ -346,8 +356,8 @@ where
     C: RunCtx + Adjustable + 'static,
     DX: Dims + 'static,
     DY: Dims + 'static,
-    B:AsyncDataBatch<DX, DY, C>,
-    BF:Fn(C, &RC)->BoxFuture<Result<B, ThoError>> +  Send + Sync + 'static,
+    B: AsyncDataBatch<DX, DY, C>,
+    BF: Fn(C, &RC) -> BoxFuture<Result<B, ThoError>> + Send + Sync + 'static,
     P: FieldName + Send + Sync + 'static,
     RC: RunConfig + WithCommonTrainingRunConfig + TryFrom<std::vec::IntoIter<NamedVal<P>>, Error = anyhow::Error> + Clone + Send + Sync + 'static + AsRef<CommonTrainingRunConfig>,
     NP: Default + Debug + Send + Sync + 'static,
@@ -358,23 +368,20 @@ where
     type Out = TrainNetOutput<NP, RC>;
 }
 
-
 impl<C, B, BF, DX, DY, P, RC, NP, FC> AsyncStage for TrainNet<C, B, BF, DX, DY, P, RC, NP, FC>
 where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,
     DX: Dims + 'static,
     DY: Dims + 'static,
-    B:AsyncDataBatch<DX, DY, C> + 'static,
-    BF:Fn(C, &RC)->BoxFuture<Result<B, ThoError>> +  Send + Sync + 'static,
+    B: AsyncDataBatch<DX, DY, C> + 'static,
+    BF: Fn(C, &RC) -> BoxFuture<Result<B, ThoError>> + Send + Sync + 'static,
     P: FieldName + Send + Sync + 'static,
     RC: RunConfig + WithCommonTrainingRunConfig + TryFrom<std::vec::IntoIter<NamedVal<P>>, Error = anyhow::Error> + Clone + Send + Sync + 'static + AsRef<CommonTrainingRunConfig> + ToHashmap,
     NP: Default + Debug + Send + Sync + 'static,
     FC: Fn(&RC) -> u32 + Send + Sync + 'static,
 {
-
-    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TrainNet::run"))]
-    fn run(self: Arc<Self>, _input: Self::In<'static>, mut ctx: Self::Ctx) -> impl Future<Output=Result<Self::Out, ThoError>> + Send {
-
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "TrainNet::run"))]
+    fn run(self: Arc<Self>, _input: Self::In<'static>, mut ctx: Self::Ctx) -> impl Future<Output = Result<Self::Out, ThoError>> + Send {
         let run_config_source = Arc::clone(&self.run_config_source);
         let tho_device_idx = ctx.tho_device_idx();
         let reusable_completed_trials = self.reusable_completed_trials.clone();
@@ -397,19 +404,14 @@ where
                     let trial_descr = descr.clone();
 
                     retry_training_after_cuda_reset(GlobalCtx::global().cuda_activity_gate(device_idx_for_train), move || {
-                        Arc::clone(&self_arc).run_inner(
-                            trial_ctx.branch(false),
-                            device_idx_for_train,
-                            run_config.clone(),
-                            validation_step,
-                            trial_descr.clone()
-                        )
+                        Arc::clone(&self_arc).run_inner(trial_ctx.branch(false), device_idx_for_train, run_config.clone(), validation_step, trial_descr.clone())
                     })
                 },
                 run_config_source,
                 &self.descr,
                 reusable_completed_trials,
-            )).await?;
+            ))
+            .await?;
 
             info!("TrainNet::run: descr={:?} \x1b[38;5;208mmin_loss={loss} \x1b[0m run_config={run_config:?}", self.descr);
 
@@ -418,13 +420,16 @@ where
     }
 }
 
-
 #[cfg(test)]
 pub mod tests {
     #![allow(unused_assignments)]
-use crate::tch_error::tch_result;
+    use crate::tch_error::tch_result;
+    use async_trait::async_trait;
+    use futures::FutureExt;
     use futures::stream::{self, BoxStream};
     use futures_util::StreamExt;
+    use futures_util::future::BoxFuture;
+    use log::debug;
     use std::future::ready;
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -433,43 +438,42 @@ use crate::tch_error::tch_result;
     use tch::kind::FLOAT_CUDA;
     use tch::nn::{AdamW, LinearConfig};
     use thoosa_common::dims::{Batch, Dims, ThoBatch};
+    use thoosa_common::ipc::proxy::DynSyncStageWithStateEnum;
     use thoosa_common::nets::batches::BatchLengths;
     use thoosa_common::nets::batches::mock_async_data_batch;
-    use thoosa_common::nets::nodes::{ThoModule, my_linear};
-    use thoosa_common::runner::common::MockRunCtx;
-    use thoosa_common::runner::common::mock_run_ctx;
-    use thoosa_common::runner::global_ctx::GlobalCtx;
-    use thoosa_shared::traits::{AsyncStage, RunCtx};
-    #[allow(unused_imports)]
-    use thoosa_common::stages::train_net::{TrainNet, TrainNetInput, TrainStepFactory};
-    use async_trait::async_trait;
-    use futures::FutureExt;
-    use futures_util::future::BoxFuture;
-    use log::debug;
-    use thoosa_common::stages::train_step::{TrainStep, TrainStepXFn};
     #[allow(unused_imports)]
     use thoosa_common::nets::common_nets::CommonTrainingRunConfig;
     #[allow(unused_imports)]
     use thoosa_common::nets::common_nets::{AdamWRangeOrValue, WithCommonTrainingRunConfig};
-    use thoosa_common::ipc::proxy::DynSyncStageWithStateEnum;
     use thoosa_common::nets::common_nets::{CommonTrainingRunConfigBuilder, CommonTrainingRunConfigFields, CommonTrainingRunConfigRangeOrValue, OptConfig, OptimizersRangeOrValue, opt_train};
+    use thoosa_common::nets::nodes::{ThoModule, my_linear};
     use thoosa_common::nets::tho_varstore::{ModConfig, ThoTrainModule};
+    use thoosa_common::runner::common::MockRunCtx;
+    use thoosa_common::runner::common::mock_run_ctx;
+    use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
+    #[allow(unused_imports)]
+    use thoosa_common::stages::train_net::{TrainNet, TrainNetInput, TrainStepFactory};
+    use thoosa_common::stages::train_step::{TrainStep, TrainStepXFn};
     use thoosa_properties_map_derive::ThoosaPropertiesMap;
     use thoosa_run_config_args::OptRunConfigSource;
     use thoosa_run_config_args_derive::ThoosaRunConfig;
     use thoosa_shared::run_configs::RunConfigId;
     use thoosa_shared::traits::MonoMetrics;
+    use thoosa_shared::traits::{AsyncStage, RunCtx};
     use thoosa_shared::{RangeOrValue, ThoError};
 
     #[derive(Clone, Debug)]
     struct DummyX;
-    impl Dims for DummyX { type Metrics = MonoMetrics<1, 2>; }
-
+    impl Dims for DummyX {
+        type Metrics = MonoMetrics<1, 2>;
+    }
 
     #[derive(Clone, Debug)]
     struct DummyY;
-    impl Dims for DummyY { type Metrics = MonoMetrics<1, 2>; }
+    impl Dims for DummyY {
+        type Metrics = MonoMetrics<1, 2>;
+    }
 
     static X_F_CALLS: AtomicUsize = AtomicUsize::new(0);
     static LOSS_FN_CALLS: AtomicUsize = AtomicUsize::new(0);
@@ -482,7 +486,9 @@ use crate::tch_error::tch_result;
 
     fn dummy_loss_fn(pred: &Tensor, target: &Tensor) -> anyhow::Result<Tensor> {
         LOSS_FN_CALLS.fetch_add(1, Ordering::SeqCst);
-        if target.f_double_value(&[0, 0, 0])? == -999.0 { return Err(ThoError::oom().into()); }
+        if target.f_double_value(&[0, 0, 0])? == -999.0 {
+            return Err(ThoError::oom().into());
+        }
         Ok(pred.f_sub(target)?.f_pow_tensor_scalar(2.)?.f_mean(tch::Kind::Float)?)
     }
 
@@ -492,7 +498,7 @@ use crate::tch_error::tch_result;
         (x.into(), y.into())
     }
 
-    fn make_stream() -> BoxStream<'static, Result<(ThoBatch<DummyX>, Option<BatchLengths>,  ThoBatch<DummyY>), ThoError>> {
+    fn make_stream() -> BoxStream<'static, Result<(ThoBatch<DummyX>, Option<BatchLengths>, ThoBatch<DummyY>), ThoError>> {
         let (x, y) = dummy_batch();
         stream::iter(vec![Ok((x, None, y))]).boxed()
     }
@@ -511,12 +517,16 @@ use crate::tch_error::tch_result;
 
         #[in_map]
         #[run_config]
-        common_config:CommonTrainingRunConfig
+        common_config: CommonTrainingRunConfig,
     }
 
     impl DummyRunConfig {
         pub fn new(id: Option<RunConfigId>, num_layers: u32) -> Self {
-            Self { id, num_layers, common_config: CommonTrainingRunConfig::new(10, 10, 0.0001) }
+            Self {
+                id,
+                num_layers,
+                common_config: CommonTrainingRunConfig::new(10, 10, 0.0001),
+            }
         }
     }
 
@@ -544,7 +554,16 @@ use crate::tch_error::tch_result;
                 move |_run_config, device| async move {
                     let config = ModConfig::new(
                         AdamW::default().amsgrad(true).into(),
-                        |var_store| Ok(Box::new(my_linear::<_, Batch<DummyX>, Batch<DummyY>>(var_store.root() / "linear", 1, 1, LinearConfig::default(), #[cfg(any(debug_assertions, tho_debug))] "test_train_net".to_string())?) as Box<dyn ThoModule<Batch<DummyX>, Batch<DummyY>>>),
+                        |var_store| {
+                            Ok(Box::new(my_linear::<_, Batch<DummyX>, Batch<DummyY>>(
+                                var_store.root() / "linear",
+                                1,
+                                1,
+                                LinearConfig::default(),
+                                #[cfg(any(debug_assertions, tho_debug))]
+                                "test_train_net".to_string(),
+                            )?) as Box<dyn ThoModule<Batch<DummyX>, Batch<DummyY>>>)
+                        },
                         0.001,
                     );
                     Ok((ThoTrainModule::new_on_device(config, device)?, ()))
@@ -553,7 +572,8 @@ use crate::tch_error::tch_result;
                 dummy_loss_fn,
                 run_config,
                 vs_path,
-            ).await?;
+            )
+            .await?;
             Ok((DynSyncStageWithStateEnum::Local(Arc::new(stage)), ()))
         }
     }
@@ -603,13 +623,7 @@ use crate::tch_error::tch_result;
         };
         let stage_ref = Arc::downgrade(local_stage);
         let factory = mock_train_step_factory::MockTrainStepFactoryBuilder::new(stage).finish();
-        let run_configs = thoosa_shared::run_configs::OptRunConfigs::new(
-            thoosa_shared::run_configs::GridRunConfigs::new(
-                thoosa_shared::run_configs::ConstConfigs::new(Vec::<thoosa_shared::val::NamedVal<DummyRunConfigFields>>::new()),
-                vec![],
-            ),
-            vec![],
-        );
+        let run_configs = thoosa_shared::run_configs::OptRunConfigs::new(thoosa_shared::run_configs::GridRunConfigs::new(thoosa_shared::run_configs::ConstConfigs::new(Vec::<thoosa_shared::val::NamedVal<DummyRunConfigFields>>::new()), vec![]), vec![]);
         let train_net = Arc::new(TrainNet::new(batch, Arc::new(factory), Arc::new(OptConfig::new(1, 1)), Arc::new(run_configs), |_rc: &DummyRunConfig| 1, 1, "cleanup regression".to_string()));
         // Exercise the trial directly: opt_train intentionally converts failed trials to a penalty score.
         Ok((train_net.run_inner(mock_run_ctx::default(1), 1, run_config, 1, "cleanup regression".to_string()), stage_ref))
@@ -620,17 +634,23 @@ use crate::tch_error::tch_result;
             // Include a successful batch first so an error cannot silently return a partial epoch or validation score.
             make_stream().chain(stream::iter(error.into_iter().map(|msg| Err(ThoError::new(msg))))).boxed()
         };
-        let batch = Arc::new(mock_async_data_batch::build::<DummyX, DummyY, MockRunCtx>()
-            .with_train_stream_calls(Arc::new(AtomicUsize::new(0)), move |_ctx| make_batches(train_error))
-            .with_valid_stream_calls(Arc::new(AtomicUsize::new(0)), move |_ctx| make_batches(valid_error))
-            .finish());
+        let batch = Arc::new(
+            mock_async_data_batch::build::<DummyX, DummyY, MockRunCtx>()
+                .with_train_stream_calls(Arc::new(AtomicUsize::new(0)), move |_ctx| make_batches(train_error))
+                .with_valid_stream_calls(Arc::new(AtomicUsize::new(0)), move |_ctx| make_batches(valid_error))
+                .finish(),
+        );
         Box::new(move |_ctx, _rc| ready(Ok(Arc::clone(&batch))).boxed())
     }
 
     fn oom_stream(exhausted: bool) -> BoxStream<'static, Result<(ThoBatch<DummyX>, Option<BatchLengths>, ThoBatch<DummyY>), ThoError>> {
         if exhausted {
             // Exhausted preparation has a distinct typed error but the same epoch policy.
-            return futures_util::stream::once(ready(Err(ThoError::Data { kind: thoosa_shared::DataErrorKind::OOMHandlingFailed, msg: "preparation retries exhausted".into() }))).boxed();
+            return futures_util::stream::once(ready(Err(ThoError::Data {
+                kind: thoosa_shared::DataErrorKind::OOMHandlingFailed,
+                msg: "preparation retries exhausted".into(),
+            })))
+            .boxed();
         }
         // Failure originates inside TrainStep after forward, not in the loader.
         let input = (|| {
@@ -642,14 +662,22 @@ use crate::tch_error::tch_result;
     }
 
     fn recovery_run_configs() -> Arc<thoosa_shared::run_configs::TrainingRunConfigs<DummyRunConfigFields>> {
-        Arc::new(DummyRunConfigRangeOrValue {
-            id: None,
-            num_layers: RangeOrValue::Value(1),
-            common_config: CommonTrainingRunConfigRangeOrValue {
-                epochs: RangeOrValue::Value(1), batch_size: RangeOrValue::Value(1), lr: RangeOrValue::Range { range: 0.001..0.002, step: None },
-                patience: RangeOrValue::Value(1), min_delta: RangeOrValue::Value(0.0), optimizer: None,
-            },
-        }.opt_run_configs().unwrap())
+        Arc::new(
+            DummyRunConfigRangeOrValue {
+                id: None,
+                num_layers: RangeOrValue::Value(1),
+                common_config: CommonTrainingRunConfigRangeOrValue {
+                    epochs: RangeOrValue::Value(1),
+                    batch_size: RangeOrValue::Value(1),
+                    lr: RangeOrValue::Range { range: 0.001..0.002, step: None },
+                    patience: RangeOrValue::Value(1),
+                    min_delta: RangeOrValue::Value(0.0),
+                    optimizer: None,
+                },
+            }
+            .opt_run_configs()
+            .unwrap(),
+        )
     }
 
     #[tokio::test]
@@ -675,9 +703,12 @@ use crate::tch_error::tch_result;
                         let _activity = activity;
                         if attempt == 0 { Err(ThoError::CudaBeingRecovered) } else { Ok((42u32, 0.5, ())) }
                     }
-                }).await
+                })
+                .await
             },
-            recovery_run_configs(), "reset trial", vec![],
+            recovery_run_configs(),
+            "reset trial",
+            vec![],
         ));
         assert!(futures::poll!(run.as_mut()).is_pending(), "optimization must wait for recovery instead of exhausting its trials");
         let ticket = pause.try_recv().unwrap();
@@ -703,7 +734,9 @@ use crate::tch_error::tch_result;
                 // A batch producer need not be awaiting a CUDA runner when
                 // another trial triggers reset. It must still be discarded.
                 let _owner = owner;
-                if first { std::future::pending::<()>().await; }
+                if first {
+                    std::future::pending::<()>().await;
+                }
                 Ok(42)
             }
         }));
@@ -733,9 +766,12 @@ use crate::tch_error::tch_result;
                         let ticket = gate.request_pause(ThoError::CudaBeingRecovered)?;
                         gate.finish_pause(ticket);
                         stale_result
-                    } else { Ok(42) }
+                    } else {
+                        Ok(42)
+                    }
                 }
-            }).await?;
+            })
+            .await?;
             assert_eq!(result, 42, "published an outcome from the retired attempt");
             assert_eq!(calls.load(Ordering::SeqCst), 2);
         }
@@ -749,12 +785,16 @@ use crate::tch_error::tch_result;
         let error = super::retry_training_after_cuda_reset(Some(Arc::clone(&gate)), || {
             calls.fetch_add(1, Ordering::SeqCst);
             ready(Err::<(), _>(ThoError::CudaBeingRecovered))
-        }).await.unwrap_err();
+        })
+        .await
+        .unwrap_err();
         assert!(matches!(error.what(), ThoError::CudaBeingRecovered));
         assert_eq!(calls.load(Ordering::SeqCst), 1, "a bare reset error must not spin without a replacement generation");
         let activity = thoosa_shared::CudaActivityScope::try_enter(&gate).unwrap().unwrap();
         let ticket = gate.request_pause(ThoError::CudaBeingRecovered).unwrap();
-        let result = tokio::time::timeout(std::time::Duration::from_secs(1), activity.run(super::retry_training_after_cuda_reset(Some(Arc::clone(&gate)), || ready(Err::<(), _>(ThoError::CudaBeingRecovered))))).await.unwrap();
+        let result = tokio::time::timeout(std::time::Duration::from_secs(1), activity.run(super::retry_training_after_cuda_reset(Some(Arc::clone(&gate)), || ready(Err::<(), _>(ThoError::CudaBeingRecovered)))))
+            .await
+            .unwrap();
         assert!(matches!(result.unwrap_err().what(), ThoError::CudaBeingRecovered), "an admitted ancestor must unwind for recovery to drain");
         gate.finish_pause(ticket);
     }
@@ -775,8 +815,13 @@ use crate::tch_error::tch_result;
                     let attempt = attempts.fetch_add(1, Ordering::SeqCst);
                     if successful_first && attempt == 0 { Ok((42u32, 0.5, ())) } else { Err(failure.clone()) }
                 },
-                recovery_run_configs(), "failed recovery", vec![],
-            ).await.unwrap_err().into();
+                recovery_run_configs(),
+                "failed recovery",
+                vec![],
+            )
+            .await
+            .unwrap_err()
+            .into();
             assert!(error.is_cuda_recovery_failed(), "optimization lost the typed failure: {error:#}");
             assert!(error.to_string().contains("replacement failed"));
             assert_eq!(calls.load(Ordering::SeqCst), if successful_first { 2 } else { 1 }, "terminal recovery must stop further training");
@@ -794,14 +839,15 @@ use crate::tch_error::tch_result;
                 let epoch = Arc::new(AtomicUsize::new(0));
                 let train_epoch = Arc::clone(&epoch);
                 let valid_epoch = Arc::clone(&epoch);
-                let batch = Arc::new(mock_async_data_batch::build::<DummyX, DummyY, MockRunCtx>()
-                    .with_train_stream_calls(Arc::clone(&train_calls), move |_| {
-                        let current = train_epoch.fetch_add(1, Ordering::SeqCst);
-                        if !fail_validation && current == failed_epoch { make_stream().chain(oom_stream(exhausted)).boxed() } else { make_stream() }
-                    })
-                    .with_valid_stream_calls(Arc::clone(&valid_calls), move |_| {
-                        if fail_validation && valid_epoch.load(Ordering::SeqCst) - 1 == failed_epoch { oom_stream(exhausted) } else { make_stream() }
-                    }).finish());
+                let batch = Arc::new(
+                    mock_async_data_batch::build::<DummyX, DummyY, MockRunCtx>()
+                        .with_train_stream_calls(Arc::clone(&train_calls), move |_| {
+                            let current = train_epoch.fetch_add(1, Ordering::SeqCst);
+                            if !fail_validation && current == failed_epoch { make_stream().chain(oom_stream(exhausted)).boxed() } else { make_stream() }
+                        })
+                        .with_valid_stream_calls(Arc::clone(&valid_calls), move |_| if fail_validation && valid_epoch.load(Ordering::SeqCst) - 1 == failed_epoch { oom_stream(exhausted) } else { make_stream() })
+                        .finish(),
+                );
                 let configs = thoosa_shared::run_configs::OptRunConfigs::new(thoosa_shared::run_configs::GridRunConfigs::new(thoosa_shared::run_configs::ConstConfigs::new(Vec::<thoosa_shared::val::NamedVal<DummyRunConfigFields>>::new()), vec![]), vec![]);
                 let factory: TestBatchFactory = Box::new(move |_, _| ready(Ok(Arc::clone(&batch))).boxed());
                 let train_net = Arc::new(TrainNet::new(factory, Arc::new(DummyTrainStepFactory), Arc::new(OptConfig::new(1, 1)), Arc::new(configs), |_: &DummyRunConfig| 3, 1, "epoch rollback".into()));
@@ -819,8 +865,7 @@ use crate::tch_error::tch_result;
         GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
         let calls = Arc::new(AtomicUsize::new(0));
-        let batch = Arc::new(mock_async_data_batch::build::<DummyX, DummyY, MockRunCtx>()
-            .with_train_stream_calls(Arc::clone(&calls), |_| oom_stream(false)).finish());
+        let batch = Arc::new(mock_async_data_batch::build::<DummyX, DummyY, MockRunCtx>().with_train_stream_calls(Arc::clone(&calls), |_| oom_stream(false)).finish());
 
         let configs = thoosa_shared::run_configs::OptRunConfigs::new(thoosa_shared::run_configs::GridRunConfigs::new(thoosa_shared::run_configs::ConstConfigs::new(Vec::<thoosa_shared::val::NamedVal<DummyRunConfigFields>>::new()), vec![]), vec![]);
         let factory: TestBatchFactory = Box::new(move |_, _| ready(Ok(Arc::clone(&batch))).boxed());
@@ -837,15 +882,17 @@ use crate::tch_error::tch_result;
     async fn test_train_net_final_epoch_checkpoint() -> Result<(), ThoError> {
         GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
-        let configs = thoosa_shared::run_configs::OptRunConfigs::new(
-            thoosa_shared::run_configs::GridRunConfigs::new(
-                thoosa_shared::run_configs::ConstConfigs::new(Vec::<thoosa_shared::val::NamedVal<DummyRunConfigFields>>::new()),
-                vec![],
-            ),
-            vec![],
-        );
+        let configs = thoosa_shared::run_configs::OptRunConfigs::new(thoosa_shared::run_configs::GridRunConfigs::new(thoosa_shared::run_configs::ConstConfigs::new(Vec::<thoosa_shared::val::NamedVal<DummyRunConfigFields>>::new()), vec![]), vec![]);
         // The only validation is in the final epoch. The old deferred save never ran.
-        let train_net = Arc::new(TrainNet::new(batch_factory_with_stream_errors(None, None), Arc::new(DummyTrainStepFactory), Arc::new(OptConfig::new(1, 1)), Arc::new(configs), |_rc: &DummyRunConfig| 1, 1, "final checkpoint regression".to_string()));
+        let train_net = Arc::new(TrainNet::new(
+            batch_factory_with_stream_errors(None, None),
+            Arc::new(DummyTrainStepFactory),
+            Arc::new(OptConfig::new(1, 1)),
+            Arc::new(configs),
+            |_rc: &DummyRunConfig| 1,
+            1,
+            "final checkpoint regression".to_string(),
+        ));
         let (checkpoint, loss, ()) = train_net.run_inner(mock_run_ctx::default(1), 1, DummyRunConfig::new(None, 1), 1, "final checkpoint regression".to_string()).await?;
         let tensors = tch_result(Tensor::read_safetensors(checkpoint.path()))?;
         let bias = tch_result(tensors.iter().find(|(name, _)| name.ends_with("bias")).ok_or_else(|| ThoError::new("checkpoint has no bias"))?.1.f_double_value(&[0]))?;
@@ -904,15 +951,19 @@ use crate::tch_error::tch_result;
             async move {
                 started.notify_one();
                 std::future::pending().await
-            }.boxed()
-        })).await?;
+            }
+            .boxed()
+        }))
+        .await?;
         // Cancel only after registration, while the batch factory is suspended at an await.
         tokio::time::timeout(std::time::Duration::from_secs(10), async {
             tokio::select! {
                 _ = started.notified() => {},
                 result = &mut trial => panic!("trial finished before cancellation: {result:?}"),
             }
-        }).await.expect("batch factory was not reached");
+        })
+        .await
+        .expect("batch factory was not reached");
         assert!(stage_ref.upgrade().is_some(), "trial must still own its stage before cancellation");
         drop(trial);
         assert!(stage_ref.upgrade().is_none(), "cancelled trial retained its training stage");
@@ -924,7 +975,6 @@ use crate::tch_error::tch_result;
         X_F_CALLS.store(0, Ordering::SeqCst);
         LOSS_FN_CALLS.store(0, Ordering::SeqCst);
 
-
         GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
@@ -933,13 +983,13 @@ use crate::tch_error::tch_result;
             DummyRunConfigRangeOrValue {
                 id: Some(1),
                 num_layers: RangeOrValue::Range { range: 1..3, step: None },
-                common_config: CommonTrainingRunConfigRangeOrValue{
+                common_config: CommonTrainingRunConfigRangeOrValue {
                     epochs: RangeOrValue::Value(10),
                     batch_size: RangeOrValue::Value(10),
                     lr: RangeOrValue::Value(0.0001),
                     patience: RangeOrValue::Value(5),
                     min_delta: RangeOrValue::Value(0.0001),
-                    optimizer: Some(OptimizersRangeOrValue::AdamW(AdamWRangeOrValue{
+                    optimizer: Some(OptimizersRangeOrValue::AdamW(AdamWRangeOrValue {
                         beta1: RangeOrValue::Value(0.9),
                         beta2: RangeOrValue::Value(0.999),
                         wd: RangeOrValue::Value(0.01),
@@ -947,7 +997,8 @@ use crate::tch_error::tch_result;
                     })),
                 },
             }
-            .opt_run_configs().expect("DummyRunConfigRangeOrValue::opt_run_configs should not fail"),
+            .opt_run_configs()
+            .expect("DummyRunConfigRangeOrValue::opt_run_configs should not fail"),
         );
         let epochs_count = 10u32;
         let epochs = move |_rc: &DummyRunConfig| epochs_count;
@@ -963,25 +1014,17 @@ use crate::tch_error::tch_result;
         let ctx = mock_run_ctx::default(1);
 
         let validation_step = 10;
-        let train_net: Arc<TrainNet<MockRunCtx, _, _, _, _, _, _, (), _>> = Arc::new(
-            TrainNet::new(
-                move |_c:MockRunCtx, _rc: &DummyRunConfig| ready(Ok(Arc::clone(&mock_test_batch))).boxed(),
-                Arc::new(DummyTrainStepFactory),
-                Arc::clone(&opt_config),
-                Arc::clone(&run_config),
-                epochs,
-                validation_step,
-                "n/a".to_string(),
-            ),
-        );
+        let train_net: Arc<TrainNet<MockRunCtx, _, _, _, _, _, _, (), _>> = Arc::new(TrainNet::new(
+            move |_c: MockRunCtx, _rc: &DummyRunConfig| ready(Ok(Arc::clone(&mock_test_batch))).boxed(),
+            Arc::new(DummyTrainStepFactory),
+            Arc::clone(&opt_config),
+            Arc::clone(&run_config),
+            epochs,
+            validation_step,
+            "n/a".to_string(),
+        ));
 
-
-        let _output = train_net
-            .run(
-                Arc::new(TrainNetInput::new()),
-                ctx,
-            )
-            .await?;
+        let _output = train_net.run(Arc::new(TrainNetInput::new()), ctx).await?;
 
         // Train stream runs once per epoch; valid stream runs every 10th and the final epoch.
         let grid_runs = run_config.grid_to_vals()?.len();
@@ -993,19 +1036,12 @@ use crate::tch_error::tch_result;
 
         // let expected_batch_calls = expected_train_streams + expected_valid_streams;
 
-        assert_eq!(
-            expected_train_streams,
-            train_stream_calls.load(Ordering::SeqCst)
-        );
-        assert_eq!(
-            expected_valid_streams,
-            valid_stream_calls.load(Ordering::SeqCst)
-        );
+        assert_eq!(expected_train_streams, train_stream_calls.load(Ordering::SeqCst));
+        assert_eq!(expected_valid_streams, valid_stream_calls.load(Ordering::SeqCst));
         debug!("X_F_CALLS={X_F_CALLS:?} LOSS_FN_CALLS={LOSS_FN_CALLS:?}");
         assert_eq!(120, X_F_CALLS.load(Ordering::SeqCst));
         assert_eq!(120, LOSS_FN_CALLS.load(Ordering::SeqCst));
 
         Ok(())
     }
-
 }

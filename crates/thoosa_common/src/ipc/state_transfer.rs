@@ -1,10 +1,10 @@
 //! Backend state transport is independent of kernel execution. Only stages
 //! installed with this capability can export/import worker tensors.
+use crate::ipc::tensor_info::WorkerTensorInfoPayload;
 use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use tch::Tensor;
 use thoosa_shared::{ThoError, ipc_types::WorkerOutput};
-use crate::ipc::tensor_info::WorkerTensorInfoPayload;
 
 pub trait StateTransfer: Send + Sync + std::fmt::Debug {
     fn get_state_info(&self, device: usize) -> BoxFuture<'_, Result<StageStateInfo, ThoError>>;
@@ -19,8 +19,8 @@ pub trait CheckpointRestore: StateTransfer + std::fmt::Debug {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct StageStateInfo {
-    pub scalars:Option<Box<dyn WorkerOutput>>,
-    pub tensors:Vec<WorkerTensorInfoPayload>
+    pub scalars: Option<Box<dyn WorkerOutput>>,
+    pub tensors: Vec<WorkerTensorInfoPayload>,
 }
 
 impl StageStateInfo {
@@ -29,13 +29,9 @@ impl StageStateInfo {
     }
 
     pub fn empty() -> Self {
-        Self { scalars: None, tensors:Vec::new() }
+        Self { scalars: None, tensors: Vec::new() }
     }
-
-
 }
 
 #[typetag::serde]
-impl WorkerOutput for StageStateInfo {
-
-}
+impl WorkerOutput for StageStateInfo {}

@@ -1,10 +1,13 @@
 //! Residency belongs to an async handle, independently of memoization or cache areas.
-use std::sync::{Arc, Weak, atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering}};
+use super::purge::{CachePurger, PURGE_GPU_CONCURRENCY_LIMIT};
 use dashmap::DashMap;
 use futures_util::{StreamExt, TryStreamExt};
+use std::sync::{
+    Arc, Weak,
+    atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+};
 use thoosa_shared::ThoError;
 use tokio::sync::RwLock;
-use super::purge::{CachePurger, PURGE_GPU_CONCURRENCY_LIMIT};
 
 #[derive(Debug)]
 pub struct ManagedResidency {
@@ -37,7 +40,9 @@ impl ResidencyLease {
 
 impl Drop for ResidencyLease {
     fn drop(&mut self) {
-        for counter in &self.0 { counter.fetch_sub(1, Ordering::AcqRel); }
+        for counter in &self.0 {
+            counter.fetch_sub(1, Ordering::AcqRel);
+        }
     }
 }
 
@@ -51,7 +56,9 @@ pub(crate) struct Registration {
 impl Registration {
     fn remove(&self) {
         self.entry.active.store(false, Ordering::Release);
-        if let Some(registry) = self.registry.upgrade() { registry.entries.remove(&self.id); }
+        if let Some(registry) = self.registry.upgrade() {
+            registry.entries.remove(&self.id);
+        }
     }
     /// A snapshot may still own the entry. Close admission before waiting for
     /// existing offloads, so consuming data cannot race a late weak upgrade.
@@ -62,32 +69,51 @@ impl Registration {
 }
 
 impl Drop for Registration {
-    fn drop(&mut self) { self.remove(); }
+    fn drop(&mut self) {
+        self.remove();
+    }
 }
 
 impl ManagedResidency {
     pub fn new(devices: usize) -> Arc<Self> {
-        Arc::new(Self { devices, next: AtomicU64::new(0), entries: DashMap::new() })
+        Arc::new(Self {
+            devices,
+            next: AtomicU64::new(0),
+            entries: DashMap::new(),
+        })
     }
-    pub fn device_count(&self) -> usize { self.devices }
+    pub fn device_count(&self) -> usize {
+        self.devices
+    }
     pub(crate) fn register(self: &Arc<Self>, resource: Arc<dyn CachePurger>) -> Registration {
         let id = self.next.fetch_add(1, Ordering::Relaxed);
-        let entry = Arc::new(Entry { resource: Arc::downgrade(&resource), active: AtomicBool::new(true), gate: RwLock::new(()) });
+        let entry = Arc::new(Entry {
+            resource: Arc::downgrade(&resource),
+            active: AtomicBool::new(true),
+            gate: RwLock::new(()),
+        });
         self.entries.insert(id, Arc::clone(&entry));
         Registration { registry: Arc::downgrade(self), id, entry }
     }
-    fn snapshot(&self) -> Vec<Arc<Entry>> { self.entries.iter().map(|entry| Arc::clone(entry.value())).collect() }
+    fn snapshot(&self) -> Vec<Arc<Entry>> {
+        self.entries.iter().map(|entry| Arc::clone(entry.value())).collect()
+    }
 
     pub async fn offload(&self, device: usize) -> Result<(), ThoError> {
         // No registry guard crosses an await; reuse the existing transfer and
         // concurrency limit. Leases and active tensor borrows are checked there.
-        futures_util::stream::iter(self.snapshot()).map(Ok::<_, ThoError>).try_for_each_concurrent(PURGE_GPU_CONCURRENCY_LIMIT, |entry| async move {
-            let _guard = entry.gate.read().await;
-            if entry.active.load(Ordering::Acquire) {
-                if let Some(resource) = entry.resource.upgrade() { resource.purge_gpu(None, device, "managed handle").await?; }
-            }
-            Ok(())
-        }).await
+        futures_util::stream::iter(self.snapshot())
+            .map(Ok::<_, ThoError>)
+            .try_for_each_concurrent(PURGE_GPU_CONCURRENCY_LIMIT, |entry| async move {
+                let _guard = entry.gate.read().await;
+                if entry.active.load(Ordering::Acquire) {
+                    if let Some(resource) = entry.resource.upgrade() {
+                        resource.purge_gpu(None, device, "managed handle").await?;
+                    }
+                }
+                Ok(())
+            })
+            .await
     }
 
     pub async fn drop_device(&self, device: usize) -> Result<(), ThoError> {
@@ -98,7 +124,9 @@ impl ManagedResidency {
             let _guard = entry.gate.read().await;
             if entry.active.load(Ordering::Acquire) {
                 if let Some(resource) = entry.resource.upgrade() {
-                    if let Err(error) = resource.drop_gpu(device, "managed handle").await { failure.get_or_insert(error); }
+                    if let Err(error) = resource.drop_gpu(device, "managed handle").await {
+                        failure.get_or_insert(error);
+                    }
                 }
             }
         }
@@ -110,7 +138,9 @@ impl ManagedResidency {
             let _guard = entry.gate.read().await;
             if entry.active.load(Ordering::Acquire) {
                 if let Some(resource) = entry.resource.upgrade() {
-                    if resource.has_gpu_data(device).await { return true; }
+                    if resource.has_gpu_data(device).await {
+                        return true;
+                    }
                 }
             }
         }
@@ -151,7 +181,10 @@ mod tests {
         let registry = ManagedResidency::new(2);
         let input = DevicesWrap::wrap_in(MockDataWithId::for_device(1), &registry);
         let lease = input.protect(1);
-        let mut suspended = Box::pin(async move { let _lease = lease; std::future::pending::<()>().await; });
+        let mut suspended = Box::pin(async move {
+            let _lease = lease;
+            std::future::pending::<()>().await;
+        });
         assert!(futures_util::poll!(suspended.as_mut()).is_pending());
         registry.offload(1).await?;
         assert!(input.is_on_device(1));

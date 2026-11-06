@@ -3,8 +3,8 @@ use async_trait::async_trait;
 use bytemuck::{Pod, Zeroable};
 use log::{debug, warn};
 use parking_lot::Mutex;
-use rusqlite::types::Value;
 use rusqlite::Connection;
+use rusqlite::types::Value;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
 use std::hash::{Hash, Hasher};
@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use thoosa_shared::resource::ResourceId;
 use thoosa_shared::run_configs::RunConfigId;
-use thoosa_shared::{group_slices_try, TensorIdSliceIdx};
+use thoosa_shared::{TensorIdSliceIdx, group_slices_try};
 
 // Tracker persistence belongs to the motif crate so it can depend on MotifsStore directly
 // without exposing motif-specific callbacks through the common Store crate.
@@ -57,22 +57,22 @@ pub(crate) mod mock_motif_tracker_store {
     pub struct MockMotifTrackerStoreBuilder(MockMotifTrackerStore);
 
     impl MockMotifTrackerStoreBuilder {
-        pub fn new() -> Self { Self(MockMotifTrackerStore::new()) }
+        pub fn new() -> Self {
+            Self(MockMotifTrackerStore::new())
+        }
 
         pub fn with_save_slices(mut self, save: impl FnMut(Vec<SlicesMatch>) -> anyhow::Result<()> + Send + 'static) -> Self {
             self.0.expect_save_slices().returning(save);
             self
         }
 
-        pub fn build(self) -> Box<dyn MotifTrackerStore> { Box::new(self.0) }
+        pub fn build(self) -> Box<dyn MotifTrackerStore> {
+            Box::new(self.0)
+        }
     }
 }
 
-pub fn filter_groups_by_slices_count(
-    min_slices_counts: Option<u32>,
-    max_slices_counts: Option<u32>,
-    mut groups: HashMap<usize, HashSet<IdSlice>>,
-) -> HashMap<usize, HashSet<IdSlice>> {
+pub fn filter_groups_by_slices_count(min_slices_counts: Option<u32>, max_slices_counts: Option<u32>, mut groups: HashMap<usize, HashSet<IdSlice>>) -> HashMap<usize, HashSet<IdSlice>> {
     if min_slices_counts.is_none() && max_slices_counts.is_none() {
         return groups;
     }
@@ -80,8 +80,7 @@ pub fn filter_groups_by_slices_count(
     groups.retain(|group_id, slices| {
         let count = slices.len();
 
-        let keep = min_slices_counts.is_none_or(|min| count >= min as usize)
-            && max_slices_counts.is_none_or(|max| count < max as usize);
+        let keep = min_slices_counts.is_none_or(|min| count >= min as usize) && max_slices_counts.is_none_or(|max| count < max as usize);
 
         if !keep {
             warn!("skipping group {group_id} with {count} slices");
@@ -106,11 +105,7 @@ impl Debug for SqlMotifTrackerStore {
 }
 
 impl SqlMotifTrackerStore {
-    pub fn new<P: AsRef<Path> + Sync + Send + Debug>(
-        path: P,
-        run_config_id: RunConfigId,
-        channel: u32,
-    ) -> anyhow::Result<Box<dyn MotifTrackerStore>> {
+    pub fn new<P: AsRef<Path> + Sync + Send + Debug>(path: P, run_config_id: RunConfigId, channel: u32) -> anyhow::Result<Box<dyn MotifTrackerStore>> {
         let mut conn = Connection::open(&path).expect("SqlMotifTrackerStore::new: connection");
         {
             let t = conn.transaction()?;
@@ -143,7 +138,7 @@ impl SqlMotifTrackerStore {
 #[async_trait]
 impl MotifTrackerStore for SqlMotifTrackerStore {
     fn save_slices(&mut self, slices: Vec<SlicesMatch>) -> anyhow::Result<()> {
-        debug!("MotifTrackerStore::save_slices: motifs.len()={:?}, self.run_config_id={:?}",slices.len(),self.run_config_id);
+        debug!("MotifTrackerStore::save_slices: motifs.len()={:?}, self.run_config_id={:?}", slices.len(), self.run_config_id);
 
         let mut conn_guard = self.conn.lock();
         let t = conn_guard.transaction()?;
@@ -151,59 +146,39 @@ impl MotifTrackerStore for SqlMotifTrackerStore {
         assert!(slices.len() > 0);
 
         for slices_chunk in slices.chunks(500) {
-            let (mut q, params) = slices_chunk.into_iter().fold(
-                (vec!["INSERT INTO slice_matches (tensor_id_0, slice_idx_0, tensor_id_1, slice_idx_1, dist) VALUES"], vec![]), |mut a: (Vec<&str>, Vec<Value>), v| {
-                    a.0.push("(?, ?, ?, ?, ?)");
-                    a.0.push(", ");
+            let (mut q, params) = slices_chunk.into_iter().fold((vec!["INSERT INTO slice_matches (tensor_id_0, slice_idx_0, tensor_id_1, slice_idx_1, dist) VALUES"], vec![]), |mut a: (Vec<&str>, Vec<Value>), v| {
+                a.0.push("(?, ?, ?, ?, ?)");
+                a.0.push(", ");
 
-                    a.1.push(Value::Integer(v.0.0 as i64));
-                    a.1.push(Value::Integer(v.0.1 as i64));
-                    a.1.push(Value::Integer(v.1.0 as i64));
-                    a.1.push(Value::Integer(v.1.1 as i64));
-                    a.1.push(Value::Real(v.2 as f64));
-                    a
-                });
+                a.1.push(Value::Integer(v.0.0 as i64));
+                a.1.push(Value::Integer(v.0.1 as i64));
+                a.1.push(Value::Integer(v.1.0 as i64));
+                a.1.push(Value::Integer(v.1.1 as i64));
+                a.1.push(Value::Real(v.2 as f64));
+                a
+            });
 
             q.pop();
 
-            t.execute(
-                &q.into_iter().collect::<String>(),
-                rusqlite::params_from_iter(params.into_iter()),
-            )?;
+            t.execute(&q.into_iter().collect::<String>(), rusqlite::params_from_iter(params.into_iter()))?;
         }
         t.commit()?;
 
         Ok(())
     }
 
-    async fn load_slices_into_groups(
-        &mut self,
-        store: &dyn MotifsStore,
-        _min_slices_counts: Option<u32>,
-        max_slices_counts: Option<u32>,
-    ) -> anyhow::Result<usize> {
+    async fn load_slices_into_groups(&mut self, store: &dyn MotifsStore, _min_slices_counts: Option<u32>, max_slices_counts: Option<u32>) -> anyhow::Result<usize> {
         // SQLite locking, row iteration, and grouping must not occupy a Tokio worker.
         let conn = Arc::clone(&self.conn);
         let groups_by_slices_count = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
             let guard = conn.lock();
-            let mut stmt = guard.prepare(
-                "SELECT id, tensor_id_0, slice_idx_0, tensor_id_1, slice_idx_1 FROM slice_matches",
-            )?;
-            let groups = group_slices_try(stmt.query_map([], |row| {
-                Ok((
-                    IdSlice(row.get(0)?, row.get(1)?, row.get(2)?),
-                    IdSlice(row.get(0)?, row.get(3)?, row.get(4)?),
-                ))
-            })?)?;
+            let mut stmt = guard.prepare("SELECT id, tensor_id_0, slice_idx_0, tensor_id_1, slice_idx_1 FROM slice_matches")?;
+            let groups = group_slices_try(stmt.query_map([], |row| Ok((IdSlice(row.get(0)?, row.get(1)?, row.get(2)?), IdSlice(row.get(0)?, row.get(3)?, row.get(4)?))))?)?;
             Ok(filter_groups_by_slices_count(Some(2), max_slices_counts, groups))
-        }).await??;
+        })
+        .await??;
         let groups_len = groups_by_slices_count.len();
-        store.save_groups_as_motifs_with_slices_matches(
-            self.run_config_id,
-            self.channel as i64,
-            groups_by_slices_count,
-            self.path.clone(),
-        ).await?;
+        store.save_groups_as_motifs_with_slices_matches(self.run_config_id, self.channel as i64, groups_by_slices_count, self.path.clone()).await?;
 
         Ok(groups_len)
     }

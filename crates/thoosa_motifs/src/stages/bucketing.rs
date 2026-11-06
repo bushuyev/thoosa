@@ -1,7 +1,7 @@
 #![allow(non_camel_case_types)]
-use thoosa_common::tch_error::tch_result;
-use anyhow::Context as _;
 use crate::motifs_store::MotifsStore;
+use anyhow::Context as _;
+use thoosa_common::tch_error::tch_result;
 
 use crate::motif_tracker_store::IdSlice;
 use async_trait::async_trait;
@@ -25,6 +25,7 @@ use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImp
 use thoosa_common::runner::adjusters::splits::{SplitsAdjuster, SplitsAdjusterContext};
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, SelectRef, ThoDataRef};
 use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoStageAdjuster, NoopRunnableContext, OOMHandler, input_adjuster, run_ctx_adjuster};
+use thoosa_common::runner::sync_stage::SyncStage;
 use thoosa_common::stages::audio::{BandAggregation, LOG_EPS, LshPlanes, assign_lsh_buckets_per_channel, build_mel_filterbank, fft_band_amplitudes_sliced, lsh_bucket_one_hot_3d_exact_buckets};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_named_derive::Named;
@@ -36,7 +37,6 @@ use thoosa_shared::resource::{Resource, ResourceId, ResourcesConfig};
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::tracked_await::t;
 use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, MaxParallelCtx, Named, OutId, RunCtx, Stage, ThoSelector, WithId};
-use thoosa_common::runner::sync_stage::{SyncStage};
 use thoosa_shared::{CopyToDevice, FuturesOrdering, TensorIdSliceIdx, ThoError, collect_futures_with_progress, panic_to_err};
 
 const MEL_PATCH_TEMP_MAGIC: [u8; 8] = *b"THOBUCK1";
@@ -73,7 +73,6 @@ where
 {
     type Metrics = ();
 
-
     fn size(&self) -> Self::Metrics {
         ()
     }
@@ -107,7 +106,6 @@ impl BucketingOutput {
 impl Data for BucketingOutput {
     type Metrics = ();
 
-
     fn size(&self) -> Self::Metrics {
         ()
     }
@@ -123,10 +121,9 @@ impl Data for BucketingOutput {
 
 impl Output for BucketingOutput {}
 
-
-
 #[derive(Debug)]
-pub struct PatchTempStore {//TODO it's similar to FileMotifTrackerStore  but saves single slices instead of pairs. Rename and put together with FileMotifTrackerStore in same mod
+pub struct PatchTempStore {
+    //TODO it's similar to FileMotifTrackerStore  but saves single slices instead of pairs. Rename and put together with FileMotifTrackerStore in same mod
     path: PathBuf,
     writer: BufWriter<File>,
 }
@@ -141,10 +138,7 @@ impl PatchTempStore {
         writer.flush()?;
         debug!("MelPatchTempStore::new: file_path={file_path:?}");
 
-        Ok(Self {
-            path: file_path,
-            writer,
-        })
+        Ok(Self { path: file_path, writer })
     }
 
     fn save_slices(&mut self, channel: u32, slices: &[TensorIdSliceIdx]) -> Result<(), ThoError> {
@@ -183,11 +177,7 @@ impl PatchTempStore {
             reader.read_exact(&mut slice_idx_bytes)?;
 
             slice_id = slice_id.checked_add(1).ok_or_else(|| ThoError::new("MelPatchTempStore::load_channel_groups: slice_id overflow"))?;
-            groups.entry(u32::from_le_bytes(channel_bytes)).or_default().insert(IdSlice(
-                slice_id,
-                u32::from_le_bytes(resource_id_bytes),
-                u32::from_le_bytes(slice_idx_bytes),
-            ));
+            groups.entry(u32::from_le_bytes(channel_bytes)).or_default().insert(IdSlice(slice_id, u32::from_le_bytes(resource_id_bytes), u32::from_le_bytes(slice_idx_bytes)));
         }
 
         debug!("MelPatchTempStore::load_channel_groups: group={group} channels={}", groups.len());
@@ -216,12 +206,12 @@ where
     run_config: BucketRunConfig,
     sync_bucketing_stage: Arc<SyncBucketingStage<D, Id, C>>,
     pd: PhantomData<(RC, D, Id, C)>,
-    channels:u32,
+    channels: u32,
     bucket_window_samples: i64,
     bucket_step_samples: i64,
     #[expect(dead_code, reason = "Retains stored metadata and its existing construction and diagnostic representation.")]
-    tmp_path:PathBuf,
-    temp_stores_by_bucket: Arc<parking_lot::lock_api::Mutex<RawMutex, Vec<PatchTempStore>>>
+    tmp_path: PathBuf,
+    temp_stores_by_bucket: Arc<parking_lot::lock_api::Mutex<RawMutex, Vec<PatchTempStore>>>,
 }
 
 impl<RC, L, D, Id, C> BucketingStage<RC, L, D, Id, C>
@@ -232,16 +222,7 @@ where
     Id: CachableIdTr + Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
     C: RunCtx + Adjustable + 'static,
 {
-    pub fn new(
-        ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
-        store: &Arc<dyn MotifsStore>,
-        loader: Arc<L>,
-        run_config: BucketRunConfig,
-        window: u32,
-        step: u32,
-    ) -> Result<Self, ThoError> {
-
-
+    pub fn new(ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, store: &Arc<dyn MotifsStore>, loader: Arc<L>, run_config: BucketRunConfig, window: u32, step: u32) -> Result<Self, ThoError> {
         if run_config.bucket_count == 0 {
             return Err(ThoError::new("BucketingStage::new: bucket_count must be positive"));
         }
@@ -265,8 +246,8 @@ where
             (ws.channels(), ws.sample_rate(), ws.tmp_path().clone())
         };
 
-        let temp_stores_by_bucket =
-            (0..run_config.bucket_count).map(|bucket| {
+        let temp_stores_by_bucket = (0..run_config.bucket_count)
+            .map(|bucket| {
                 let bucket = u16::try_from(bucket).with_context(|| format!("BucketingStage::run: bucket={bucket} does not fit into u16"))?;
                 PatchTempStore::new(&tmp_path, run_config.id.expect("no run id").clone(), bucket)
             })
@@ -285,10 +266,9 @@ where
             bucket_window_samples,
             bucket_step_samples,
             tmp_path,
-            temp_stores_by_bucket
+            temp_stores_by_bucket,
         })
     }
-
 }
 
 #[derive(Debug)]
@@ -331,7 +311,6 @@ where
 {
     type Metrics = D::Metrics;
 
-
     fn size(&self) -> Self::Metrics {
         Data::size(&*self.tensor)
     }
@@ -349,7 +328,8 @@ impl<D, Id> Input for BucketingSyncInput<'_, D, Id>
 where
     D: Dims + Send + Sync + 'static,
     Id: CachableIdTr + Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
-{}
+{
+}
 
 #[derive(Debug)]
 struct BucketingTensorInput<D, Id>
@@ -369,7 +349,12 @@ where
     Id: CachableIdTr + Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
 {
     fn new(resource_id: ResourceId, tensor: Arc<DevicesWrap<ThoTensor<D, Id>>>, bucket_window_samples: i64, bucket_step_samples: i64) -> Self {
-        Self { resource_id, tensor, bucket_window_samples, bucket_step_samples }
+        Self {
+            resource_id,
+            tensor,
+            bucket_window_samples,
+            bucket_step_samples,
+        }
     }
 }
 
@@ -405,7 +390,7 @@ struct SelectBucketsInputSelector {
 
 #[typetag::serde]
 impl ThoSelector for SelectBucketsInputSelector {
-    fn clone_box(&self)->Box<dyn ThoSelector> {
+    fn clone_box(&self) -> Box<dyn ThoSelector> {
         Box::new(self.clone())
     }
 }
@@ -424,16 +409,19 @@ impl From<Range<i64>> for SelectBucketsInputSelector {
 
 impl Adjustable for SelectBucketsInputSelector {}
 
-
-
 impl<D, Id> BorrowRef for BucketingTensorInput<D, Id>
 where
     D: Dims + Send + Sync + 'static,
     Id: CachableIdTr + Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
 {
-    fn protect(&self, device: usize) -> thoosa_common::runner::residency::ResidencyLease { self.tensor.protect(device) }
+    fn protect(&self, device: usize) -> thoosa_common::runner::residency::ResidencyLease {
+        self.tensor.protect(device)
+    }
 
-    type Out<'a> = BucketingSyncInput<'a, D, Id> where Self: 'a;
+    type Out<'a>
+        = BucketingSyncInput<'a, D, Id>
+    where
+        Self: 'a;
 
     fn borrow_ref<'a>(&'a self, to_device_idx: usize) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
     where
@@ -451,10 +439,10 @@ where
     D: Dims + Send + Sync + 'static,
     Id: CachableIdTr + Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
 {
-    fn select_ref<'o>(&'o self, to_tho_device_idx: usize, selector: Option<SelectBucketsInputSelector>) -> impl Future<Output=Result<<Self as BorrowRef>::Out<'o>, ThoError>> + Send
+    fn select_ref<'o>(&'o self, to_tho_device_idx: usize, selector: Option<SelectBucketsInputSelector>) -> impl Future<Output = Result<<Self as BorrowRef>::Out<'o>, ThoError>> + Send
     where
         SelectBucketsInputSelector: 'o,
-        Self: 'o
+        Self: 'o,
     {
         async move {
             let (tensor, sample_offset) = match selector {
@@ -501,7 +489,12 @@ where
     ST: Stage<Out = ()> + Adjustable + 'a,
 {
     fn new(input_len: i64) -> Self {
-        Self { input_len, split_len: input_len, done_to: 0, pd: PhantomData }
+        Self {
+            input_len,
+            split_len: input_len,
+            done_to: 0,
+            pd: PhantomData,
+        }
     }
 }
 
@@ -586,7 +579,7 @@ where
     run_config: BucketRunConfig,
     window: i64,
     step: i64,
-    sample_rate:u32,
+    sample_rate: u32,
     temp_stores_by_bucket: Arc<parking_lot::lock_api::Mutex<RawMutex, Vec<PatchTempStore>>>,
     pd: PhantomData<(D, Id, C)>,
 }
@@ -597,11 +590,18 @@ where
     Id: CachableIdTr + Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
     C: RunCtx + Adjustable + 'static,
 {
-    fn new(run_config: BucketRunConfig, window: i64, step: i64, sample_rate:u32, temp_stores_by_bucket: Arc<parking_lot::lock_api::Mutex<RawMutex, Vec<PatchTempStore>>>) -> Self {
-        Self { run_config, window, step, temp_stores_by_bucket, sample_rate, pd: PhantomData }
+    fn new(run_config: BucketRunConfig, window: i64, step: i64, sample_rate: u32, temp_stores_by_bucket: Arc<parking_lot::lock_api::Mutex<RawMutex, Vec<PatchTempStore>>>) -> Self {
+        Self {
+            run_config,
+            window,
+            step,
+            temp_stores_by_bucket,
+            sample_rate,
+            pd: PhantomData,
+        }
     }
 
-    fn save_resource_mel_patches(&self, input: &BucketingSyncInput<'_, D, Id>, mel_config:&LogMelPatchConfig) -> Result<(), ThoError> {
+    fn save_resource_mel_patches(&self, input: &BucketingSyncInput<'_, D, Id>, mel_config: &LogMelPatchConfig) -> Result<(), ThoError> {
         let patches = audio_to_log_mel_patches(&*input.tensor.local()?, mel_config, self.sample_rate as f64, self.window, self.step)?;
         let patch_ranges = tch_result(patch_sample_ranges_flat(&patches, mel_config, self.window, self.step))?;
         let channels_bucket_ids = assign_lsh_buckets_per_channel(&patches, self.run_config.bucket_count_i64())?;
@@ -658,7 +658,14 @@ where
         let slices = tch_result(audio.f_unfold(1, self.window, self.step))?;
         debug!("SyncBucketingStage::save_resource_plain_buckets: id={:?} slices={slices:?}", input.id());
 
-        let channels_slices_freqamp = panic_to_err!(fft_band_amplitudes_sliced(&slices, self.sample_rate as f64, plain_config.band_hz, plain_config.aggregation.to_audio(), plain_config.apply_hann_window, plain_config.remove_dc_offset))?;
+        let channels_slices_freqamp = panic_to_err!(fft_band_amplitudes_sliced(
+            &slices,
+            self.sample_rate as f64,
+            plain_config.band_hz,
+            plain_config.aggregation.to_audio(),
+            plain_config.apply_hann_window,
+            plain_config.remove_dc_offset
+        ))?;
         debug!("SyncBucketingStage::save_resource_plain_buckets: channels_slices_freqamp={channels_slices_freqamp:?}");
 
         let planes = deterministic_plain_lsh_planes_for_buckets(channels_slices_freqamp.size()[2], self.run_config.bucket_count as i64, Kind::Float, channels_slices_freqamp.device())?;
@@ -679,7 +686,10 @@ where
             let mut slices_by_bucket: HashMap<u16, Vec<TensorIdSliceIdx>> = HashMap::new();
             for (slice_idx, bucket) in bucket_ids.iter().enumerate() {
                 let group = u16::try_from(*bucket).with_context(|| format!("SyncBucketingStage::save_resource_plain_buckets: bucket={bucket} does not fit into u16"))?;
-                let sample_start = (slice_idx as i64).checked_mul(self.step).and_then(|v| v.checked_add(input.sample_offset)).ok_or_else(|| ThoError::new("SyncBucketingStage::save_resource_plain_buckets: sample_start overflow"))?;
+                let sample_start = (slice_idx as i64)
+                    .checked_mul(self.step)
+                    .and_then(|v| v.checked_add(input.sample_offset))
+                    .ok_or_else(|| ThoError::new("SyncBucketingStage::save_resource_plain_buckets: sample_start overflow"))?;
                 let slice_start = u32::try_from(sample_start).with_context(|| format!("SyncBucketingStage::save_resource_plain_buckets: sample_start={sample_start} does not fit into u32"))?;
                 slices_by_bucket.entry(group).or_default().push(TensorIdSliceIdx(input.resource_id, slice_start));
             }
@@ -699,7 +709,8 @@ where
     D: Dims + Send + Sync + 'static,
     Id: CachableIdTr + Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
     C: RunCtx + Adjustable + 'static,
-{}
+{
+}
 
 impl<D, Id, C> OutId for SyncBucketingStage<D, Id, C>
 where
@@ -729,8 +740,8 @@ where
     Id: CachableIdTr + Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
     C: RunCtx + Adjustable + 'static,
 {
-    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SyncBucketingStage::do_run"))]
-    fn  do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "SyncBucketingStage::do_run"))]
+    fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         match self.run_config.mel_config() {
             BucketingConfig::Mel(mel_config) => self.save_resource_mel_patches(input, mel_config)?,
             BucketingConfig::Plain(plain_config) => self.save_resource_plain_buckets(input, plain_config)?,
@@ -745,13 +756,7 @@ where
 /// Output shape:
 ///
 /// `[channels, patches, n_mels, patch_frames]`
-pub fn audio_to_log_mel_patches(
-    audio: &Tensor,
-    cfg: &LogMelPatchConfig,
-    sample_rate: f64,
-    window: i64,
-    step: i64,
-) -> Result<Tensor, ThoError> {
+pub fn audio_to_log_mel_patches(audio: &Tensor, cfg: &LogMelPatchConfig, sample_rate: f64, window: i64, step: i64) -> Result<Tensor, ThoError> {
     debug!("audio_to_log_mel_patches: audio={audio:?} cfg={cfg:?} window={window} step={step}");
 
     let size = audio.size();
@@ -825,14 +830,7 @@ pub fn audio_to_log_mel_patches(
     // mel:          [C, M, frames]
     // ---------------------------------------------------------------------
     //called once per RunConfig
-    let mel_fb = build_mel_filterbank(
-        sample_rate,
-        window,
-        cfg.n_mels,
-        cfg.f_min,
-        cfg.f_max,
-        device,
-    )?;
+    let mel_fb = build_mel_filterbank(sample_rate, window, cfg.n_mels, cfg.f_min, cfg.f_max, device)?;
 
     debug!("audio_to_log_mel_patches: mel_fb=\n{mel_fb}");
 
@@ -846,9 +844,7 @@ pub fn audio_to_log_mel_patches(
 
     debug!("audio_to_log_mel_patches: mel_flat={mel_flat:?}");
 
-    let mel = tch_result(tch_result(mel_flat
-        .f_view([channels, n_frames, cfg.n_mels]))?
-        .f_transpose(1, 2))?; // [C, M, frames]
+    let mel = tch_result(tch_result(mel_flat.f_view([channels, n_frames, cfg.n_mels]))?.f_transpose(1, 2))?; // [C, M, frames]
 
     debug!("audio_to_log_mel_patches: mel={mel:?}");
     // ---------------------------------------------------------------------
@@ -877,18 +873,11 @@ pub fn audio_to_log_mel_patches(
 
 /// For patches shaped [channels, patches, n_mels, patch_frames],
 /// returns [channels x patches, (sample_start, sample_end)].
-pub fn patch_sample_ranges_flat(
-    patches: &Tensor,
-    cfg: &LogMelPatchConfig,
-    window: i64,
-    step: i64,
-) -> Result<Vec<Vec<(usize, usize)>>, TchError> {
+pub fn patch_sample_ranges_flat(patches: &Tensor, cfg: &LogMelPatchConfig, window: i64, step: i64) -> Result<Vec<Vec<(usize, usize)>>, TchError> {
     let size = patches.size();
 
     if size.len() != 4 {
-        return Err(TchError::Shape(format!(
-            "expected [channels, patches, n_mels, patch_frames], got {size:?}"
-        )));
+        return Err(TchError::Shape(format!("expected [channels, patches, n_mels, patch_frames], got {size:?}")));
     }
 
     let channels = size[0];
@@ -905,14 +894,12 @@ pub fn patch_sample_ranges_flat(
             let sample_start = first_frame * step;
             let sample_end = last_frame * step + window;
 
-
             values[c as usize].push((sample_start as usize, sample_end as usize))
         }
     }
 
     Ok(values)
 }
-
 
 impl<RC, L, D, Id, C> Stage for BucketingStage<RC, L, D, Id, C>
 where
@@ -923,7 +910,8 @@ where
     C: RunCtx + Adjustable + 'static,
 {
     type Ctx = C;
-    type In<'a> = Arc<BucketingInput<RC>>
+    type In<'a>
+        = Arc<BucketingInput<RC>>
     where
         Self: 'a;
     type Out = Arc<BucketingOutput>;
@@ -944,22 +932,16 @@ where
 
         debug!("BucketingStage::run: resources_config={resources_config:?} resources={resources:?}");
 
-
         let _eta_guard = CollectEtaInvocationGuard::new("BucketingStage/resources", resources.len(), 1);
         let resources_len = resources.len();
-        let futures = resources.into_iter().map(|resource|{
+        let futures = resources.into_iter().map(|resource| {
             let mut sync_bucketing_ctx = ctx.branch(false);
             let loader = Arc::clone(&self.loader);
             let sync_stage = Arc::clone(&self.sync_bucketing_stage);
             let bucket_window_samples = self.bucket_window_samples;
             let bucket_step_samples = self.bucket_step_samples;
             async move {
-
-                let loaded = t!(loader
-                    .run_cached(
-                        Arc::new(resource.clone()),
-                        sync_bucketing_ctx.branch(false),
-                    )).await?;
+                let loaded = t!(loader.run_cached(Arc::new(resource.clone()), sync_bucketing_ctx.branch(false),)).await?;
 
                 // Bucketing retries still need this loaded resource on the device.
 
@@ -973,20 +955,17 @@ where
                     None,
                 );
 
-                match t!(oom_handler
-                    .run(
-                        &sync_stage,
-                        Arc::new(BucketingTensorInput::new(resource.id(), Arc::clone(&loaded), bucket_window_samples, bucket_step_samples)),
-                        sync_bucketing_ctx,
-                        Contexts::new(
-                            SelectBucketsSplitterContext::new(bucket_slice_count),
-                            NoopRunnableContext {},
-                            MaxParallelAndDumpToCpuAdjustableContex::new(
-                                MaxParallelAdjustContextImpl::new(),
-                                DumpToCpuContextImpl::new(),
-                            ),
-                        ),
-                    )).await
+                match t!(oom_handler.run(
+                    &sync_stage,
+                    Arc::new(BucketingTensorInput::new(resource.id(), Arc::clone(&loaded), bucket_window_samples, bucket_step_samples)),
+                    sync_bucketing_ctx,
+                    Contexts::new(
+                        SelectBucketsSplitterContext::new(bucket_slice_count),
+                        NoopRunnableContext {},
+                        MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new(),),
+                    ),
+                ))
+                .await
                 {
                     Ok(_) => {}
                     Err(e) => {
@@ -1003,10 +982,10 @@ where
             FuturesOrdering::Unordered,
             thoosa_shared::CollectionErrorPolicy::SkipData(&[thoosa_shared::DataErrorKind::InputTooShort]),
             "BucketingStage/resources",
-        )).await?
+        ))
+        .await?
         .into_iter()
         .collect::<Vec<_>>();
-
 
         let run_config_id = self.run_config.run_config_id()?;
         let mut motif_ids = Vec::new();
@@ -1036,7 +1015,6 @@ where
         }
 
         debug!("BucketingStage::run: run_config_id={run_config_id} resources={resources_len} motif_ids={motif_ids:?}");
-
 
         info!("BucketingStage::run: run_config_id={run_config_id:?} done");
 
@@ -1090,8 +1068,7 @@ fn deterministic_plain_lsh_planes(data_dim: i64, num_bits: i64, kind: Kind, devi
         anyhow::bail!("deterministic_plain_lsh_planes: num_bits must be in 1..=30");
     }
 
-    let count = usize::try_from(data_dim.checked_mul(num_bits).context("deterministic_plain_lsh_planes: plane size overflow")?)
-        .context("deterministic_plain_lsh_planes: plane size does not fit into usize")?;
+    let count = usize::try_from(data_dim.checked_mul(num_bits).context("deterministic_plain_lsh_planes: plane size overflow")?).context("deterministic_plain_lsh_planes: plane size does not fit into usize")?;
     let mut seed = 0x9e3779b97f4a7c15u64 ^ (data_dim as u64).wrapping_mul(0xbf58476d1ce4e5b9) ^ (num_bits as u64).wrapping_mul(0x94d049bb133111eb);
     let mut values = Vec::with_capacity(count);
     for idx in 0..count {
@@ -1203,7 +1180,6 @@ impl Default for BucketingConfig {
     }
 }
 
-
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
 #[run_config_grid]
 pub struct BucketRunConfig {
@@ -1225,11 +1201,10 @@ pub struct BucketRunConfig {
 
     #[run_config]
     #[in_map]
-    bucket_config: BucketingConfig
+    bucket_config: BucketingConfig,
 }
 
 impl BucketRunConfig {
-
     pub fn run_config_id(&self) -> Result<RunConfigId, ThoError> {
         self.id.ok_or_else(|| ThoError::new("BucketRunConfig::run_config_id: missing run id"))
     }
@@ -1250,7 +1225,6 @@ impl BucketRunConfig {
         &self.bucket_config
     }
 
-
     pub fn window_samples(&self, window: u32, step: u32) -> Result<u32, ThoError> {
         match &self.bucket_config {
             BucketingConfig::Mel(mel_config) => {
@@ -1259,7 +1233,9 @@ impl BucketRunConfig {
                 }
                 let patch_frames = u32::try_from(mel_config.mel_patch_size).with_context(|| format!("BucketRunConfig::window_samples: patch_frames={} does not fit into u32", mel_config.mel_patch_size))?;
 
-                step.checked_mul(patch_frames.saturating_sub(1)).and_then(|tail| tail.checked_add(window)).ok_or_else(|| ThoError::new(format!("BucketRunConfig::window_samples: sample span overflow for window={window} step={step} mel_config={mel_config:?}")))
+                step.checked_mul(patch_frames.saturating_sub(1))
+                    .and_then(|tail| tail.checked_add(window))
+                    .ok_or_else(|| ThoError::new(format!("BucketRunConfig::window_samples: sample span overflow for window={window} step={step} mel_config={mel_config:?}")))
             }
             BucketingConfig::Plain(plain_config) => {
                 if window == 0 {
@@ -1271,7 +1247,13 @@ impl BucketRunConfig {
     }
 
     pub fn new(id: Option<RunConfigId>, bucket_count: u32, min_slices: u32, max_slices: u32, mel_config: BucketingConfig) -> Self {
-        Self { id, bucket_count, min_slices, max_slices, bucket_config: mel_config }
+        Self {
+            id,
+            bucket_count,
+            min_slices,
+            max_slices,
+            bucket_config: mel_config,
+        }
     }
 }
 
@@ -1283,7 +1265,8 @@ fn bucket_step_samples_for_config(run_config: &BucketRunConfig, step: u32) -> Re
             if mel_config.mel_patch_step <= 0 {
                 return Err(ThoError::new(format!("bucket_step_samples_for_config: invalid mel_patch_step={}", mel_config.mel_patch_step)));
             }
-            step.checked_mul(mel_config.mel_patch_step).ok_or_else(|| ThoError::new(format!("bucket_step_samples_for_config: sample step overflow for step={step} mel_patch_step={}", mel_config.mel_patch_step)))
+            step.checked_mul(mel_config.mel_patch_step)
+                .ok_or_else(|| ThoError::new(format!("bucket_step_samples_for_config: sample step overflow for step={step} mel_patch_step={}", mel_config.mel_patch_step)))
         }
     }
 }
@@ -1305,12 +1288,21 @@ fn bucket_selector_sample_range(selector: &SelectBucketsInputSelector, samples: 
     if bucket_window_samples <= 0 || bucket_step_samples <= 0 {
         return Err(ThoError::new(format!("bucket_selector_sample_range: invalid bucket_window_samples={bucket_window_samples} bucket_step_samples={bucket_step_samples}")));
     }
-    let sample_start = selector.bucket_slice_range.start.checked_mul(bucket_step_samples).ok_or_else(|| ThoError::new(format!("bucket_selector_sample_range: sample_start overflow selector={selector:?} bucket_step_samples={bucket_step_samples}")))?;
+    let sample_start = selector
+        .bucket_slice_range
+        .start
+        .checked_mul(bucket_step_samples)
+        .ok_or_else(|| ThoError::new(format!("bucket_selector_sample_range: sample_start overflow selector={selector:?} bucket_step_samples={bucket_step_samples}")))?;
     let last_bucket_slice = selector.bucket_slice_range.end.checked_sub(1).ok_or_else(|| ThoError::new(format!("bucket_selector_sample_range: selector end overflow selector={selector:?}")))?;
-    let sample_end = last_bucket_slice.checked_mul(bucket_step_samples).and_then(|v| v.checked_add(bucket_window_samples)).ok_or_else(|| ThoError::new(format!("bucket_selector_sample_range: sample_end overflow selector={selector:?} bucket_window_samples={bucket_window_samples} bucket_step_samples={bucket_step_samples}")))?;
+    let sample_end = last_bucket_slice
+        .checked_mul(bucket_step_samples)
+        .and_then(|v| v.checked_add(bucket_window_samples))
+        .ok_or_else(|| ThoError::new(format!("bucket_selector_sample_range: sample_end overflow selector={selector:?} bucket_window_samples={bucket_window_samples} bucket_step_samples={bucket_step_samples}")))?;
     let sample_end = sample_end.min(samples);
     if sample_start >= sample_end {
-        return Err(ThoError::new(format!("bucket_selector_sample_range: selected sample range is empty selector={selector:?} samples={samples} bucket_window_samples={bucket_window_samples} bucket_step_samples={bucket_step_samples}")));
+        return Err(ThoError::new(format!(
+            "bucket_selector_sample_range: selected sample range is empty selector={selector:?} samples={samples} bucket_window_samples={bucket_window_samples} bucket_step_samples={bucket_step_samples}"
+        )));
     }
     Ok(sample_start..sample_end)
 }
@@ -1329,10 +1321,12 @@ impl Default for BucketRunConfig {
 
 #[cfg(test)]
 mod tests {
-    use thoosa_common::tch_error::tch_result;
-    use super::{BucketRunConfig, BucketRunConfigRangeOrValue, BucketingConfig, BucketingConfigRangeOrValue, BucketingInput, BucketingStage, LogMelPatchConfig, LogMelPatchConfigRangeOrValue, PatchTempStore, SelectBucketsInputSelector, bucket_selector_sample_range, bucket_slice_count, bucket_step_samples_for_config, filter_mel_patch_groups};
-    use crate::cli::{import_resources, plot_motif};
+    use super::{
+        BucketRunConfig, BucketRunConfigRangeOrValue, BucketingConfig, BucketingConfigRangeOrValue, BucketingInput, BucketingStage, LogMelPatchConfig, LogMelPatchConfigRangeOrValue, PatchTempStore, SelectBucketsInputSelector, bucket_selector_sample_range, bucket_slice_count,
+        bucket_step_samples_for_config, filter_mel_patch_groups,
+    };
     use crate::cli::plot_resource;
+    use crate::cli::{import_resources, plot_motif};
     use crate::dims::MotifSlices;
     use crate::distance::{EucDistConfig, SimilarityMetric, clc_d2_similarity};
     use crate::fragments::Resolution;
@@ -1357,14 +1351,15 @@ mod tests {
     use tch::Device::Cuda;
     use tch::Tensor;
     use thoosa_common::data_with_extra::DataWithExtra;
-    use thoosa_common::runner::common::cachable::{DevicesWrap, SelectRef};
-    use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
-    use thoosa_common::runner::global_ctx::GlobalCtx;
-    use thoosa_common::runner::run_ctx::RunCtxImpl;
     use thoosa_common::resources::Simple;
+    use thoosa_common::runner::common::cachable::{DevicesWrap, SelectRef};
+    use thoosa_common::runner::global_ctx::GlobalCtx;
+    use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
+    use thoosa_common::runner::run_ctx::RunCtxImpl;
+    use thoosa_common::tch_error::tch_result;
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::tho_tensor::ThoTensor;
-    use thoosa_common::ws::{WsConfigs};
+    use thoosa_common::ws::WsConfigs;
     use thoosa_properties_map::ToHashmap;
     use thoosa_run_config_args::GridRunConfigSource;
     use thoosa_shared::comp_id::SynKey;
@@ -1374,14 +1369,11 @@ mod tests {
     use thoosa_shared::traits::AsyncStage;
     use thoosa_shared::traits::RunCtx;
     use thoosa_shared::{RangeOrValue, ResourceType, TensorIdSliceIdx, ThoError, cdt_for_dir, mono_key};
+    use thoosa_store::SqlStore;
     use thoosa_store::rusqlite::Transaction;
-    use thoosa_store::{SqlStore};
 
     fn temp_dir(name: &str) -> PathBuf {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system time before UNIX_EPOCH")
-            .as_nanos();
+        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).expect("system time before UNIX_EPOCH").as_nanos();
         std::env::temp_dir().join(format!("{name}_{}_{}", std::process::id(), nanos))
     }
 
@@ -1410,17 +1402,10 @@ mod tests {
 
     #[test]
     fn filter_mel_patch_groups_keeps_only_groups_in_configured_slice_range() {
-        let groups = [
-            (1usize, 9usize),
-            (2usize, 10usize),
-            (3usize, 100usize),
-            (4usize, 101usize),
-        ]
+        let groups = [(1usize, 9usize), (2usize, 10usize), (3usize, 100usize), (4usize, 101usize)]
             .into_iter()
             .map(|(group, len)| {
-                let slices = (0..len)
-                    .map(|idx| IdSlice(idx as u32, group as u32, idx as u32))
-                    .collect::<HashSet<_>>();
+                let slices = (0..len).map(|idx| IdSlice(idx as u32, group as u32, idx as u32)).collect::<HashSet<_>>();
                 (group, slices)
             })
             .collect::<HashMap<_, _>>();
@@ -1482,12 +1467,7 @@ mod tests {
         let sql_store = Arc::new(SqlStore::from_path_(test_dir.join(&"main_db.db3")).await?);
         let store: Arc<dyn MotifsStore> = sql_store.clone();
 
-        let ws = Arc::new(RwLock::new(crate::motifs_ws::new_motifs_workspace(
-            test_dir,
-            WsConfigs::new(1,
-                           u32::MAX,
-                           32000)
-        )?));
+        let ws = Arc::new(RwLock::new(crate::motifs_ws::new_motifs_workspace(test_dir, WsConfigs::new(1, u32::MAX, 32000))?));
         let motif_len = 64usize;
 
         let _imported_ids = import_resources(
@@ -1495,51 +1475,49 @@ mod tests {
             sql_store.as_ref(),
             &["label_0", "label_1"],
             || {
-                Ok(HashMap::from_iter([
-                    (0..10).map(|i| (format!("t_0_{i}"), vec![("label_0".to_string(), 1.0)])).collect::<Vec<_>>(),
-                    (0..10).map(|i| (format!("t_1_{i}"), vec![("label_1".to_string(), 1.0)])).collect::<Vec<_>>()
-                ].concat().into_iter()))
+                Ok(HashMap::from_iter(
+                    [
+                        (0..10).map(|i| (format!("t_0_{i}"), vec![("label_0".to_string(), 1.0)])).collect::<Vec<_>>(),
+                        (0..10).map(|i| (format!("t_1_{i}"), vec![("label_1".to_string(), 1.0)])).collect::<Vec<_>>(),
+                    ]
+                    .concat()
+                    .into_iter(),
+                ))
             },
             |key: String| {
                 debug!("key={key:?}");
                 let num_motifs = 4; //random_range(5usize..9usize);
 
-                let motif_gap = 3*motif_len;
+                let motif_gap = 3 * motif_len;
                 let resource_len = num_motifs * motif_len + (num_motifs - 1) * motif_gap;
 
                 if key.starts_with("t_0") {
-
-                    let (resource_t, _resource_intervals) = tch_test_utils::resource_tensor(resource_len, &[
-                        vec![(num_motifs, motif_len, TestSignalKind::ChirpUp)],
-                    ], motif_gap, 10.0, false, true)?;//TODO set motif_from_zero to false and z-normalize
+                    let (resource_t, _resource_intervals) = tch_test_utils::resource_tensor(resource_len, &[vec![(num_motifs, motif_len, TestSignalKind::ChirpUp)]], motif_gap, 10.0, false, true)?; //TODO set motif_from_zero to false and z-normalize
 
                     Ok(resource_t)
                 } else if key.starts_with("t_1") {
-
-                    let (resource_t, _resource_intervals) = tch_test_utils::resource_tensor(resource_len, &[
-                        vec![(num_motifs, motif_len, TestSignalKind::Trill)],
-                    ], motif_gap, 10.0, false, true)?;
+                    let (resource_t, _resource_intervals) = tch_test_utils::resource_tensor(resource_len, &[vec![(num_motifs, motif_len, TestSignalKind::Trill)]], motif_gap, 10.0, false, true)?;
 
                     Ok(resource_t)
                 } else {
                     //TODO random tensor
                     todo!()
                 }
-
             },
             None,
             true,
-            |t: &Transaction|{
+            |t: &Transaction| {
                 SqlStore::save_all_sets(&t)?;
                 Ok(())
             },
-        ).await?;
+        )
+        .await?;
 
         let tensors_path = ws.read().tensors_path().clone();
 
         let loader = Arc::new(RawTensorLoader::<RunCtxImpl>::new(
             move |key, _| {
-                let tensor = tch_result(Tensor::load(tensors_path.join(format!("1_{}.pt", key.file_stem()))))?;//1_ for import id
+                let tensor = tch_result(Tensor::load(tensors_path.join(format!("1_{}.pt", key.file_stem()))))?; //1_ for import id
                 debug!("test_motifs: key={key:?} loaded tensor={tensor:?}");
                 Ok(ThoTensor::new(SynKey::new([mono_key!(key.id(), format!("resource_id={}", key.id()))]), tensor)?)
             },
@@ -1562,23 +1540,21 @@ mod tests {
                 mel_patch_size: 18,
                 mel_patch_step: 32,
                 ..LogMelPatchConfig::default()
-            })
+            }),
         };
 
-        let find_motifs_run_config_id = store.save_run_config(
-            None,
-            &FindMotifsRunConfig::type_name(),
-            "FindMotifsRunConfig",
-            FindMotifsRunConfig::new(None, step, window, None, SimilarityMetric::EucDist(EucDistConfig{ z_normalize: true }), SlicesFilter::Accumulate(AccumulateStats{ aggr: Aggr::Max(MaxAggr{ k: 0.0 }) }), None).to_properties_iter(None).collect(),
-        ).await?;
+        let find_motifs_run_config_id = store
+            .save_run_config(
+                None,
+                &FindMotifsRunConfig::type_name(),
+                "FindMotifsRunConfig",
+                FindMotifsRunConfig::new(None, step, window, None, SimilarityMetric::EucDist(EucDistConfig { z_normalize: true }), SlicesFilter::Accumulate(AccumulateStats { aggr: Aggr::Max(MaxAggr { k: 0.0 }) }), None)
+                    .to_properties_iter(None)
+                    .collect(),
+            )
+            .await?;
 
-
-        let id = store.save_run_config(
-            Some(&[find_motifs_run_config_id]),
-            &BucketRunConfig::type_name(),
-            "BucketRunConfig",
-            patch_run_config.to_properties_iter(None).collect(),
-        ).await?;
+        let id = store.save_run_config(Some(&[find_motifs_run_config_id]), &BucketRunConfig::type_name(), "BucketRunConfig", patch_run_config.to_properties_iter(None).collect()).await?;
 
         patch_run_config.id = Some(id);
 
@@ -1590,49 +1566,42 @@ mod tests {
 
         debug!("res={res:?} motifs={motifs:?}");
 
-        let motif_loader_impl = MotifLoader::<RawTensorLoader<RunCtxImpl>, RunCtxImpl>::new(
-            Arc::clone(&store),
-            Arc::clone(&loader),
-            &ws
-        ).await?;
+        let motif_loader_impl = MotifLoader::<RawTensorLoader<RunCtxImpl>, RunCtxImpl>::new(Arc::clone(&store), Arc::clone(&loader), &ws).await?;
 
-        let motif_stats = Arc::new(MotifStats::new(
-            Arc::clone(&store),
-            Arc::clone(&loader),
-            Arc::clone(&ws),
-            Arc::clone(&motif_loader_impl),
-        ));
+        let motif_stats = Arc::new(MotifStats::new(Arc::clone(&store), Arc::clone(&loader), Arc::clone(&ws), Arc::clone(&motif_loader_impl)));
 
         let avg_norm_thickness = futures::stream::iter(motifs.iter().map(|motif_id| {
             let motif_stats = Arc::clone(&motif_stats);
             let mut motif_load_ctx = ctx.branch(false);
             async move {
                 let norm_thickness = Metrics::NormThickness(NormThicknessRunConfig::default());
-                let metrics: Arc<MotifStatsOutput> = Arc::clone(&motif_stats).run(Arc::new(MotifStatsInput::from_motif_input(MotifLoaderInput::new(mono_key!(*motif_id, "").into(), None), vec![
-                    norm_thickness.clone()
-                ])), motif_load_ctx.branch(false)).await?;
+                let metrics: Arc<MotifStatsOutput> = Arc::clone(&motif_stats)
+                    .run(Arc::new(MotifStatsInput::from_motif_input(MotifLoaderInput::new(mono_key!(*motif_id, "").into(), None), vec![norm_thickness.clone()])), motif_load_ctx.branch(false))
+                    .await?;
 
                 let norm_thickness = metrics.channel_metric_value(&norm_thickness, 0)?.value();
 
                 debug!("heavy_run_mel_path: norm_thickness={norm_thickness:?}");
                 Ok::<_, ThoError>(norm_thickness)
             }
-        })).buffer_unordered(10).try_fold(0.0_f32, |acc, value| async move {
-            Ok(acc + value)
-        }).await?/motifs.len() as f32;
+        }))
+        .buffer_unordered(10)
+        .try_fold(0.0_f32, |acc, value| async move { Ok(acc + value) })
+        .await?
+            / motifs.len() as f32;
 
         debug!("heavy_run_mel_path: avg_norm_thickness={avg_norm_thickness:?}");
         let _run_config: crate::stages::bucketing::BucketRunConfigRangeOrValue<crate::stages::bucketing::BucketRunConfigFields> = crate::stages::bucketing::BucketRunConfigRangeOrValue {
             id: None,
-            bucket_count: RangeOrValue::Range { range: Range {start:64, end:512}, step: None },
+            bucket_count: RangeOrValue::Range { range: Range { start: 64, end: 512 }, step: None },
             min_slices: RangeOrValue::Value(2),
             max_slices: RangeOrValue::Value(100),
             bucket_config: BucketingConfigRangeOrValue::Mel(LogMelPatchConfigRangeOrValue {
-                n_mels: RangeOrValue::Range { range: Range {start:64, end:256}, step: None },
+                n_mels: RangeOrValue::Range { range: Range { start: 64, end: 256 }, step: None },
                 f_min: RangeOrValue::Value(20.0),
                 f_max: RangeOrValue::Value(16000.0),
-                mel_patch_size: RangeOrValue::Range { range: Range {start:64, end:128}, step: None },
-                mel_patch_step: RangeOrValue::Range { range: Range {start:4, end:32}, step: None },
+                mel_patch_size: RangeOrValue::Range { range: Range { start: 64, end: 128 }, step: None },
+                mel_patch_step: RangeOrValue::Range { range: Range { start: 4, end: 32 }, step: None },
             }),
         };
 
@@ -1640,46 +1609,46 @@ mod tests {
             Simple::new(ResourceType::Group("all group".into())), //run_all_args.find_resources.clone(),
         ));
 
-       /*plot_test_resources(&store, &ws, &loader, &mut ctx).await?;
+        /*plot_test_resources(&store, &ws, &loader, &mut ctx).await?;
 
-        let all_motifs = [MotifKind::ChirpUp, MotifKind::ChirpDown, MotifKind::Trill, MotifKind::HarmonicStack].as_slice().into_iter().map(move |motif|(motif.clone(), Tensor::from_slice(gen_motif(motif_len, &motif).as_slice()).view((1, 1, -1)).to_device(Cuda(0)))).collect::<Vec<(MotifKind, Tensor)>>();
-        let mut best_reference_distances = vec![f64::INFINITY; all_motifs.len()];
+                let all_motifs = [MotifKind::ChirpUp, MotifKind::ChirpDown, MotifKind::Trill, MotifKind::HarmonicStack].as_slice().into_iter().map(move |motif|(motif.clone(), Tensor::from_slice(gen_motif(motif_len, &motif).as_slice()).view((1, 1, -1)).to_device(Cuda(0)))).collect::<Vec<(MotifKind, Tensor)>>();
+                let mut best_reference_distances = vec![f64::INFINITY; all_motifs.len()];
 
-        for motif_id in &motifs {
-            let motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>> = Arc::clone(&motif_loader_impl).run(Arc::new(MotifLoaderInput::new(mono_key!(*motif_id, "").into(), None)), ctx.branch(false)).await?;
-            debug!("heavy_run_mel_path: motif={motif:?}");
-            {
-                let motif_ref = SelectRef::borrow_to(motif, ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
-                let motif = motif_ref.as_ref();
-                for (ref_idx, ref_motif) in all_motifs.iter().enumerate() {
-                    let motif_t = motif.data().as_ref().unsqueeze(0);
-                    debug!("heavy_run_mel_path: motif_t={motif_t:?} ref_motif={:?}", ref_motif.1);
-                    let distance = clc_d2_similarity(&ref_motif.1, &motif_t, SimilarityMetric::EucDist(EucDistConfig{z_normalize: true}))?;
-                    best_reference_distances[ref_idx] = best_reference_distances[ref_idx].min(distance.f_min()?.f_double_value(&[])?);
-                    debug!("heavy_run_mel_path: motif_id={motif_id:?} x {:?}:  distance=\n{distance}", ref_motif.0);
+                for motif_id in &motifs {
+                    let motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>> = Arc::clone(&motif_loader_impl).run(Arc::new(MotifLoaderInput::new(mono_key!(*motif_id, "").into(), None)), ctx.branch(false)).await?;
+                    debug!("heavy_run_mel_path: motif={motif:?}");
+                    {
+                        let motif_ref = SelectRef::borrow_to(motif, ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
+                        let motif = motif_ref.as_ref();
+                        for (ref_idx, ref_motif) in all_motifs.iter().enumerate() {
+                            let motif_t = motif.data().as_ref().unsqueeze(0);
+                            debug!("heavy_run_mel_path: motif_t={motif_t:?} ref_motif={:?}", ref_motif.1);
+                            let distance = clc_d2_similarity(&ref_motif.1, &motif_t, SimilarityMetric::EucDist(EucDistConfig{z_normalize: true}))?;
+                            best_reference_distances[ref_idx] = best_reference_distances[ref_idx].min(distance.f_min()?.f_double_value(&[])?);
+                            debug!("heavy_run_mel_path: motif_id={motif_id:?} x {:?}:  distance=\n{distance}", ref_motif.0);
+                        }
+                        Ok::<_, ThoError>(())
+                    }?;
+
+
+
+                    plot_motif(
+                        &ws,
+                        ctx.branch(false),
+                        *motif_id as usize,
+                        &motif_loader_impl,
+                        Arc::clone(&motif_stats),
+                        None,
+                        Resolution::Normal,
+                        false
+                    ).await?;
+
                 }
-                Ok::<_, ThoError>(())
-            }?;
 
-
-
-            plot_motif(
-                &ws,
-                ctx.branch(false),
-                *motif_id as usize,
-                &motif_loader_impl,
-                Arc::clone(&motif_stats),
-                None,
-                Resolution::Normal,
-                false
-            ).await?;
-
-        }
-
-        assert!(!motifs.is_empty());
-        debug!("heavy_run_mel_path: best_reference_distances={best_reference_distances:?}");
-        assert!(best_reference_distances.iter().filter(|distance| **distance < 1.0).count() >= 2, "expected MelPatch to recover at least two generated motif kinds, best_reference_distances={best_reference_distances:?}");
-*/
+                assert!(!motifs.is_empty());
+                debug!("heavy_run_mel_path: best_reference_distances={best_reference_distances:?}");
+                assert!(best_reference_distances.iter().filter(|distance| **distance < 1.0).count() >= 2, "expected MelPatch to recover at least two generated motif kinds, best_reference_distances={best_reference_distances:?}");
+        */
         Ok(())
     }
 
@@ -1688,35 +1657,13 @@ mod tests {
         for resource in Simple::new(ResourceType::Set("all_label_0".into())).to_resources(&store).await? {
             // resource
 
-            plot_resource(
-                &ws,
-                &store,
-                &loader,
-                resource.id(),
-                None,
-                None,
-                Resolution::Normal,
-                false,
-                ctx.branch(false),
-                "0_"
-            ).await?
+            plot_resource(&ws, &store, &loader, resource.id(), None, None, Resolution::Normal, false, ctx.branch(false), "0_").await?
         }
 
         for resource in Simple::new(ResourceType::Set("all_label_1".into())).to_resources(&store).await? {
             // resource
 
-            plot_resource(
-                &ws,
-                &store,
-                &loader,
-                resource.id(),
-                None,
-                None,
-                Resolution::Normal,
-                false,
-                ctx.branch(false),
-                "1_"
-            ).await?
+            plot_resource(&ws, &store, &loader, resource.id(), None, None, Resolution::Normal, false, ctx.branch(false), "1_").await?
         }
         Ok(())
     }
@@ -1733,24 +1680,21 @@ mod tests {
         let sql_store = Arc::new(SqlStore::from_path_(test_dir.join(&"main_db.db3")).await?);
         let store: Arc<dyn MotifsStore> = sql_store.clone();
 
-        let ws = Arc::new(RwLock::new(crate::motifs_ws::new_motifs_workspace(
-            test_dir,
-            WsConfigs::new(3,
-                           u32::MAX,
-                           32000)
-        )?));
-
-
+        let ws = Arc::new(RwLock::new(crate::motifs_ws::new_motifs_workspace(test_dir, WsConfigs::new(3, u32::MAX, 32000))?));
 
         let _imported_ids = import_resources(
             &ws,
             sql_store.as_ref(),
             &["label_0", "label_1"],
             || {
-                Ok(HashMap::from_iter([
-                    (0..10).map(|i| (format!("t_0_{i}"), vec![("label_0".to_string(), 1.0)])).collect::<Vec<_>>(),
-                    (0..10).map(|i| (format!("t_1_{i}"), vec![("label_1".to_string(), 1.0)])).collect::<Vec<_>>()
-                ].concat().into_iter()))
+                Ok(HashMap::from_iter(
+                    [
+                        (0..10).map(|i| (format!("t_0_{i}"), vec![("label_0".to_string(), 1.0)])).collect::<Vec<_>>(),
+                        (0..10).map(|i| (format!("t_1_{i}"), vec![("label_1".to_string(), 1.0)])).collect::<Vec<_>>(),
+                    ]
+                    .concat()
+                    .into_iter(),
+                ))
             },
             |key: String| {
                 debug!("key={key:?}");
@@ -1760,42 +1704,46 @@ mod tests {
                 let resource_len = num_motifs * motif_len + (num_motifs - 1) * motif_gap;
 
                 if key.starts_with("t_0") {
-
-                    let (resource_t, _resource_intervals) = tch_test_utils::resource_tensor(resource_len, &[
-                        vec![(num_motifs, motif_len, TestSignalKind::ChirpUp)],
-                        vec![(num_motifs, motif_len, TestSignalKind::ChirpDown)],
-                        vec![(num_motifs, motif_len, TestSignalKind::HarmonicStack)]
-                    ], motif_gap, 10.0, false, true)?;//TODO set motif_from_zero to false and z-normalize
+                    let (resource_t, _resource_intervals) = tch_test_utils::resource_tensor(
+                        resource_len,
+                        &[vec![(num_motifs, motif_len, TestSignalKind::ChirpUp)], vec![(num_motifs, motif_len, TestSignalKind::ChirpDown)], vec![(num_motifs, motif_len, TestSignalKind::HarmonicStack)]],
+                        motif_gap,
+                        10.0,
+                        false,
+                        true,
+                    )?; //TODO set motif_from_zero to false and z-normalize
 
                     Ok(resource_t)
                 } else if key.starts_with("t_1") {
-
-                    let (resource_t, _resource_intervals) = tch_test_utils::resource_tensor(resource_len, &[
-                        vec![(num_motifs, motif_len, TestSignalKind::ChirpDown)],
-                        vec![(num_motifs, motif_len, TestSignalKind::ChirpUp)],
-                        vec![(num_motifs, motif_len, TestSignalKind::Trill)]
-                    ], motif_gap, 10.0, false, true)?;
+                    let (resource_t, _resource_intervals) = tch_test_utils::resource_tensor(
+                        resource_len,
+                        &[vec![(num_motifs, motif_len, TestSignalKind::ChirpDown)], vec![(num_motifs, motif_len, TestSignalKind::ChirpUp)], vec![(num_motifs, motif_len, TestSignalKind::Trill)]],
+                        motif_gap,
+                        10.0,
+                        false,
+                        true,
+                    )?;
 
                     Ok(resource_t)
                 } else {
                     //TODO random tensor
                     todo!()
                 }
-
             },
             None,
             true,
-            |t: &Transaction|{
+            |t: &Transaction| {
                 SqlStore::save_all_sets(&t)?;
                 Ok(())
             },
-        ).await?;
+        )
+        .await?;
 
         let tensors_path = ws.read().tensors_path().clone();
 
         let loader = Arc::new(RawTensorLoader::<RunCtxImpl>::new(
             move |key, _| {
-                let tensor = tch_result(Tensor::load(tensors_path.join(format!("1_{}.pt", key.file_stem()))))?;//1_ for import id
+                let tensor = tch_result(Tensor::load(tensors_path.join(format!("1_{}.pt", key.file_stem()))))?; //1_ for import id
                 debug!("test_motifs: key={key:?} loaded tensor={tensor:?}");
                 Ok(ThoTensor::new(SynKey::new([mono_key!(key.id(), format!("resource_id={}", key.id()))]), tensor)?)
             },
@@ -1818,23 +1766,21 @@ mod tests {
                 mel_patch_size: 9,
                 mel_patch_step: 32,
                 ..LogMelPatchConfig::default()
-            })
+            }),
         };
 
-        let find_motifs_run_config_id = store.save_run_config(
-            None,
-            &FindMotifsRunConfig::type_name(),
-            "FindMotifsRunConfig",
-            FindMotifsRunConfig::new(None, step, window, None, SimilarityMetric::EucDist(EucDistConfig{ z_normalize: true }), SlicesFilter::Accumulate(AccumulateStats{ aggr: Aggr::Max(MaxAggr{ k: 0.0 }) }), None).to_properties_iter(None).collect(),
-        ).await?;
+        let find_motifs_run_config_id = store
+            .save_run_config(
+                None,
+                &FindMotifsRunConfig::type_name(),
+                "FindMotifsRunConfig",
+                FindMotifsRunConfig::new(None, step, window, None, SimilarityMetric::EucDist(EucDistConfig { z_normalize: true }), SlicesFilter::Accumulate(AccumulateStats { aggr: Aggr::Max(MaxAggr { k: 0.0 }) }), None)
+                    .to_properties_iter(None)
+                    .collect(),
+            )
+            .await?;
 
-
-        let id = store.save_run_config(
-            Some(&[find_motifs_run_config_id]),
-            &BucketRunConfig::type_name(),
-            "BucketRunConfig",
-            patch_run_config.to_properties_iter(None).collect(),
-        ).await?;
+        let id = store.save_run_config(Some(&[find_motifs_run_config_id]), &BucketRunConfig::type_name(), "BucketRunConfig", patch_run_config.to_properties_iter(None).collect()).await?;
 
         patch_run_config.id = Some(id);
 
@@ -1846,39 +1792,22 @@ mod tests {
 
         debug!("res={res:?} motifs={motifs:?}");
 
-        let motif_loader_impl = MotifLoader::<RawTensorLoader<RunCtxImpl>, RunCtxImpl>::new(
-            Arc::clone(&store),
-            Arc::clone(&loader),
-            &ws
-        ).await?;
+        let motif_loader_impl = MotifLoader::<RawTensorLoader<RunCtxImpl>, RunCtxImpl>::new(Arc::clone(&store), Arc::clone(&loader), &ws).await?;
 
-        let motif_stats = Arc::new(MotifStats::new(
-            Arc::clone(&store),
-            Arc::clone(&loader),
-            Arc::clone(&ws),
-            Arc::clone(&motif_loader_impl),
-        ));
+        let motif_stats = Arc::new(MotifStats::new(Arc::clone(&store), Arc::clone(&loader), Arc::clone(&ws), Arc::clone(&motif_loader_impl)));
 
         //it's slow, uncomment if raw tensors data is needed
         for resource in Simple::new(ResourceType::Group("all group".into())).to_resources(&store).await? {
             // resource
 
-            plot_resource(
-                &ws,
-                &store,
-                &loader,
-                resource.id(),
-                None,
-                None,
-                Resolution::Normal,
-                false,
-                ctx.branch(false),
-                ""
-            ).await?
-
+            plot_resource(&ws, &store, &loader, resource.id(), None, None, Resolution::Normal, false, ctx.branch(false), "").await?
         }
 
-        let all_motifs = [TestSignalKind::ChirpUp, TestSignalKind::ChirpDown, TestSignalKind::Trill, TestSignalKind::HarmonicStack].as_slice().into_iter().map(move |motif|(motif.clone(), Tensor::from_slice(gen_signal(64, &motif).as_slice()).view((1, 1, -1)).to_device(Cuda(0)))).collect::<Vec<(TestSignalKind, Tensor)>>();
+        let all_motifs = [TestSignalKind::ChirpUp, TestSignalKind::ChirpDown, TestSignalKind::Trill, TestSignalKind::HarmonicStack]
+            .as_slice()
+            .into_iter()
+            .map(move |motif| (motif.clone(), Tensor::from_slice(gen_signal(64, &motif).as_slice()).view((1, 1, -1)).to_device(Cuda(0))))
+            .collect::<Vec<(TestSignalKind, Tensor)>>();
         let mut best_reference_distances = vec![f64::INFINITY; all_motifs.len()];
 
         for motif_id in &motifs {
@@ -1890,40 +1819,34 @@ mod tests {
                 for (ref_idx, ref_motif) in all_motifs.iter().enumerate() {
                     let motif_t = motif.data().local()?.unsqueeze(0);
                     debug!("heavy_run_mel_path: motif_t={motif_t:?} ref_motif={:?}", ref_motif.1);
-                    let distance = clc_d2_similarity(&ref_motif.1, &motif_t, SimilarityMetric::EucDist(EucDistConfig{z_normalize: true}))?;
+                    let distance = clc_d2_similarity(&ref_motif.1, &motif_t, SimilarityMetric::EucDist(EucDistConfig { z_normalize: true }))?;
                     best_reference_distances[ref_idx] = best_reference_distances[ref_idx].min(tch_result(tch_result(distance.f_min())?.f_double_value(&[]))?);
                     debug!("heavy_run_mel_path: motif_id={motif_id:?} x {:?}:  distance=\n{distance}", ref_motif.0);
                 }
                 Ok::<_, ThoError>(())
             }?;
 
-
-            let metrics = Arc::clone(&motif_stats).run(Arc::new(MotifStatsInput::from_motif_input(MotifLoaderInput::new(mono_key!(*motif_id, "").into(), None), vec![
-                Metrics::NormThickness(NormThicknessRunConfig::default())
-            ])), ctx.branch(false)).await?;
+            let metrics = Arc::clone(&motif_stats)
+                .run(
+                    Arc::new(MotifStatsInput::from_motif_input(MotifLoaderInput::new(mono_key!(*motif_id, "").into(), None), vec![Metrics::NormThickness(NormThicknessRunConfig::default())])),
+                    ctx.branch(false),
+                )
+                .await?;
 
             debug!("heavy_run_mel_path: metrics={metrics:?}");
 
-            plot_motif(
-                &ws,
-                ctx.branch(false),
-                *motif_id as usize,
-                &motif_loader_impl,
-                Arc::clone(&motif_stats),
-                None,
-                Resolution::Normal,
-                false
-            ).await?;
-
+            plot_motif(&ws, ctx.branch(false), *motif_id as usize, &motif_loader_impl, Arc::clone(&motif_stats), None, Resolution::Normal, false).await?;
         }
 
         assert!(!motifs.is_empty());
         debug!("heavy_run_mel_path: best_reference_distances={best_reference_distances:?}");
-        assert!(best_reference_distances.iter().filter(|distance| **distance < 1.0).count() >= 2, "expected MelPatch to recover at least two generated motif kinds, best_reference_distances={best_reference_distances:?}");
+        assert!(
+            best_reference_distances.iter().filter(|distance| **distance < 1.0).count() >= 2,
+            "expected MelPatch to recover at least two generated motif kinds, best_reference_distances={best_reference_distances:?}"
+        );
 
         Ok(())
     }
-
 }
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
@@ -1952,8 +1875,6 @@ pub struct LogMelPatchConfig {
     #[run_config]
     #[in_map]
     pub mel_patch_step: i64,
-
-
 }
 
 impl Default for LogMelPatchConfig {

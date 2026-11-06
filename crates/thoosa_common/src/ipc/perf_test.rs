@@ -2,9 +2,9 @@
 
 use crate::ipc::cuda_wokrer::{AllTensors, CudaWorker, InitFn, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use crate::ipc::proxy::{DynSyncStageEnum, ProxyStage};
-use crate::ipc::serialization::json::{JsonIpcCodec};
-use crate::ipc::tests::{run_ipc_test};
-use crate::ipc::worker_msg::{WorkerInput};
+use crate::ipc::serialization::json::JsonIpcCodec;
+use crate::ipc::tests::run_ipc_test;
+use crate::ipc::worker_msg::WorkerInput;
 use crate::ipc::wraps::SyncStageIpcWrapper;
 use crate::ipc::wraps::WorkerWrapper;
 use crate::runner::common::cachable::{BorrowRef, ThoDataRef};
@@ -14,20 +14,20 @@ use crate::runner::run_ctx::RunCtxImpl;
 use crate::tho_device::ThoDevice;
 use crate::ws::{Workspace, mock_ws_simp};
 use futures_util::future::{BoxFuture, FutureExt};
-use log::{debug};
-use parking_lot::{RwLock};
+use log::debug;
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::marker::PhantomData;
 use std::sync::Arc;
+use thoosa_common::runner::sync_stage::SyncStage;
 use thoosa_shared::ThoError;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::ipc_types::WorkerOutput;
 use thoosa_shared::perf_logging::{PERF, format_perf_map};
 use thoosa_shared::traits::{RunCtx, Stage};
-use thoosa_common::runner::sync_stage::{SyncStage};
 
 const SIMP_ENDPOINT: &str = "SimpStage";
 
@@ -39,9 +39,14 @@ struct SimpInput {
 impl Input for SimpInput {}
 
 impl BorrowRef for SimpInput {
-    fn protect(&self, _device: usize) -> thoosa_common::runner::residency::ResidencyLease { thoosa_common::runner::residency::ResidencyLease::default() }
+    fn protect(&self, _device: usize) -> thoosa_common::runner::residency::ResidencyLease {
+        thoosa_common::runner::residency::ResidencyLease::default()
+    }
 
-    type Out<'a> = ThoDataRef<'a, Self> where Self: 'a;
+    type Out<'a>
+        = ThoDataRef<'a, Self>
+    where
+        Self: 'a;
 
     fn borrow_ref<'a>(&'a self, _to_tho_device_idx: usize) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
     where
@@ -50,7 +55,6 @@ impl BorrowRef for SimpInput {
         // Scalar-only input is device-independent, so IPC invocation can borrow it without a tensor copy.
         async move { Ok(ThoDataRef::Borrowed(self)) }
     }
-
 }
 
 #[typetag::serde]
@@ -66,7 +70,6 @@ impl WorkerStageInput for SimpInput {
         // Keep this conversion explicit so the test covers the normal worker wrapper without touching tensor storage.
         Ok(self.clone())
     }
-
 }
 
 #[derive(Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -89,36 +92,34 @@ impl WorkerStageOutput for SimpOutput {
 #[derive(Debug)]
 struct SimpStage<C>
 where
-    C:RunCtx
+    C: RunCtx,
 {
-    pd:PhantomData<C>
+    pd: PhantomData<C>,
 }
 
-impl <C> SimpStage<C>
+impl<C> SimpStage<C>
 where
-    C:RunCtx
+    C: RunCtx,
 {
     pub async fn new() -> Result<DynSyncStageEnum<SimpStage<RunCtxImpl>>, ThoError> {
         if GlobalCtx::global().is_ipc() {
             Ok(DynSyncStageEnum::Proxy {
-                stage:Arc::new(ProxyStage::<SimpStage<RunCtxImpl>>::proxy(SIMP_ENDPOINT, Some(0.to_string()), 1, Box::new(())).await?),
-                init:()
+                stage: Arc::new(ProxyStage::<SimpStage<RunCtxImpl>>::proxy(SIMP_ENDPOINT, Some(0.to_string()), 1, Box::new(())).await?),
+                init: (),
             })
-
         } else {
             Ok(DynSyncStageEnum::Local(Arc::new(SimpStage::<RunCtxImpl>::new_local())))
         }
-
     }
 
     pub fn new_local() -> Self {
-        Self { pd:PhantomData }
+        Self { pd: PhantomData }
     }
 }
 
 impl<C> Stage for SimpStage<C>
 where
-    C:RunCtx
+    C: RunCtx,
 {
     type Ctx = C;
     type In<'a> = SimpInput;
@@ -127,9 +128,9 @@ where
 
 impl<C> SyncStage for SimpStage<C>
 where
-    C:RunCtx
+    C: RunCtx,
 {
-    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SimpStage::do_run"))]
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "SimpStage::do_run"))]
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         // Identity work isolates IPC and sync-stage dispatch overhead from tensor computation.
         // std::thread::sleep(Duration::from_secs(1));
@@ -138,7 +139,7 @@ where
     }
 }
 
-fn simp_stage_init<'a>(_tage_id:Option<String>, init: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &'a AllTensors, _tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+fn simp_stage_init<'a>(_tage_id: Option<String>, init: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &'a AllTensors, _tho_device: &'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
         let init: Box<dyn Any> = init;
         let Ok(_init) = init.downcast::<()>() else {
@@ -146,10 +147,11 @@ fn simp_stage_init<'a>(_tage_id:Option<String>, init: Box<dyn WorkerInput>, _ws:
         };
 
         Ok(Box::new(WorkerWrapper::new(Arc::new(SimpStage::<WokerRunCtx>::new_local()), PhantomData::<JsonIpcCodec>)) as Box<dyn SyncStageIpcWrapper>)
-    }.boxed()
+    }
+    .boxed()
 }
 
-#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TrainStep::do_test_simp"))]
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "TrainStep::do_test_simp"))]
 async fn do_test_simp() -> Result<(), ThoError> {
     let stage = Arc::new(SimpStage::<RunCtxImpl>::new().await?);
 
@@ -183,18 +185,10 @@ fn test_simp_ipc() -> Result<(), ThoError> {
     run_ipc_test(
         module_path!(),
         async {
-
             do_test_simp().await?;
 
             Ok(())
         },
-        async |sock_path: OsString| {
-            CudaWorker::run_worker(
-                sock_path,
-                &ws,
-                HashMap::from([(SIMP_ENDPOINT.to_string(), Box::new(simp_stage_init) as InitFn)]),
-                ThoDevice::from(1usize),
-            ).await
-        },
+        async |sock_path: OsString| CudaWorker::run_worker(sock_path, &ws, HashMap::from([(SIMP_ENDPOINT.to_string(), Box::new(simp_stage_init) as InitFn)]), ThoDevice::from(1usize)).await,
     )
 }

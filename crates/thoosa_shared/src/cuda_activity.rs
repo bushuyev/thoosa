@@ -37,7 +37,8 @@ impl CudaActivityScope {
     }
 
     pub fn recovery_ticket(gate: &Arc<CudaActivityGate>) -> Result<CudaActivityPauseTicket, ThoError> {
-        let ticket = Self::current().and_then(|scope| scope.leases.iter().find(|lease| Arc::ptr_eq(&lease.gate, gate)).and_then(|lease| lease.reset))
+        let ticket = Self::current()
+            .and_then(|scope| scope.leases.iter().find(|lease| Arc::ptr_eq(&lease.gate, gate)).and_then(|lease| lease.reset))
             .ok_or_else(|| ThoError::new("backend reload requires the coordinator's recovery scope"))?;
         gate.check_recovery_authority(ticket, true)?;
         Ok(ticket)
@@ -52,9 +53,13 @@ impl CudaActivityScope {
             CudaRecoveryState::Running => {}
         }
         state.active += 1;
-        Ok(Some(Self { leases: vec![
-            Arc::new(ActivityLease { gate: Arc::clone(gate), generation: state.generation, reset: None })
-        ] }))
+        Ok(Some(Self {
+            leases: vec![Arc::new(ActivityLease {
+                gate: Arc::clone(gate),
+                generation: state.generation,
+                reset: None,
+            })],
+        }))
     }
 
     pub fn with_inherited(mut self, inherited: Option<Self>) -> Self {
@@ -75,9 +80,7 @@ impl CudaActivityScope {
     /// Admitted operations may drain during recovery, but never run against a
     /// replacement generation or borrow another gate's cleanup authority.
     pub fn check_operation(&self, gate: &Arc<CudaActivityGate>) -> Result<(), ThoError> {
-
-        let lease = self.leases.iter().find(|lease| Arc::ptr_eq(&lease.gate, gate))
-            .ok_or_else(|| ThoError::new("CUDA operation has no activity lease for its device"))?;
+        let lease = self.leases.iter().find(|lease| Arc::ptr_eq(&lease.gate, gate)).ok_or_else(|| ThoError::new("CUDA operation has no activity lease for its device"))?;
 
         let state = gate.state.lock();
         if let CudaRecoveryState::Failed(failure) = &state.recovery {
@@ -106,8 +109,7 @@ impl CudaActivityScope {
     }
 
     pub async fn wait_for_interruption(&self) -> ThoError {
-        let waits: Vec<_> = self.leases.iter().filter(|lease| lease.reset.is_none())
-            .map(|lease| Box::pin(lease.gate.wait_for_generation_end(lease.generation))).collect();
+        let waits: Vec<_> = self.leases.iter().filter(|lease| lease.reset.is_none()).map(|lease| Box::pin(lease.gate.wait_for_generation_end(lease.generation))).collect();
         if waits.is_empty() {
             return std::future::pending().await;
         }
@@ -118,13 +120,15 @@ impl CudaActivityScope {
     /// of waiting, but preserve all existing leases when adding another device.
     pub fn for_operation(gate: &Arc<CudaActivityGate>) -> Result<Self, ThoError> {
         let inherited = Self::current();
-        if let Some(scope) = &inherited && scope.generation(gate).is_some() {
+        if let Some(scope) = &inherited
+            && scope.generation(gate).is_some()
+        {
             scope.check_operation(gate)?;
             return Ok(scope.clone());
         }
-        Self::try_enter(gate)?.map(|scope| scope.with_inherited(inherited)).ok_or_else(|| {
-            ThoError::new_with_cause("CUDA operation interrupted by Cuda recovery", ThoError::CudaBeingRecovered)
-        })
+        Self::try_enter(gate)?
+            .map(|scope| scope.with_inherited(inherited))
+            .ok_or_else(|| ThoError::new_with_cause("CUDA operation interrupted by Cuda recovery", ThoError::CudaBeingRecovered))
     }
 
     pub async fn run<F: Future>(self, future: F) -> F::Output {
@@ -143,15 +147,23 @@ impl CudaActivityScope {
             }
             state.generation
         };
-        Self { leases: vec![Arc::new(ActivityLease { gate: Arc::clone(gate), generation, reset: Some(ticket) })] }.run(future).await
+        Self {
+            leases: vec![Arc::new(ActivityLease {
+                gate: Arc::clone(gate),
+                generation,
+                reset: Some(ticket),
+            })],
+        }
+        .run(future)
+        .await
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::{CudaAction, CudaActivityGate, CudaDeviceGeneration, CudaRecoveryFailure, CudaRecoveryState, SyncStageRunnerError, ThoError, tho_error};
     use std::sync::{Arc, Barrier};
     use tokio::sync::mpsc;
-    use crate::{tho_error, CudaAction, CudaActivityGate, CudaDeviceGeneration, CudaRecoveryFailure, CudaRecoveryState, SyncStageRunnerError, ThoError};
 
     #[test]
     fn test_reserved_enqueue_is_rejected_during_pause_and_retried_after() {
@@ -325,18 +337,22 @@ mod tests {
         let second = Arc::new(CudaActivityGate::new(2));
         let activity = CudaActivityScope::for_operation(&first).unwrap();
         let pause = second.request_pause(original_failure()).unwrap();
-        activity.run(async {
-            // A first-device lease neither drains nor authorizes the second GPU.
-            second.wait_until_idle().await;
-            assert!(CudaActivityScope::for_operation(&second).is_err());
-            let _child = CudaActivityScope::for_operation(&first).unwrap();
-        }).await;
+        activity
+            .run(async {
+                // A first-device lease neither drains nor authorizes the second GPU.
+                second.wait_until_idle().await;
+                assert!(CudaActivityScope::for_operation(&second).is_err());
+                let _child = CudaActivityScope::for_operation(&first).unwrap();
+            })
+            .await;
         let first_pause = first.request_pause(original_failure()).unwrap();
         CudaActivityScope::run_recovery(&first, first_pause, async {
             let _cleanup = CudaActivityScope::for_operation(&first)?;
             assert!(CudaActivityScope::for_operation(&second).is_err());
             Ok(())
-        }).await.unwrap();
+        })
+        .await
+        .unwrap();
         first.finish_pause(first_pause);
         second.fail_pause(pause, None);
         first.check_admission().unwrap();
@@ -348,9 +364,7 @@ mod tests {
         use super::CudaActivityScope;
         let first = Arc::new(CudaActivityGate::new(1));
         let second = Arc::new(CudaActivityGate::new(2));
-        let scope = CudaActivityScope::for_operation(&first).unwrap().run(async {
-            CudaActivityScope::for_operation(&second).unwrap()
-        }).await;
+        let scope = CudaActivityScope::for_operation(&first).unwrap().run(async { CudaActivityScope::for_operation(&second).unwrap() }).await;
         assert_eq!(scope.generation(&first), Some(CudaDeviceGeneration(0)));
         assert_eq!(scope.generation(&second), Some(CudaDeviceGeneration(0)));
         let first_pause = first.request_pause(original_failure()).unwrap();
@@ -358,10 +372,12 @@ mod tests {
         assert!(futures::poll!(Box::pin(first.wait_until_idle()).as_mut()).is_pending());
         assert!(futures::poll!(Box::pin(second.wait_until_idle()).as_mut()).is_pending());
         // Already-admitted descendants can finish on either ancestor's device.
-        scope.run(async {
-            CudaActivityScope::for_operation(&first).unwrap();
-            CudaActivityScope::for_operation(&second).unwrap();
-        }).await;
+        scope
+            .run(async {
+                CudaActivityScope::for_operation(&first).unwrap();
+                CudaActivityScope::for_operation(&second).unwrap();
+            })
+            .await;
         assert!(futures::poll!(Box::pin(first.wait_until_idle()).as_mut()).is_ready());
         assert!(futures::poll!(Box::pin(second.wait_until_idle()).as_mut()).is_ready());
         first.finish_pause(first_pause);
@@ -376,9 +392,11 @@ mod tests {
         let escaped = CudaActivityScope::run_recovery(&gate, ticket, async { Ok(CudaActivityScope::current().unwrap()) }).await.unwrap();
         gate.finish_pause(ticket);
         let next = gate.request_pause(original_failure()).unwrap();
-        escaped.run(async {
-            assert!(matches!(CudaActivityScope::for_operation(&gate).unwrap_err().what(), ThoError::CudaBeingRecovered));
-        }).await;
+        escaped
+            .run(async {
+                assert!(matches!(CudaActivityScope::for_operation(&gate).unwrap_err().what(), ThoError::CudaBeingRecovered));
+            })
+            .await;
         gate.finish_pause(next);
     }
 

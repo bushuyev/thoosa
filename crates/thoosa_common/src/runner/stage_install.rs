@@ -1,27 +1,34 @@
 //! Typed installation shared by feature stages. Endpoint definitions and input
 //! adapters describe a stage; backend selection and endpoint ownership live here.
-use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
+use crate::ipc::{
+    cuda_wokrer::{WorkerStageInput, WorkerStageOutput},
+    endpoints::StageRecovery,
+    proxy::{DynSyncStageWithStateEnum, ProxyStage},
+    worker_msg::WorkerInput,
+};
+use crate::runner::{execution::StageExecution, global_ctx::DeviceExecutionCtx, sync_stage::StageWithState};
+use serde::{Serialize, de::DeserializeOwned};
 use std::fmt::Debug;
 use std::future::Future;
-use serde::{Serialize, de::DeserializeOwned};
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 use thoosa_shared::{ThoError, traits::Stage};
-use crate::ipc::{cuda_wokrer::{WorkerStageInput, WorkerStageOutput}, worker_msg::WorkerInput, endpoints::StageRecovery, proxy::{ProxyStage, DynSyncStageWithStateEnum}};
-use crate::runner::{global_ctx::DeviceExecutionCtx, sync_stage::StageWithState, execution::StageExecution};
 
 pub type InputCloner<S> = Arc<dyn for<'a> Fn(&<S as Stage>::In<'a>) -> Result<Box<dyn WorkerInput>, ThoError> + Send + Sync>;
 
 impl DeviceExecutionCtx {
-    pub async fn install_stateful<S, I, L, LF, R, RF>(
-        &self, endpoint: &'static str, recovery: StageRecovery,
-        local: L, remote: R, cloner: Option<InputCloner<S>>,
-    ) -> Result<DynSyncStageWithStateEnum<S, I>, ThoError>
+    pub async fn install_stateful<S, I, L, LF, R, RF>(&self, endpoint: &'static str, recovery: StageRecovery, local: L, remote: R, cloner: Option<InputCloner<S>>) -> Result<DynSyncStageWithStateEnum<S, I>, ThoError>
     where
         S: StageExecution + StageWithState + Send + Sync + 'static,
         for<'a> S::In<'a>: WorkerStageInput + Serialize,
         S::Out: WorkerStageOutput + DeserializeOwned + 'static,
         I: Debug + Send + Sync + 'static,
-        L: FnOnce() -> LF, LF: Future<Output = Result<Arc<S>, ThoError>>,
-        R: FnOnce() -> RF, RF: Future<Output = Result<(Box<dyn WorkerInput>, I), ThoError>>,
+        L: FnOnce() -> LF,
+        LF: Future<Output = Result<Arc<S>, ThoError>>,
+        R: FnOnce() -> RF,
+        RF: Future<Output = Result<(Box<dyn WorkerInput>, I), ThoError>>,
     {
         if let Some(actor) = self.ipc_actor().ok() {
             // IDs belong to installations, not feature models. Every retry gets
@@ -41,16 +48,21 @@ impl DeviceExecutionCtx {
 mod tests {
     use super::*;
     use crate::runner::{global_ctx::Runtime, run_ctx::RunCtxImpl};
-    use crate::stages::freq_filter::{SyncFreqFilter, SyncFreqFilterIpcInit, SYNC_FREQ_FILTER_ENDPOINT};
+    use crate::stages::freq_filter::{SYNC_FREQ_FILTER_ENDPOINT, SyncFreqFilter, SyncFreqFilterIpcInit};
 
     #[tokio::test]
     async fn test_typed_installation_selects_only_local_factory() -> Result<(), ThoError> {
         let runtime = Runtime::local(1)?;
-        let installed = runtime.execution(0).install_stateful::<SyncFreqFilter<RunCtxImpl>, (), _, _, _, _>(
-            SYNC_FREQ_FILTER_ENDPOINT, StageRecovery::RecreateFromInit,
-            || async { Ok(Arc::new(SyncFreqFilter::new_local(SyncFreqFilterIpcInit::new(vec![], 1, 100., 1, 0))?)) },
-            || async { panic!("local installation must not construct transport inputs") }, None,
-        ).await?;
+        let installed = runtime
+            .execution(0)
+            .install_stateful::<SyncFreqFilter<RunCtxImpl>, (), _, _, _, _>(
+                SYNC_FREQ_FILTER_ENDPOINT,
+                StageRecovery::RecreateFromInit,
+                || async { Ok(Arc::new(SyncFreqFilter::new_local(SyncFreqFilterIpcInit::new(vec![], 1, 100., 1, 0))?)) },
+                || async { panic!("local installation must not construct transport inputs") },
+                None,
+            )
+            .await?;
         assert!(matches!(installed, DynSyncStageWithStateEnum::Local(_)));
         runtime.shutdown().await;
         Ok(())

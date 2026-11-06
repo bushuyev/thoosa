@@ -1,16 +1,16 @@
 use thoosa_common::dims::ChannelsData;
 
-use mockall_double::double;
-#[double]
-use thoosa_common::runner::global_ctx::GlobalCtx;
 use crate::stages::stage_ids::RAW_TENSOR_LOADER;
 use log::debug;
+use mockall_double::double;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::sync::Arc;
-use tch::Device::Cpu;
 use tch::Device;
+use tch::Device::Cpu;
 use thoosa_common::runner::common::cachable::DevicesWrap;
+#[double]
+use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_named_derive::Named;
@@ -20,14 +20,7 @@ use thoosa_shared::traits::{AsyncStage, MaxParallelCtx, OutId, RunCtx, Stage, Wi
 use thoosa_shared::{ThoError, mono_key};
 // use crate::stages::stages_seq::StagesSeq;
 
-type LoadFn =
-dyn Fn(&Resource, &Device) -> Result<ThoTensor<ChannelsData, SynKey>, ThoError> + Sync + Send;
-
-
-
-
-
-
+type LoadFn = dyn Fn(&Resource, &Device) -> Result<ThoTensor<ChannelsData, SynKey>, ThoError> + Sync + Send;
 
 ///it always loads data into CPU tensors which are copied to gpu cells of its DevicesWrap output when BorrowRef::borrow_to is invoked from thoosa_common::runner::oom_handler::run_stage_borrowed
 /// it needs to be on main side to retain CPU tensors when worker is restarted
@@ -48,12 +41,9 @@ where
     C: RunCtx + MaxParallelCtx + 'static,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("TensorLoader")
-            .field("device", &self.device)
-            .finish()
+        f.debug_struct("TensorLoader").field("device", &self.device).finish()
     }
 }
-
 
 impl<C> Stage for RawTensorLoader<C>
 where
@@ -68,13 +58,8 @@ impl<C> AsyncStage for RawTensorLoader<C>
 where
     C: RunCtx + MaxParallelCtx + 'static,
 {
-
-    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="RawTensorLoader::run"))]
-    async fn run(
-        self: Arc<Self>,
-        input: Self::In<'static>,
-        ctx: Self::Ctx,
-    ) -> Result<Self::Out, ThoError> {
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "RawTensorLoader::run"))]
+    async fn run(self: Arc<Self>, input: Self::In<'static>, ctx: Self::Ctx) -> Result<Self::Out, ThoError> {
         debug!("RawTensorLoader::run: input={input:?} ctx={ctx:?}");
 
         let cpu_tensor = (self.loader_fn)(&input, &Cpu)?;
@@ -90,7 +75,6 @@ where
 
         Ok(Arc::new(DevicesWrap::wrap(tensor)))
     }
-
 }
 
 impl<C> OutId for RawTensorLoader<C>
@@ -108,10 +92,7 @@ where
 {
     pub fn new<F>(loader_fn: F, device: ThoDevice) -> Self
     where
-        F: Fn(&Resource, &Device) -> Result<ThoTensor<ChannelsData, SynKey>, ThoError>
-        + Sync
-        + Send
-        + 'static,
+        F: Fn(&Resource, &Device) -> Result<ThoTensor<ChannelsData, SynKey>, ThoError> + Sync + Send + 'static,
     {
         Self {
             id: (RAW_TENSOR_LOADER, "RawTensorLoader").into(),
@@ -172,59 +153,52 @@ pub(crate) mod mock_tensor_loader {
     }
 
     impl thoosa_shared::traits::Named for MockTensorLoader {
-        fn name() -> &'static str { "MockTensorLoader" }
+        fn name() -> &'static str {
+            "MockTensorLoader"
+        }
     }
 
-    pub struct  MockTensorLoaderBuilder {
-        mock:MockTensorLoader
+    pub struct MockTensorLoaderBuilder {
+        mock: MockTensorLoader,
     }
 
     impl MockTensorLoaderBuilder {
-
-        pub fn with_out_id(mut self)->Self {
-            self.mock.expect_out_id().returning(|input_id|{
-                SynKey::new([mono_key!(input_id.id(), format!("loaded_{}", input_id.id()))])
-            });
+        pub fn with_out_id(mut self) -> Self {
+            self.mock.expect_out_id().returning(|input_id| SynKey::new([mono_key!(input_id.id(), format!("loaded_{}", input_id.id()))]));
             self
         }
 
         pub fn with_run_cached<H>(mut self, h: H) -> Self
         where
-            H: IntoIterator<Item=(Resource, Tensor)> ,
+            H: IntoIterator<Item = (Resource, Tensor)>,
         {
-            let data_map: Arc<HashMap<Resource, Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>> = Arc::new(h.into_iter().map(|(k, v)| {
-                let id = SynKey::new([mono_key!(k.file_stem(), format!("file_stem={}", k.file_stem()))]);
-                let tensor = ThoTensor::new(id, v)
-                    .expect("ThoTensor::new failed in MockTensorLoaderBuilder");
-                (k, Arc::new(DevicesWrap::wrap(tensor)))
-            }).collect());
+            let data_map: Arc<HashMap<Resource, Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>> = Arc::new(
+                h.into_iter()
+                    .map(|(k, v)| {
+                        let id = SynKey::new([mono_key!(k.file_stem(), format!("file_stem={}", k.file_stem()))]);
+                        let tensor = ThoTensor::new(id, v).expect("ThoTensor::new failed in MockTensorLoaderBuilder");
+                        (k, Arc::new(DevicesWrap::wrap(tensor)))
+                    })
+                    .collect(),
+            );
 
-            self.mock.expect_run_cached().returning(move |input, _ctx|{
-                Ok(Arc::clone(data_map
-                    .get(&input.id())
-                    .expect(&format!("no mock data for {input:?} in MockTensorLoader"))))
-            });
+            self.mock.expect_run_cached().returning(move |input, _ctx| Ok(Arc::clone(data_map.get(&input.id()).expect(&format!("no mock data for {input:?} in MockTensorLoader")))));
 
             self
         }
 
-        pub fn finish(self) -> MockTensorLoader{
+        pub fn finish(self) -> MockTensorLoader {
             self.mock
         }
     }
 
-    pub fn build()->MockTensorLoaderBuilder {
-        MockTensorLoaderBuilder {
-            mock: Default::default(),
-        }
+    pub fn build() -> MockTensorLoaderBuilder {
+        MockTensorLoaderBuilder { mock: Default::default() }
     }
-
 }
-
 
 #[cfg(test)]
 mod tests {
-
 
     //TODO
     // #[tokio::test]

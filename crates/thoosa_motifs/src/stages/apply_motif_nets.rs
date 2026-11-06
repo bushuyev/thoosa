@@ -1,14 +1,16 @@
 #![allow(unexpected_cfgs)]
-use thoosa_common::ipc::state_transfer::StateTransfer;
-use thoosa_common::runner::execution::{StageExecution, ExecutionContext, execute_stateful};
-use std::borrow::Borrow;
-use thoosa_common::runner::sync_stage::PrepareStage;
 use crate::motifs_store::MotifsStore;
+use std::borrow::Borrow;
+use thoosa_common::ipc::state_transfer::StateTransfer;
+use thoosa_common::runner::execution::{ExecutionContext, StageExecution, execute_stateful};
+use thoosa_common::runner::sync_stage::PrepareStage;
 use thoosa_common::tch_error::tch_result;
 
 use crate::dims::MotifProbability;
 use crate::motif_tho_tensor::{MotifProbabilitiesWorkerOutput, MotifThoTensor};
 use crate::stages::find_motifs_run_config::FindMotifsRunConfig;
+use crate::stages::load_motif_net::MotifNetMeta;
+use crate::stages::stage_ids::{APPLY_MOTIF_NET, APPLY_MOTIF_NETS};
 use crate::train_nets::MotifNetParams;
 use async_trait::async_trait;
 use futures_util::FutureExt;
@@ -30,17 +32,17 @@ use tch::Kind::Float;
 #[cfg(test)]
 use tch::kind::FLOAT_CPU;
 #[cfg(test)]
+use tch::nn;
+#[cfg(test)]
 use tch::nn::VarStore;
 use tch::{Device, IndexOp, Kind, Tensor};
-#[cfg(test)]
-use tch::nn;
 use thoosa_common::data_with_extra::DataWithExtra;
 use thoosa_common::debug_plot;
-use thoosa_common::dims::{Batch, ChannelsData, Slice};
 #[cfg(test)]
 use thoosa_common::dims::AnyDims;
 #[cfg(test)]
 use thoosa_common::dims::Dims;
+use thoosa_common::dims::{Batch, ChannelsData, Slice};
 use thoosa_common::instance_cache::InstanceCache;
 use thoosa_common::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput};
 use thoosa_common::ipc::proxy::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage};
@@ -58,52 +60,49 @@ use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextI
 use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
 use thoosa_common::runner::adjusters::splits::SplitsAdjusterContext;
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, SelectRef, ThoDataRef};
+#[double]
+use thoosa_common::runner::global_ctx::GlobalCtx;
 #[cfg(not(test))]
 #[cfg(any(test, feature = "mock_global_ctx"))]
 use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
 use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoInputAdjuster, NoStageAdjuster, NoopRunnableContext, OOMHandler, SyncStageInit, WithRunCtxContext, input_adjuster, run_ctx_adjuster};
+use thoosa_common::runner::purge::CachePurger;
+#[cfg(test)]
+use thoosa_common::runner::run_ctx::RunCtxImpl;
 use thoosa_common::runner::sync_stage::{StageWithState, SyncStage};
+use thoosa_common::stages::freq_filter::ChannelsDataSelector;
+use thoosa_common::stages::freq_filter::FreqFilter;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
+#[cfg(test)]
+use thoosa_common::transforms::filters::InputFilter;
 use thoosa_common::utils::{load_run_config, pad_to, stretch};
 use thoosa_named_derive::Named;
 use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::run_configs::{RunConfig, RunConfigId};
+use thoosa_shared::tracked_await::t;
 use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, DebugId, MaxParallelCtx, Metrics, MonoMetrics, OutId, RunCtx, Stage, WithId};
 use thoosa_shared::{CopyToDevice, FuturesOrdering, ThoError, collect_futures_with_progress, mono_key, perf_log, sync_read_lock};
 use thoosa_store::{TrainedNet, TrainedNetsBy};
 use tokio::sync::MutexGuard;
-#[double]
-use thoosa_common::runner::global_ctx::GlobalCtx;
-use crate::stages::load_motif_net::MotifNetMeta;
-use crate::stages::stage_ids::{APPLY_MOTIF_NET, APPLY_MOTIF_NETS};
-use thoosa_common::runner::purge::CachePurger;
-#[cfg(test)]
-use thoosa_common::runner::run_ctx::RunCtxImpl;
-use thoosa_common::stages::freq_filter::ChannelsDataSelector;
-use thoosa_common::stages::freq_filter::FreqFilter;
-#[cfg(test)]
-use thoosa_common::transforms::filters::InputFilter;
-use thoosa_shared::tracked_await::t;
 
 pub const APPLY_MOTIF_NET_ENDPOINT: &str = "APPLY_MOTIF_NET_ENDPOINT";
 
 #[derive(Debug, cached_derive::Cached, Named)]
 pub struct ApplyMotifNets<C>
 where
-    C: RunCtx + MaxParallelCtx + Adjustable + 'static
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     id: SynKey,
     #[expect(dead_code, reason = "Retains the shared owner for the lifetime of this stage or input.")]
-    ws:Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
+    ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
     #[expect(dead_code, reason = "Retains the shared owner for the lifetime of this stage or input.")]
-    store:Arc<dyn MotifsStore>,
-    apply_motif_nets: Vec<(u32/*net_id*/, Option<(RunConfigId, Arc<FreqFilter<C>>)>, Arc<ApplyMotifNet<C>>)>,
+    store: Arc<dyn MotifsStore>,
+    apply_motif_nets: Vec<(u32 /*net_id*/, Option<(RunConfigId, Arc<FreqFilter<C>>)>, Arc<ApplyMotifNet<C>>)>,
     pub slice_step: u32,
     // pub motif_width:u32,
-    stack_applied_motif_nets:Arc<DynSyncStageEnum<StackAppliedMotifNets<C>>>
-
+    stack_applied_motif_nets: Arc<DynSyncStageEnum<StackAppliedMotifNets<C>>>,
 }
 
 #[derive(Debug)]
@@ -139,13 +138,7 @@ impl StepAlignedSplitsAdjuster {
 }
 
 /// Computes how many motif scores from an overlapped split still belong to that split's non-overlapped core.
-fn valid_partial_output_len(
-    input_len: i64,
-    split_start: i64,
-    split_len: i64,
-    motif_width: i64,
-    slice_step: i64,
-) -> i64 {
+fn valid_partial_output_len(input_len: i64, split_start: i64, split_len: i64, motif_width: i64, slice_step: i64) -> i64 {
     if input_len < motif_width {
         return if split_start == 0 { 1 } else { 0 };
     }
@@ -177,14 +170,7 @@ unsafe impl Sync for ApplyMotifNetSplitsContext {}
 
 impl ApplyMotifNetSplitsContext {
     /// Preallocates the exact final output shape for one motif net so OOM split chunks can be appended safely.
-    fn new(
-        input_len: MonoMetrics<1, 2>,
-        output_id: SynKey,
-        output_size: i64,
-        options: (Kind, Device),
-        motif_width: i64,
-        slice_step: i64,
-    ) -> Result<Self, ThoError> {
+    fn new(input_len: MonoMetrics<1, 2>, output_id: SynKey, output_size: i64, options: (Kind, Device), motif_width: i64, slice_step: i64) -> Result<Self, ThoError> {
         Ok(Self {
             done_to: input_len.default_end(),
             split_len: input_len.clone(),
@@ -209,7 +195,10 @@ where
         let valid_len = valid_partial_output_len(input_len, split_start, split_len, self.motif_width, self.slice_step);
         let partial_len = partial.size()[0];
 
-        debug!("ApplyMotifNetSplitsContext::add_partial_output: input_len={input_len} split_start={split_start} split_len={split_len} motif_width={} slice_step={} partial_len={partial_len} valid_len={valid_len}", self.motif_width, self.slice_step);
+        debug!(
+            "ApplyMotifNetSplitsContext::add_partial_output: input_len={input_len} split_start={split_start} split_len={split_len} motif_width={} slice_step={} partial_len={partial_len} valid_len={valid_len}",
+            self.motif_width, self.slice_step
+        );
 
         if valid_len > 0 {
             // Transfer and assemble before committing either cursor, preserving typed CUDA failures.
@@ -235,7 +224,6 @@ where
         ThoTensor::new(self.output_id, self.output).map(Into::into)
     }
 }
-
 
 impl SplitsAdjusterContext for ApplyMotifNetSplitsContext {
     type Metrics = MonoMetrics<1, 2>;
@@ -264,11 +252,7 @@ where
 {
     type A = ChannelsDataSelector;
 
-    async fn adjust(
-        &self,
-        _adjustable: Self::A,
-        adjust_context: &mut AC,
-    ) -> Result<Self::A, AdjusterError<Self::A>> {
+    async fn adjust(&self, _adjustable: Self::A, adjust_context: &mut AC) -> Result<Self::A, AdjusterError<Self::A>> {
         let split_start = adjust_context.done_to();
         let mut split_end = split_start.clone();
         split_end += adjust_context.split_len().clone();
@@ -296,31 +280,30 @@ where
     }
 }
 
-impl <C> ApplyMotifNets<C>
+impl<C> ApplyMotifNets<C>
 where
-    C: RunCtx + MaxParallelCtx + Adjustable + 'static
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     pub async fn new<R>(
         ws: &Arc<parking_lot::RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
         store: &Arc<dyn MotifsStore>,
         train_motif_net_run_config_ids: Vec<RunConfigId>,
-        stage_ctx:R,
+        stage_ctx: R,
         max_loss: Option<f32>,
         trained_nets_limit: Option<usize>,
         slice_step: u32,
         // #[cfg(test)]
-        fail_if_size_bigger_than:Option<usize>,
-        quantize: bool
+        fail_if_size_bigger_than: Option<usize>,
+        quantize: bool,
     ) -> Result<Self, ThoError>
     where
-        R: RunCtx + MaxParallelCtx + Adjustable + 'static
+        R: RunCtx + MaxParallelCtx + Adjustable + 'static,
     {
-
         // Load all motif nets matching max_loss and trained_nets_limit for the provided train_motif_nets_run_config_ids.
         let motif_nets = t!(store.list_trained_nets(TrainedNetsBy::RunConfigIds(train_motif_net_run_config_ids.clone()), max_loss, trained_nets_limit)).await?;
 
         if motif_nets.is_empty() {
-            return  Err(ThoError::new(format!("No selected nets for train_motif_nets_run_config_ids={train_motif_net_run_config_ids:?} max_loss={max_loss:?}, trained_nets_limit={trained_nets_limit:?}")));
+            return Err(ThoError::new(format!("No selected nets for train_motif_nets_run_config_ids={train_motif_net_run_config_ids:?} max_loss={max_loss:?}, trained_nets_limit={trained_nets_limit:?}")));
         };
 
         t!(Self::from_trained_nets(&ws, &store, stage_ctx, slice_step, fail_if_size_bigger_than, motif_nets, quantize)).await
@@ -333,13 +316,11 @@ where
         slice_step: u32,
         _fail_if_size_bigger_than: Option<usize>,
         trained_nets: Vec<TrainedNet>,
-        quantize: bool
+        quantize: bool,
     ) -> Result<ApplyMotifNets<C>, ThoError>
     where
-        R: RunCtx + MaxParallelCtx + Adjustable + 'static
+        R: RunCtx + MaxParallelCtx + Adjustable + 'static,
     {
-
-
         // Aggregate caching must distinguish the same model set sampled differently.
         let id = &SynKey::new([mono_key!(APPLY_MOTIF_NETS, "ApplyMotifNets"), mono_key!(slice_step, "slice_step"), mono_key!(quantize, "quantize")]) + &SynKey::new(trained_nets.iter().map(|net| mono_key!(net.id, format!("trained_net_id_{}", net.id))).collect::<Vec<_>>());
 
@@ -354,34 +335,33 @@ where
 
             let find_motifs_run_config: FindMotifsRunConfig = t!(load_run_config(store, find_motifs_run_config_id, FindMotifsRunConfig::type_name())).await?;
 
-           let maybe_freq_filter= match find_motifs_run_config.freq_filter.as_ref() {
-               None => None,
-               Some(freq_filter_config) => {
-                   let configs = ws.read().ws_configs();
-                   Some((find_motifs_run_config_id, FreqFilter::<C>::new(freq_filter_config.as_slice(), configs, find_motifs_run_config_id, stage_ctx.tho_device_idx()).await?))
-               }
-           };
+            let maybe_freq_filter = match find_motifs_run_config.freq_filter.as_ref() {
+                None => None,
+                Some(freq_filter_config) => {
+                    let configs = ws.read().ws_configs();
+                    Some((find_motifs_run_config_id, FreqFilter::<C>::new(freq_filter_config.as_slice(), configs, find_motifs_run_config_id, stage_ctx.tho_device_idx()).await?))
+                }
+            };
 
-            apply_motif_nets.push(
-                (
-                    trained_net_id,
-                    maybe_freq_filter,
-                    ApplyMotifNet::new(
-                        ApplyMotifNetInit::new(
-                            trained_net_id,
-                            slice_step,
-                            trained_net.net_path,
-                            channel,
-                            motif_id,
-                            quantize,
-                            #[cfg(test)]
-                            _fail_if_size_bigger_than,
-                        ),
-                        stage_ctx.branch(true),
-                        ws,
-                    ).await?
+            apply_motif_nets.push((
+                trained_net_id,
+                maybe_freq_filter,
+                ApplyMotifNet::new(
+                    ApplyMotifNetInit::new(
+                        trained_net_id,
+                        slice_step,
+                        trained_net.net_path,
+                        channel,
+                        motif_id,
+                        quantize,
+                        #[cfg(test)]
+                        _fail_if_size_bigger_than,
+                    ),
+                    stage_ctx.branch(true),
+                    ws,
                 )
-            );
+                .await?,
+            ));
         }
 
         Ok(Self {
@@ -390,7 +370,7 @@ where
             store: Arc::clone(&store),
             apply_motif_nets,
             slice_step,
-            stack_applied_motif_nets
+            stack_applied_motif_nets,
         })
     }
 
@@ -403,26 +383,21 @@ where
     }
 }
 
-impl <C>Stage for ApplyMotifNets<C>
+impl<C> Stage for ApplyMotifNets<C>
 where
-    C: RunCtx + MaxParallelCtx + Adjustable + 'static
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     type Ctx = C;
     type In<'a> = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>;
-    type Out = Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>;// extra carries pre-stretch original lengths per motif net; TODO it should be MotifsProbabilities - for many motifs
+    type Out = Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>; // extra carries pre-stretch original lengths per motif net; TODO it should be MotifsProbabilities - for many motifs
 }
 
-
-
-impl <C>AsyncStage for ApplyMotifNets<C>
+impl<C> AsyncStage for ApplyMotifNets<C>
 where
-    C: RunCtx + MaxParallelCtx + Adjustable + 'static
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
-
-
-    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ApplyMotifNets::run"))]
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "ApplyMotifNets::run"))]
     async fn run(self: Arc<Self>, input: Self::In<'static>, mut ctx: Self::Ctx) -> Result<Self::Out, ThoError> {
-
         let _device_idx = ctx.tho_device_idx();
 
         debug!("ApplyMotifNets::run: self.loaded_motif_nets.len={:?} input={input:?}", self.apply_motif_nets.len());
@@ -433,20 +408,24 @@ where
         inputs_by_filter_group.insert(None, Arc::clone(&input));
 
         for (_net_id, freq_filter_find_motifs_run_config_id_freq_filter, apply_motif_net) in &apply_motif_nets {
-            let group_key = freq_filter_find_motifs_run_config_id_freq_filter.as_ref().map(|v|v.0);
+            let group_key = freq_filter_find_motifs_run_config_id_freq_filter.as_ref().map(|v| v.0);
             if inputs_by_filter_group.contains_key(&group_key) {
                 continue;
             }
-            let filtered_input: Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>> = match &freq_filter_find_motifs_run_config_id_freq_filter.as_ref().map(|v|Arc::clone(&v.1)) {
+            let filtered_input: Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>> = match &freq_filter_find_motifs_run_config_id_freq_filter.as_ref().map(|v| Arc::clone(&v.1)) {
                 Some(freq_filter) => {
-                    debug!("ApplyMotifNets::run: freq_filter={freq_filter:?} motif_id={:?} apply_motif_net.freq_filter_find_motifs_run_config_id={:?}", apply_motif_net.motif_id(), freq_filter_find_motifs_run_config_id_freq_filter);
+                    debug!(
+                        "ApplyMotifNets::run: freq_filter={freq_filter:?} motif_id={:?} apply_motif_net.freq_filter_find_motifs_run_config_id={:?}",
+                        apply_motif_net.motif_id(),
+                        freq_filter_find_motifs_run_config_id_freq_filter
+                    );
 
                     t!(freq_filter.clone().run_cached(Arc::clone(&input), ctx.branch(true))).await?
                 }
                 None => {
                     debug!("ApplyMotifNets::run: no freq_filter for  motif_id={:?}", apply_motif_net.motif_id());
                     Arc::clone(&input)
-                },
+                }
             };
             inputs_by_filter_group.insert(group_key, filtered_input);
         }
@@ -462,13 +441,7 @@ where
                 Ok((motif_id, net_id, output))
             }
         });
-        let mut motif_nets_applied = t!(collect_futures_with_progress(
-            futures,
-            apply_motif_nets_len,
-            FuturesOrdering::Unordered,
-            thoosa_shared::CollectionErrorPolicy::Propagate,
-            "ApplyMotifNets::run",
-        )).await?;
+        let mut motif_nets_applied = t!(collect_futures_with_progress(futures, apply_motif_nets_len, FuturesOrdering::Unordered, thoosa_shared::CollectionErrorPolicy::Propagate, "ApplyMotifNets::run",)).await?;
 
         debug!("ApplyMotifNets::run: motif_nets_applied.len={} motif_nets_applied={motif_nets_applied:?}", motif_nets_applied.len());
         // Existing label models expect motif-id order, independently of inference cache identity.
@@ -478,40 +451,28 @@ where
             motif_nets_applied: motif_nets_applied.into_iter().map(|(_, _, output)| output).collect(),
         });
 
-
-
         let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(
-            vec![
-                Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(*MaxParallelStep::FAST))),
-                Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("stack_apply_motif_nets"))),
-            ],
+            vec![Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(*MaxParallelStep::FAST))), Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("stack_apply_motif_nets")))],
             None,
         );
-        let motif_nets_applied = t!(oom_handler
-        .run(
+        let motif_nets_applied = t!(oom_handler.run(
             &self.stack_applied_motif_nets,
             Arc::clone(&stack_input),
             ctx.branch(true),
-            WithRunCtxContext::new(
-                MaxParallelAndDumpToCpuAdjustableContex::new(
-                    MaxParallelAdjustContextImpl::new(),
-                    DumpToCpuContextImpl::new(),
-                ),
-            ),
-        )).await?.into_inner();
+            WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new(),),),
+        ))
+        .await?
+        .into_inner();
 
         debug!("ApplyMotifNets::run: 1. motif_nets_applied={motif_nets_applied:?}");
 
         Ok(Arc::new(DevicesWrap::wrap(motif_nets_applied)))
-
     }
-
 }
 
-
-impl <C>OutId for ApplyMotifNets<C>
+impl<C> OutId for ApplyMotifNets<C>
 where
-    C: RunCtx + MaxParallelCtx + Adjustable + 'static
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
         &self.id + input_id
@@ -529,12 +490,20 @@ pub struct StackAppliedMotifNetsInput<'a> {
 impl WorkerStageInput for StackAppliedMotifNetsInput<'_> {
     fn clone_refs(&self) -> Result<Box<dyn WorkerInput>, ThoError> {
         let tensors = self.motif_nets_applied.iter().map(|tensor| tensor.as_ref().clone_ref().map(ThoDataRef::Owned)).collect::<Result<Vec<_>, _>>()?;
-        Ok(Box::new(StackAppliedMotifNetsInput { id: self.id.clone(), device_idx: self.device_idx, motif_nets_applied: tensors }))
+        Ok(Box::new(StackAppliedMotifNetsInput {
+            id: self.id.clone(),
+            device_idx: self.device_idx,
+            motif_nets_applied: tensors,
+        }))
     }
 
     fn ref_to_tensor(&self, all_cuda_tensors: &AllTensors, remove: bool) -> Result<Self, ThoError> {
         let tensors = self.motif_nets_applied.iter().map(|tensor| WorkerStageInput::ref_to_tensor(tensor.as_ref(), all_cuda_tensors, remove).map(ThoDataRef::Owned)).collect::<Result<Vec<_>, _>>()?;
-        Ok(Self { id: self.id.clone(), device_idx: self.device_idx, motif_nets_applied: tensors })
+        Ok(Self {
+            id: self.id.clone(),
+            device_idx: self.device_idx,
+            motif_nets_applied: tensors,
+        })
     }
 }
 
@@ -544,15 +513,23 @@ impl WorkerInput for StackAppliedMotifNetsInput<'static> {}
 impl WithId for StackAppliedMotifNetsInput<'_> {
     type ID = SynKey;
 
-    fn id(&self) -> &Self::ID { &self.id }
+    fn id(&self) -> &Self::ID {
+        &self.id
+    }
 }
 
 impl Data for StackAppliedMotifNetsInput<'_> {
     type Metrics = MonoMetrics<0, 1>;
 
-    fn size(&self) -> Self::Metrics { self.motif_nets_applied.len().into() }
-    fn tho_device_idx(&self) -> usize { self.device_idx }
-    fn mem_size(&self) -> u64 { self.motif_nets_applied.iter().map(|tensor| tensor.as_ref().mem_size()).sum() }
+    fn size(&self) -> Self::Metrics {
+        self.motif_nets_applied.len().into()
+    }
+    fn tho_device_idx(&self) -> usize {
+        self.device_idx
+    }
+    fn mem_size(&self) -> u64 {
+        self.motif_nets_applied.iter().map(|tensor| tensor.as_ref().mem_size()).sum()
+    }
 }
 
 impl Input for StackAppliedMotifNetsInput<'_> {}
@@ -565,7 +542,9 @@ struct StackAppliedMotifNetsInputWrapper {
 }
 
 impl BorrowRef for StackAppliedMotifNetsInputWrapper {
-    fn protect(&self, device: usize) -> thoosa_common::runner::residency::ResidencyLease { thoosa_common::runner::residency::ResidencyLease::combine(self.motif_nets_applied.iter().map(|value| value.protect(device))) }
+    fn protect(&self, device: usize) -> thoosa_common::runner::residency::ResidencyLease {
+        thoosa_common::runner::residency::ResidencyLease::combine(self.motif_nets_applied.iter().map(|value| value.protect(device)))
+    }
 
     type Out<'a> = StackAppliedMotifNetsInput<'a>;
 
@@ -577,7 +556,11 @@ impl BorrowRef for StackAppliedMotifNetsInputWrapper {
         for tensor in &self.motif_nets_applied {
             tensors.push(tensor.borrow_ref(to_device_idx).await?);
         }
-        Ok(StackAppliedMotifNetsInput { id: self.id.clone(), device_idx: to_device_idx, motif_nets_applied: tensors })
+        Ok(StackAppliedMotifNetsInput {
+            id: self.id.clone(),
+            device_idx: to_device_idx,
+            motif_nets_applied: tensors,
+        })
     }
 }
 
@@ -609,44 +592,42 @@ where
 {
     // The singleton has no output identity: every caller supplies its own aggregate key.
     pub async fn new(device: ThoDevice) -> Result<Arc<DynSyncStageEnum<StackAppliedMotifNets<C>>>, ThoError> {
-        STACK_APPLIED_MOTIF_NETS_INSTANCES.get_or_try_insert_recreatable_with::<C, _, _, _, _>(device.tho_device_idx(), GlobalCtx::global().cuda_activity_gate(device.tho_device_idx()), GlobalCtx::global().is_ipc(), 0, move || async move {
-            if GlobalCtx::global().is_ipc() {
-                // Reuse the stage input as an initializer carrier to avoid a second wire-only type.
-                let init = StackAppliedMotifNetsInput { id: SynKey::new(vec![]), device_idx: device.tho_device_idx(), motif_nets_applied: Vec::new() };
-                Ok(Arc::new(DynSyncStageEnum::Proxy {
-                    stage: Arc::new(ProxyStage::proxy_recreatable(STACK_APPLIED_MOTIF_NETS_ENDPOINT, Some(0.to_string()), device.tho_device_idx(), Box::new(init)).await?),
-                    init: (),
-                }))
-            } else {
-                Ok(Arc::new(DynSyncStageEnum::Local(Arc::new(Self::new_local().await?))))
-            }
-        }).await
+        STACK_APPLIED_MOTIF_NETS_INSTANCES
+            .get_or_try_insert_recreatable_with::<C, _, _, _, _>(device.tho_device_idx(), GlobalCtx::global().cuda_activity_gate(device.tho_device_idx()), GlobalCtx::global().is_ipc(), 0, move || async move {
+                if GlobalCtx::global().is_ipc() {
+                    // Reuse the stage input as an initializer carrier to avoid a second wire-only type.
+                    let init = StackAppliedMotifNetsInput {
+                        id: SynKey::new(vec![]),
+                        device_idx: device.tho_device_idx(),
+                        motif_nets_applied: Vec::new(),
+                    };
+                    Ok(Arc::new(DynSyncStageEnum::Proxy {
+                        stage: Arc::new(ProxyStage::proxy_recreatable(STACK_APPLIED_MOTIF_NETS_ENDPOINT, Some(0.to_string()), device.tho_device_idx(), Box::new(init)).await?),
+                        init: (),
+                    }))
+                } else {
+                    Ok(Arc::new(DynSyncStageEnum::Local(Arc::new(Self::new_local().await?))))
+                }
+            })
+            .await
     }
 
-    pub async fn new_local() -> Result<Self, ThoError>{
-        Ok(Self {
-            pd: PhantomData,
-        })
-
+    pub async fn new_local() -> Result<Self, ThoError> {
+        Ok(Self { pd: PhantomData })
     }
-
 }
 
-pub fn stack_applied_motif_nets_init<'a>(_stage_id:Option<String>, init: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, _all_cuda_tensors: &'a AllTensors, _tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn stack_applied_motif_nets_init<'a>(_stage_id: Option<String>, init: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, _all_cuda_tensors: &'a AllTensors, _tho_device: &'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
         let Ok(_init) = (init as Box<dyn std::any::Any>).downcast::<StackAppliedMotifNetsInput<'static>>() else {
             return Err(ThoError::new("StackAppliedMotifNets endpoint received invalid initializer"));
         };
         Ok(Box::new(WorkerWrapper::new(Arc::new(StackAppliedMotifNets::<WokerRunCtx>::new_local().await?), PhantomData::<JsonIpcCodec>)) as Box<dyn SyncStageIpcWrapper>)
-    }.boxed()
+    }
+    .boxed()
 }
 
-impl<C> Adjustable for StackAppliedMotifNets<C>
-where
-    C: RunCtx + 'static,
-{
-}
-
+impl<C> Adjustable for StackAppliedMotifNets<C> where C: RunCtx + 'static {}
 
 impl<C> Stage for StackAppliedMotifNets<C>
 where
@@ -661,7 +642,7 @@ impl<C> SyncStage for StackAppliedMotifNets<C>
 where
     C: RunCtx + 'static,
 {
-    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="StackAppliedMotifNets::do_run"))]
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "StackAppliedMotifNets::do_run"))]
     fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         let tensors = &input.motif_nets_applied;
         let lengths = tensors.iter().map(|tensor| tensor.as_ref().size()[0]).collect::<Vec<_>>();
@@ -687,14 +668,14 @@ where
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ApplyMotifNetInit {
-    trained_net_id:u32,
-    slice_step:u32,
-    motif_net_path:PathBuf,
-    channel:u32,
-    motif_id:u32,
+    trained_net_id: u32,
+    slice_step: u32,
+    motif_net_path: PathBuf,
+    channel: u32,
+    motif_id: u32,
     quantize: bool,
     #[cfg(test)]
-    fail_if_size_bigger_than:Option<usize>,
+    fail_if_size_bigger_than: Option<usize>,
 }
 
 impl ApplyMotifNetInit {
@@ -703,21 +684,35 @@ impl ApplyMotifNetInit {
         let id = self.inference_id();
         let remote_init = self.clone();
         let remote_ws = Arc::clone(&ws);
-        let installed = execution.install_stateful(
-            APPLY_MOTIF_NET_ENDPOINT, thoosa_common::ipc::endpoints::StageRecovery::RecreateFromInit,
-            || async move {
-                let (params, net) = perf_log!(sync_read_lock!(ws)).load_motif_net(&self.motif_net_path, &device, self.quantize, true)?;
-                let net = net.ok_or_else(|| ThoError::new(format!("workspace did not load motif net from {:?}", self.motif_net_path)))?;
-                Ok(Arc::new(SyncApplyMotifNet::new_local(id, self.slice_step, params, net, self.channel, self.motif_id,
-                    #[cfg(test)] self.fail_if_size_bigger_than,
-                ).await?))
-            },
-            || async move {
-                let (params, _) = perf_log!(sync_read_lock!(remote_ws)).load_motif_net(&remote_init.motif_net_path, &device, remote_init.quantize, false)?;
-                let meta = MotifNetMeta::new(remote_init.motif_id, remote_init.channel, params);
-                Ok((Box::new(remote_init) as Box<dyn WorkerInput>, meta))
-            }, None,
-        ).await?;
+        let installed = execution
+            .install_stateful(
+                APPLY_MOTIF_NET_ENDPOINT,
+                thoosa_common::ipc::endpoints::StageRecovery::RecreateFromInit,
+                || async move {
+                    let (params, net) = perf_log!(sync_read_lock!(ws)).load_motif_net(&self.motif_net_path, &device, self.quantize, true)?;
+                    let net = net.ok_or_else(|| ThoError::new(format!("workspace did not load motif net from {:?}", self.motif_net_path)))?;
+                    Ok(Arc::new(
+                        SyncApplyMotifNet::new_local(
+                            id,
+                            self.slice_step,
+                            params,
+                            net,
+                            self.channel,
+                            self.motif_id,
+                            #[cfg(test)]
+                            self.fail_if_size_bigger_than,
+                        )
+                        .await?,
+                    ))
+                },
+                || async move {
+                    let (params, _) = perf_log!(sync_read_lock!(remote_ws)).load_motif_net(&remote_init.motif_net_path, &device, remote_init.quantize, false)?;
+                    let meta = MotifNetMeta::new(remote_init.motif_id, remote_init.channel, params);
+                    Ok((Box::new(remote_init) as Box<dyn WorkerInput>, meta))
+                },
+                None,
+            )
+            .await?;
         Ok(Arc::new(installed))
     }
 
@@ -726,20 +721,11 @@ impl ApplyMotifNetInit {
             mono_key!(APPLY_MOTIF_NET, "ApplyMotifNet"),
             mono_key!(self.trained_net_id, format!("apply motif net {}", self.trained_net_id)),
             mono_key!(self.slice_step, "slice_step"),
-            mono_key!(self.quantize, "quantize")
+            mono_key!(self.quantize, "quantize"),
         ])
     }
 
-    pub fn new(
-        trained_net_id:u32,
-        slice_step: u32,
-        motif_net_path: PathBuf,
-        channel: u32,
-        motif_id: u32,
-        quantize: bool,
-        #[cfg(test)]
-        fail_if_size_bigger_than: Option<usize>,
-    ) -> Self {
+    pub fn new(trained_net_id: u32, slice_step: u32, motif_net_path: PathBuf, channel: u32, motif_id: u32, quantize: bool, #[cfg(test)] fail_if_size_bigger_than: Option<usize>) -> Self {
         Self {
             trained_net_id,
             slice_step,
@@ -753,8 +739,7 @@ impl ApplyMotifNetInit {
     }
 }
 
-impl WorkerStageInput for ApplyMotifNetInit {
-}
+impl WorkerStageInput for ApplyMotifNetInit {}
 
 #[typetag::serde(name = "ApplyMotifNetInit")]
 impl WorkerInput for ApplyMotifNetInit {}
@@ -772,8 +757,6 @@ where
     }
 }
 
-
-
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ApplyMotifNetInput<'a> {
     batch: ThoDataRef<'a, ThoTensor<ChannelsData, SynKey>>,
@@ -788,7 +771,6 @@ impl WorkerStageInput for ApplyMotifNetInput<'_> {
     fn ref_to_tensor(&self, all_cuda_tensors: &AllTensors, remove: bool) -> Result<Self, ThoError> {
         Ok(Self::from_data_ref(ThoDataRef::Owned(WorkerStageInput::ref_to_tensor(self.batch.as_ref(), all_cuda_tensors, remove)?)))
     }
-
 }
 
 #[typetag::serde(name = "ApplyMotifNetInput")]
@@ -796,7 +778,6 @@ impl WorkerInput for ApplyMotifNetInput<'static> {}
 
 impl Data for ApplyMotifNetInput<'_> {
     type Metrics = MonoMetrics<1, 2>;
-
 
     fn size(&self) -> Self::Metrics {
         MonoMetrics::<1, 2>::try_from(self.batch.size()).unwrap_or_default()
@@ -811,7 +792,7 @@ impl Data for ApplyMotifNetInput<'_> {
     }
 }
 
-impl <'a> ApplyMotifNetInput<'a> {
+impl<'a> ApplyMotifNetInput<'a> {
     pub fn new(batch: &'a ThoTensor<ChannelsData, SynKey>) -> Self {
         Self { batch: ThoDataRef::Borrowed(batch) }
     }
@@ -821,8 +802,8 @@ impl <'a> ApplyMotifNetInput<'a> {
     }
 }
 
-impl <'a> Input for ApplyMotifNetInput<'a> {}
-impl <'a> WithId for ApplyMotifNetInput<'a> {
+impl<'a> Input for ApplyMotifNetInput<'a> {}
+impl<'a> WithId for ApplyMotifNetInput<'a> {
     type ID = SynKey;
 
     fn id(&self) -> &Self::ID {
@@ -836,17 +817,20 @@ pub(super) struct ApplyMotifNetInputWrapper {
 }
 
 impl ApplyMotifNetInputWrapper {
-    pub(super) fn new(
-        batch: Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>,
-    ) -> Self {
+    pub(super) fn new(batch: Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>) -> Self {
         Self { batch }
     }
 }
 
 impl BorrowRef for ApplyMotifNetInputWrapper {
-    fn protect(&self, device: usize) -> thoosa_common::runner::residency::ResidencyLease { self.batch.protect(device) }
+    fn protect(&self, device: usize) -> thoosa_common::runner::residency::ResidencyLease {
+        self.batch.protect(device)
+    }
 
-    type Out<'a> = ApplyMotifNetInput<'a> where Self: 'a;
+    type Out<'a>
+        = ApplyMotifNetInput<'a>
+    where
+        Self: 'a;
 
     fn borrow_ref<'a>(&'a self, to_device_idx: usize) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
     where
@@ -866,7 +850,6 @@ impl SelectRef<ChannelsDataSelector> for ApplyMotifNetInputWrapper {
         Self: 'a,
     {
         async move {
-
             let Some(selector) = selector else {
                 return BorrowRef::borrow_ref(self, to_device_idx).await;
             };
@@ -875,7 +858,6 @@ impl SelectRef<ChannelsDataSelector> for ApplyMotifNetInputWrapper {
         }
     }
 }
-
 
 /// Caches one model's probabilities, allowing different label-model motif sets to share inference.
 #[derive(Debug, cached_derive::Cached, Named)]
@@ -896,14 +878,18 @@ where
     where
         R: RunCtx + MaxParallelCtx + Adjustable + 'static,
     {
-        if init.slice_step == 0 { return Err(ThoError::new("motif inference slice_step must be positive")); }
+        if init.slice_step == 0 {
+            return Err(ThoError::new("motif inference slice_step must be positive"));
+        }
         let id = init.inference_id();
         let slice_step = init.slice_step;
         let sync_stage = SyncApplyMotifNet::new(init.trained_net_id, init, ctx, ws).await?;
         Ok(Arc::new(Self { id, slice_step, sync_stage }))
     }
 
-    fn motif_id(&self) -> u32 { self.sync_stage.motif_id() }
+    fn motif_id(&self) -> u32 {
+        self.sync_stage.motif_id()
+    }
 }
 
 impl<C> Stage for ApplyMotifNet<C>
@@ -919,14 +905,16 @@ impl<C> OutId for ApplyMotifNet<C>
 where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
-    fn out_id(&self, input_id: &SynKey) -> SynKey { &self.id + input_id }
+    fn out_id(&self, input_id: &SynKey) -> SynKey {
+        &self.id + input_id
+    }
 }
 
 impl<C> AsyncStage for ApplyMotifNet<C>
 where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
-    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ApplyMotifNet::run"))]
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "ApplyMotifNet::run"))]
     async fn run(self: Arc<Self>, input: Self::In<'static>, ctx: C) -> Result<Self::Out, ThoError> {
         // Filtering has already selected the input identity and dimensions. Splits must use that timeline.
         let width = self.sync_stage.motif_width() as i64;
@@ -942,11 +930,11 @@ where
             vec![
                 Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(*MaxParallelStep::MID))),
                 Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("apply_motif_net"))),
-                Adjusters::Input(input_adjuster(StepAlignedSplitsAdjuster::new_with_overlap(
-                    [-1, min_split_len].into(), [-1, overlap_len].into(), step,
-                ))),
-            ], None,
-        ).run(
+                Adjusters::Input(input_adjuster(StepAlignedSplitsAdjuster::new_with_overlap([-1, min_split_len].into(), [-1, overlap_len].into(), step))),
+            ],
+            None,
+        )
+        .run(
             &self.sync_stage,
             Arc::new(ApplyMotifNetInputWrapper::new(Arc::clone(&input))),
             ctx,
@@ -955,7 +943,9 @@ where
                 NoopRunnableContext {},
                 MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new()),
             ),
-        ).await.map_err(|error| error.context(format!("apply motif net {:?}", self.id)))?;
+        )
+        .await
+        .map_err(|error| error.context(format!("apply motif net {:?}", self.id)))?;
         // The IPC wrapper ends here; the registered async cache owns the ordinary tensor in either mode.
         Ok(Arc::new(DevicesWrap::wrap(output.into_inner())))
     }
@@ -964,24 +954,24 @@ where
 #[derive(Debug)]
 pub struct SyncApplyMotifNet<C>
 where
-    C: RunCtx + 'static
+    C: RunCtx + 'static,
 {
     id: SynKey,
     // Keep the module and motif metadata under one state lock for device moves.
     motif_net: tokio::sync::Mutex<DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>>,
     params: MotifNetParams,
-    slice_step:u32,
-    pd:PhantomData<C>,
+    slice_step: u32,
+    pd: PhantomData<C>,
     #[expect(dead_code, reason = "Retains stored metadata and its existing construction and diagnostic representation.")]
-    channel:u32,
-    motif_id:u32,
+    channel: u32,
+    motif_id: u32,
     #[cfg(test)]
-    fail_if_size_bigger_than:Option<usize>,
+    fail_if_size_bigger_than: Option<usize>,
 }
 
-impl <C> WithId for SyncApplyMotifNet<C>
+impl<C> WithId for SyncApplyMotifNet<C>
 where
-    C: RunCtx + 'static
+    C: RunCtx + 'static,
 {
     type ID = SynKey;
 
@@ -994,9 +984,9 @@ where
 static APPLY_MOTIF_NET_INSTANCES: InstanceCache = InstanceCache::new();
 
 #[async_trait]
-impl <C> CachePurger for SyncApplyMotifNet<C>
+impl<C> CachePurger for SyncApplyMotifNet<C>
 where
-    C: RunCtx + 'static
+    C: RunCtx + 'static,
 {
     async fn has_gpu_data(&self, device_idx: usize) -> bool {
         self.motif_net.lock().await.data.has_gpu_data(device_idx)
@@ -1013,59 +1003,42 @@ where
     async fn drop_gpu(&self, device_idx: usize, _name: &str) -> Result<(), ThoError> {
         self.motif_net.lock().await.data.drop_gpu(device_idx)
     }
-
 }
 
 //properties needed when running stage
 pub trait ApplyMotifNetProps {
     type C: RunCtx + 'static;
 
-    fn motif_width(&self)->u32;
-    fn motif_id(&self)->u32;
-
+    fn motif_width(&self) -> u32;
+    fn motif_id(&self) -> u32;
 }
 
-impl <C> ApplyMotifNetProps for DynSyncStageWithStateEnum<SyncApplyMotifNet<C>, MotifNetMeta>
+impl<C> ApplyMotifNetProps for DynSyncStageWithStateEnum<SyncApplyMotifNet<C>, MotifNetMeta>
 where
-    C: RunCtx + 'static
+    C: RunCtx + 'static,
 {
     type C = C;
 
     fn motif_width(&self) -> u32 {
         match self {
-            DynSyncStageWithStateEnum::Local(stage) => {
-                stage.motif_width()
-            }
-            DynSyncStageWithStateEnum::Proxy { init, .. } => {
-                init.motif_net_params().num_features()
-            }
+            DynSyncStageWithStateEnum::Local(stage) => stage.motif_width(),
+            DynSyncStageWithStateEnum::Proxy { init, .. } => init.motif_net_params().num_features(),
         }
     }
 
     fn motif_id(&self) -> u32 {
         match self {
-            DynSyncStageWithStateEnum::Local(stage) => {
-                stage.motif_id
-            }
-            DynSyncStageWithStateEnum::Proxy { init, .. } => {
-                init.motif_id()
-            }
+            DynSyncStageWithStateEnum::Local(stage) => stage.motif_id,
+            DynSyncStageWithStateEnum::Proxy { init, .. } => init.motif_id(),
         }
     }
-
-
 }
 
-impl <C> SyncApplyMotifNet<C>
+impl<C> SyncApplyMotifNet<C>
 where
-    C: RunCtx + 'static
+    C: RunCtx + 'static,
 {
-    async fn new<RC>(
-        trained_net_id: u32,
-        sync_init: ApplyMotifNetInit,
-        run_context: RC,
-        ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
-    ) -> Result<Arc<DynSyncStageWithStateEnum<SyncApplyMotifNet<C>, MotifNetMeta>>, ThoError>
+    async fn new<RC>(trained_net_id: u32, sync_init: ApplyMotifNetInit, run_context: RC, ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>) -> Result<Arc<DynSyncStageWithStateEnum<SyncApplyMotifNet<C>, MotifNetMeta>>, ThoError>
     where
         RC: RunCtx + MaxParallelCtx + Adjustable + Send + Sync + 'static,
     {
@@ -1073,42 +1046,27 @@ where
         // Different sampling/quantization settings require independently configured sync instances.
         let key = (trained_net_id, sync_init.slice_step, sync_init.quantize);
         let device_idx = run_context.tho_device_idx();
-        APPLY_MOTIF_NET_INSTANCES.get_or_try_insert_recreatable_with::<C, _, _, _, _>(device_idx, GlobalCtx::global().cuda_activity_gate(device_idx), GlobalCtx::global().is_ipc(), key, move || async move {
+        APPLY_MOTIF_NET_INSTANCES
+            .get_or_try_insert_recreatable_with::<C, _, _, _, _>(device_idx, GlobalCtx::global().cuda_activity_gate(device_idx), GlobalCtx::global().is_ipc(), key, move || async move {
+                // Construction loads model state and has no cached tensor inputs to retain.
 
-            // Construction loads model state and has no cached tensor inputs to retain.
+                let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(
+                    vec![Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(*MaxParallelStep::FAST))), Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("apply_motif_net_init")))],
+                    None,
+                );
+                let stage = oom_handler
+                    .new_stage(sync_init, run_context, WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new())), &ws)
+                    .await?;
 
-            let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(
-                vec![
-                    Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(*MaxParallelStep::FAST))),
-                    Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("apply_motif_net_init"))),
-                ],
-                None,
-            );
-            let stage = oom_handler.new_stage(
-                sync_init,
-                run_context,
-                WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new())),
-                &ws,
-            ).await?;
+                // Every configured instance must remain purgeable; concatenated tensor IDs can collide as display strings.
+                thoosa_common::runner::global_ctx::GlobalCtx::global().register_cache((stage.stage_id(), Arc::clone(&stage) as Arc<dyn CachePurger>));
 
-            // Every configured instance must remain purgeable; concatenated tensor IDs can collide as display strings.
-            thoosa_common::runner::global_ctx::GlobalCtx::global().register_cache((stage.stage_id(), Arc::clone(&stage) as Arc<dyn CachePurger>));
-
-            Ok(stage)
-        }).await
+                Ok(stage)
+            })
+            .await
     }
 
-    pub async fn new_local(
-        id: SynKey,
-        slice_step:u32,
-        params: MotifNetParams,
-        motif_net:ThoModuleWithStore<Batch<Slice>, MotifProbability>,
-        channel:u32,
-        motif_id:u32,
-        #[cfg(test)]
-        fail_if_size_bigger_than:Option<usize>,
-    ) -> Result<Self, ThoError> {
-
+    pub async fn new_local(id: SynKey, slice_step: u32, params: MotifNetParams, motif_net: ThoModuleWithStore<Batch<Slice>, MotifProbability>, channel: u32, motif_id: u32, #[cfg(test)] fail_if_size_bigger_than: Option<usize>) -> Result<Self, ThoError> {
         debug!("SyncApplyMotifNet::new: motif_net.id={:?}", motif_net.id());
 
         Ok(Self {
@@ -1124,14 +1082,12 @@ where
         })
     }
 
-    pub fn motif_width(&self)->u32 {
+    pub fn motif_width(&self) -> u32 {
         self.params.num_features()
     }
-
-
 }
 
-pub fn apply_motif_net_endpoint_init<'a>(_stage_id:Option<String>, init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, _all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn apply_motif_net_endpoint_init<'a>(_stage_id: Option<String>, init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, _all_cuda_tensors: &'a AllTensors, tho_device: &'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
         let Ok(init) = (init as Box<dyn std::any::Any>).downcast::<ApplyMotifNetInit>() else {
             return Err(ThoError::new("SyncApplyMotifNet endpoint received invalid initializer"));
@@ -1139,12 +1095,7 @@ pub fn apply_motif_net_endpoint_init<'a>(_stage_id:Option<String>, init: Box<dyn
         let init = *init;
         debug!("apply_net_stage_2_endpoint_init: init={init:?}");
 
-        let (params, net) = perf_log!(sync_read_lock!(ws)).load_motif_net(
-           &init.motif_net_path,
-           &tho_device,
-           init.quantize,
-            true
-        )?;
+        let (params, net) = perf_log!(sync_read_lock!(ws)).load_motif_net(&init.motif_net_path, &tho_device, init.quantize, true)?;
 
         let stage: SyncApplyMotifNet<WokerRunCtx> = SyncApplyMotifNet::new_local(
             init.inference_id(),
@@ -1154,52 +1105,55 @@ pub fn apply_motif_net_endpoint_init<'a>(_stage_id:Option<String>, init: Box<dyn
             init.channel,
             init.motif_id,
             #[cfg(test)]
-            init.fail_if_size_bigger_than
-        ).await?;
+            init.fail_if_size_bigger_than,
+        )
+        .await?;
 
         // The common stateful wrapper performs state preparation and converts worker outputs back to references.
         Ok(Box::new(WorkerWrapperWithState::new(Arc::new(stage), PhantomData::<JsonIpcCodec>)) as Box<dyn SyncStageIpcWrapper>)
-    }.boxed()
+    }
+    .boxed()
 }
 
+impl<C> Adjustable for SyncApplyMotifNet<C> where C: RunCtx + 'static {}
 
-impl <C> Adjustable for SyncApplyMotifNet<C>
+impl<C> OutId for SyncApplyMotifNet<C>
 where
-    C: RunCtx  + 'static
-{
-
-}
-
-impl <C> OutId for SyncApplyMotifNet<C>
-where
-    C: RunCtx  + 'static
+    C: RunCtx + 'static,
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
         &self.id + input_id
     }
 }
 
-
-impl <C>  Stage for SyncApplyMotifNet<C>
+impl<C> Stage for SyncApplyMotifNet<C>
 where
-    C: RunCtx + 'static{
+    C: RunCtx + 'static,
+{
     type Ctx = C;
     type In<'a> = ApplyMotifNetInput<'a>;
     type Out = MotifThoTensor<MotifProbability>;
 }
 
-impl <C> StageExecution for SyncApplyMotifNet<C> where
-    C: RunCtx + 'static
+impl<C> StageExecution for SyncApplyMotifNet<C>
+where
+    C: RunCtx + 'static,
 {
     fn execute<'a, 'i: 'a, I, IFut>(self: Arc<Self>, input: IFut, execution: &'a ExecutionContext<'_>, ctx: &'a Self::Ctx) -> futures_util::future::BoxFuture<'a, Result<Self::Out, ThoError>>
-    where Self: 'a, Self::In<'i>: Sync, Self::Out: Send, I: Borrow<Self::In<'i>> + Send + 'a, IFut: Future<Output = Result<I, ThoError>> + Send + 'a {
+    where
+        Self: 'a,
+        Self::In<'i>: Sync,
+        Self::Out: Send,
+        I: Borrow<Self::In<'i>> + Send + 'a,
+        IFut: Future<Output = Result<I, ThoError>> + Send + 'a,
+    {
         Box::pin(execute_stateful(self, input, execution, ctx))
     }
 }
 
 impl<C> PrepareStage for SyncApplyMotifNet<C>
 where
-    C: RunCtx  + 'static,
+    C: RunCtx + 'static,
 {
     type S = DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>;
     fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<tokio::sync::MappedMutexGuard<'_, Self::S>, ThoError>> {
@@ -1209,16 +1163,17 @@ where
             if motif_net.tho_device_idx() != to_device_idx {
                 *motif_net = motif_net.copy_to_device(to_device_idx).await?;
             }
-            Ok(MutexGuard::map(motif_net, |v|v))
-        }.boxed()
+            Ok(MutexGuard::map(motif_net, |v| v))
+        }
+        .boxed()
     }
 }
 
 impl<C> StageWithState for SyncApplyMotifNet<C>
 where
-    C: RunCtx  + 'static,
+    C: RunCtx + 'static,
 {
-    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SyncApplyMotifNet::run"))]
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "SyncApplyMotifNet::run"))]
     fn do_run_with_state<'f>(self: Arc<Self>, input: &Self::In<'f>, motif_net: &mut Self::S, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         let motif_id = motif_net.extra().motif_id();
 
@@ -1244,7 +1199,7 @@ where
 
 impl<C> StateTransfer for SyncApplyMotifNet<C>
 where
-    C: RunCtx  + 'static,
+    C: RunCtx + 'static,
 {
     fn get_state_info(&self, _device: usize) -> BoxFuture<'_, Result<thoosa_common::ipc::state_transfer::StageStateInfo, ThoError>> {
         async move { self.motif_net.lock().await.data.state_info() }.boxed()
@@ -1257,14 +1212,7 @@ where
     }
 }
 
-pub fn apply_motif_net_forward(
-    out_id: SynKey,
-    input: &ThoTensor<ChannelsData, SynKey>,
-    motif_net: &DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>,
-    slice_step: u32,
-    input_id: &SynKey,
-) -> Result<ThoTensor<MotifProbability, SynKey>, ThoError>
-{
+pub fn apply_motif_net_forward(out_id: SynKey, input: &ThoTensor<ChannelsData, SynKey>, motif_net: &DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>, slice_step: u32, input_id: &SynKey) -> Result<ThoTensor<MotifProbability, SynKey>, ThoError> {
     let motif_id = motif_net.extra().motif_id();
     let c = motif_net.extra().channel() as i64;
     let motif_width = motif_net.extra().motif_net_params.num_features() as i64;
@@ -1302,70 +1250,43 @@ pub fn apply_motif_net_forward(
     ThoTensor::new(out_id, out_t.totype(Float))
 }
 
-
 #[cfg(test)]
-pub fn motif_test_net_(
-    device: Device,
-    motif_t: Arc<ThoTensor<Batch<Slice>, SynKey>>,
-    step: u32, kernel: u32,
-) -> (
-    Box<dyn Fn() -> MotifNetParams + Sync + Send>,
-    Box<dyn Fn() -> anyhow::Result<ThoModuleWithStore<Batch<Slice>, MotifProbability>> + Sync + Send>,
-) {
+pub fn motif_test_net_(device: Device, motif_t: Arc<ThoTensor<Batch<Slice>, SynKey>>, step: u32, kernel: u32) -> (Box<dyn Fn() -> MotifNetParams + Sync + Send>, Box<dyn Fn() -> anyhow::Result<ThoModuleWithStore<Batch<Slice>, MotifProbability>> + Sync + Send>) {
     let id = motif_t.id().clone();
     let motif_width = motif_t.as_ref().size()[1] as u32;
     (
         Box::new(move || MotifNetParams::new(motif_width, 1, 1, step, 32, kernel)),
         Box::new(move || {
-            Ok(*dummy_motif_net::<Batch<Slice>, MotifProbability, SynKey>(id.clone(), motif_width, 1., device, "test", &motif_t.as_ref().local()?.f_i((0, ..))?, step as i64)?)//first slice
+            Ok(*dummy_motif_net::<Batch<Slice>, MotifProbability, SynKey>(id.clone(), motif_width, 1., device, "test", &motif_t.as_ref().local()?.f_i((0, ..))?, step as i64)?) //first slice
         }),
     )
 }
 
 #[cfg(test)]
-pub fn motif_sum_net_(
-    device: Device,
-    motif_t: Arc<ThoTensor<Batch<Slice>, SynKey>>,
-    step: u32, kernel: u32,
-) -> (
-    Box<dyn Fn() -> MotifNetParams + Sync + Send>,
-    Box<dyn Fn() -> anyhow::Result<ThoModuleWithStore<Batch<Slice>, MotifProbability>> + Sync + Send>,
-) {
+pub fn motif_sum_net_(device: Device, motif_t: Arc<ThoTensor<Batch<Slice>, SynKey>>, step: u32, kernel: u32) -> (Box<dyn Fn() -> MotifNetParams + Sync + Send>, Box<dyn Fn() -> anyhow::Result<ThoModuleWithStore<Batch<Slice>, MotifProbability>> + Sync + Send>) {
     let id = motif_t.id().clone();
     let motif_width = motif_t.as_ref().size()[1] as u32;
     (
         Box::new(move || MotifNetParams::new(motif_width, 1, 1, step, 32, kernel)),
         Box::new(move || {
-            Ok(*sum_motif_net::<Batch<Slice>, MotifProbability, SynKey>(id.clone(), motif_width, 1., device, "test", &motif_t.as_ref().local()?.f_i((0, ..))?, step as i64)?)//first slice
+            Ok(*sum_motif_net::<Batch<Slice>, MotifProbability, SynKey>(id.clone(), motif_width, 1., device, "test", &motif_t.as_ref().local()?.f_i((0, ..))?, step as i64)?) //first slice
         }),
     )
 }
-
 
 #[cfg(test)]
 ///builds net initialized to detect provided pattern
-pub fn dummy_motif_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static, I:Into<SynKey>>(
-    id: I,
-    num_features: u32,
-    _k: f64,
-    device: Device,
-    _descr: &str,
-    pattern:&Tensor,
-    stride: i64
-) -> Result<Box<ThoModuleWithStore<DI, DO>>, ThoError> {
+pub fn dummy_motif_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static, I: Into<SynKey>>(id: I, num_features: u32, _k: f64, device: Device, _descr: &str, pattern: &Tensor, stride: i64) -> Result<Box<ThoModuleWithStore<DI, DO>>, ThoError> {
     assert_eq!(pattern.size().len(), 1, "template must be 1-D");
     let l = pattern.size()[0];
 
     // mean-center and unit-norm the template (helps with DC/scale variations)
-    let t = pattern
-        .to_device(device)
-        .to_kind(Kind::Float);
+    let t = pattern.to_device(device).to_kind(Kind::Float);
     let t = &t - t.mean(Kind::Float);
     let t = &t / (t.pow_tensor_scalar(2).sum(Kind::Float).sqrt() + 1e-12);
 
     let vs = VarStore::new(device);
     let cfg = nn::ConvConfig { bias: false, stride, ..Default::default() };
-
 
     let tho_tensor: Arc<ThoTensor<AnyDims, DebugId>> = Arc::new(ThoTensor::from(t));
     let ones: Arc<ThoTensor<AnyDims, DebugId>> = Arc::new(ThoTensor::from(Tensor::ones([1, 1, l], FLOAT_CPU)));
@@ -1373,8 +1294,7 @@ pub fn dummy_motif_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static, I:I
     let node = SeqBuilder::new(num_features, None)?
         .closure(
             Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
-
-                let r = t.unsqueeze(1);//dummy channel
+                let r = t.unsqueeze(1); //dummy channel
 
                 trace!("dummy_motif_net: t=\n{t}");
 
@@ -1386,12 +1306,7 @@ pub fn dummy_motif_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static, I:I
             vec![
                 SeqBuilder::new(num_features, None)?.conv_1d("conv", l as u32, 1, 1, cfg, Some(Arc::clone(&tho_tensor)))?.end_seq()?,
                 SeqBuilder::new(num_features, None)?
-                    .closure(
-                        Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
-                            Ok(t.f_pow_tensor_scalar(2)?)
-                        })),
-                        None,
-                    )?
+                    .closure(Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| Ok(t.f_pow_tensor_scalar(2)?))), None)?
                     .conv_1d("energy", l as u32, 1, 1, cfg, Some(Arc::clone(&ones)))?
                     .closure(
                         Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
@@ -1399,14 +1314,9 @@ pub fn dummy_motif_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static, I:I
                         })),
                         None,
                     )?
-                    .end_seq()?
+                    .end_seq()?,
             ],
-            Box::new(move |t: &Tensor| {
-                Ok(vec![
-                    t.shallow_clone(),
-                    t.shallow_clone()
-                ])
-            }),
+            Box::new(move |t: &Tensor| Ok(vec![t.shallow_clone(), t.shallow_clone()])),
             Box::new(move |num_denom: Vec<Tensor>| {
                 let [num, denom] = <[Tensor; 2]>::try_from(num_denom).unwrap();
 
@@ -1415,7 +1325,6 @@ pub fn dummy_motif_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static, I:I
         )?
         .closure(
             Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
-
                 trace!("dummy_motif_net: out=\n{t}");
 
                 Ok(t.shallow_clone())
@@ -1424,45 +1333,23 @@ pub fn dummy_motif_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static, I:I
         )?
         .end_seq()?;
 
-
-
     let module = node.clone().build_tch_module(&vs.root())?;
-    Ok(Box::new(ThoModuleWithStore::with_factory(
-        id,
-        module,
-        vs,
-        Some(Arc::new( move |path:&nn::Path| {
-            node.clone().build_tch_module(path)
-        }))
-    )))
-
+    Ok(Box::new(ThoModuleWithStore::with_factory(id, module, vs, Some(Arc::new(move |path: &nn::Path| node.clone().build_tch_module(path))))))
 }
-
 
 #[cfg(test)]
 //sums inputs
-pub fn sum_motif_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static, I:Into<SynKey>>(
-    id: I,
-    num_features: u32,
-    _k: f64,
-    device: Device,
-    _descr: &str,
-    pattern:&Tensor,
-    stride: i64
-) -> Result<Box<ThoModuleWithStore<DI, DO>>, ThoError> {
+pub fn sum_motif_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static, I: Into<SynKey>>(id: I, num_features: u32, _k: f64, device: Device, _descr: &str, pattern: &Tensor, stride: i64) -> Result<Box<ThoModuleWithStore<DI, DO>>, ThoError> {
     assert_eq!(pattern.size().len(), 1, "template must be 1-D");
     let l = pattern.size()[0];
 
     // mean-center and unit-norm the template (helps with DC/scale variations)
-    let t = pattern
-        .to_device(device)
-        .to_kind(Kind::Float);
+    let t = pattern.to_device(device).to_kind(Kind::Float);
     let t = &t - t.mean(Kind::Float);
     let t = &t / (t.pow_tensor_scalar(2).sum(Kind::Float).sqrt() + 1e-12);
 
     let vs = VarStore::new(device);
     let _cfg = nn::ConvConfig { bias: false, stride, ..Default::default() };
-
 
     let _tho_tensor: Arc<ThoTensor<AnyDims, DebugId>> = Arc::new(ThoTensor::from(t));
     let _ones: Arc<ThoTensor<AnyDims, DebugId>> = Arc::new(ThoTensor::from(Tensor::ones([1, 1, l], FLOAT_CPU)));
@@ -1470,13 +1357,10 @@ pub fn sum_motif_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static, I:Int
     let node = SeqBuilder::new(num_features, None)?
         .closure(
             Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
-
-                let r = t.unsqueeze(1);//dummy channel
+                let r = t.unsqueeze(1); //dummy channel
                 let r = r.f_sum_dim_intlist(1, false, None)?;
 
                 debug!("sum_motif_net: t=\n{t} \n r=\n{r}");
-
-
 
                 Ok(r)
             })),
@@ -1484,21 +1368,9 @@ pub fn sum_motif_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static, I:Int
         )?
         .end_seq()?;
 
-
-
     let module = node.clone().build_tch_module(&vs.root())?;
-    Ok(Box::new(ThoModuleWithStore::with_factory(
-        id,
-        module,
-        vs,
-        Some(Arc::new( move |path:&nn::Path| {
-            node.clone().build_tch_module(path)
-        }))
-    )))
-
+    Ok(Box::new(ThoModuleWithStore::with_factory(id, module, vs, Some(Arc::new(move |path: &nn::Path| node.clone().build_tch_module(path))))))
 }
-
-
 
 #[cfg(test)]
 pub mod tests {
@@ -1528,12 +1400,13 @@ pub mod tests {
     use thoosa_common::nets::nodes::ThoModule;
     use thoosa_common::runner::common::cachable::{DevicesWrap, SelectRef};
     use thoosa_common::runner::common::{MockRunCtx, mock_run_ctx};
-    use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::runner::global_ctx::GlobalCtx;
+    use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::tch_error::tch_result;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::utils::{assert_close, plot_series_with_lanes, reset_print_options, to_vec_f32};
     use thoosa_properties_map::ToHashmap;
+    use thoosa_shared::ThoError;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::mono_key;
     use thoosa_shared::perf_logging::PERF;
@@ -1541,7 +1414,6 @@ pub mod tests {
     use thoosa_shared::test_utils::TestSignalKind;
     use thoosa_shared::traits::AsyncStage;
     use thoosa_shared::traits::{DebugId, RunCtx};
-    use thoosa_shared::ThoError;
     use thoosa_store::{RunConfigRow, TrainedNet};
 
     #[ctor::ctor]
@@ -1552,8 +1424,8 @@ pub mod tests {
     #[tokio::test]
     async fn test_failed_motif_assembly_preserves_both_cursors() -> Result<(), ThoError> {
         use super::{ApplyMotifNetSplitsContext, MotifNetMeta, SyncApplyMotifNet};
-        use thoosa_common::runner::oom_handler::InputContext;
         use thoosa_common::ipc::proxy::DynSyncStageWithStateEnum;
+        use thoosa_common::runner::oom_handler::InputContext;
 
         type Stage = DynSyncStageWithStateEnum<SyncApplyMotifNet<MockRunCtx>, MotifNetMeta>;
         let mut context = ApplyMotifNetSplitsContext::new([1, 4].into(), mono_key!("test", "output").into(), 4, FLOAT_CPU, 1, 1)?;
@@ -1581,7 +1453,6 @@ pub mod tests {
         assert_eq!(valid_partial_output_len(50, 25, 25, 100, 3), 0);
     }
 
-
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_apply_motif_nets_propagates_one_net_failure() -> Result<(), ThoError> {
         use thoosa_common::nets::nodes::ThoFuncModule;
@@ -1589,55 +1460,80 @@ pub mod tests {
 
         // Keep two real nets successful while one model fails in its forward
         // call. The former log-and-continue path would stack only two outputs.
-        let error = apply_motif_nets_3_channels_2_motifs(None, 4000, 10, new_apply_motif_nets, |device, motif| {
-            let (params, module) = motif_test_net_(device, Arc::clone(&motif), 10, 100);
-            if !motif.id().to_string().contains("motif_0_1") { return (params, module); }
-            let id = motif.id().clone();
-            (params, Box::new(move || {
-                Ok(ThoModuleWithStore::with_factory(
-                    id.clone(),
-                    Box::new(ThoFuncModule::new(|_| Err(anyhow::anyhow!("injected motif forward failure")))),
-                    VarStore::new(device),
-                    Some(Arc::new(|_| Ok(Box::new(ThoFuncModule::new(|_| Err(anyhow::anyhow!("injected motif forward failure"))))))),
-                ))
-            }))
-        }, Default::default(), 100, 100).await.unwrap_err();
+        let error = apply_motif_nets_3_channels_2_motifs(
+            None,
+            4000,
+            10,
+            new_apply_motif_nets,
+            |device, motif| {
+                let (params, module) = motif_test_net_(device, Arc::clone(&motif), 10, 100);
+                if !motif.id().to_string().contains("motif_0_1") {
+                    return (params, module);
+                }
+                let id = motif.id().clone();
+                (
+                    params,
+                    Box::new(move || {
+                        Ok(ThoModuleWithStore::with_factory(
+                            id.clone(),
+                            Box::new(ThoFuncModule::new(|_| Err(anyhow::anyhow!("injected motif forward failure")))),
+                            VarStore::new(device),
+                            Some(Arc::new(|_| Ok(Box::new(ThoFuncModule::new(|_| Err(anyhow::anyhow!("injected motif forward failure"))))))),
+                        ))
+                    }),
+                )
+            },
+            Default::default(),
+            100,
+            100,
+        )
+        .await
+        .unwrap_err();
         assert!(format!("{error:#}").contains("injected motif forward failure"), "must propagate the failed net rather than stack partial outputs: {error:#}");
         Ok(())
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_apply_motif_nets_3_channels_2_motifs_without_oom() -> Result<(), ThoError> {
-        apply_motif_nets_3_channels_2_motifs(None, 4000, 10, new_apply_motif_nets, |device, motif, |motif_test_net_(device, motif, 10, 100), Default::default(), 100, 100).await?;
+        apply_motif_nets_3_channels_2_motifs(None, 4000, 10, new_apply_motif_nets, |device, motif| motif_test_net_(device, motif, 10, 100), Default::default(), 100, 100).await?;
 
         Ok(())
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_apply_motif_nets_3_channels_2_motifs_without_oom_uneven() -> Result<(), ThoError> {
-        apply_motif_nets_3_channels_2_motifs(None, 4321, 10, new_apply_motif_nets, |device, motif, |motif_test_net_(device, motif, 10, 100), Default::default(), 100, 100).await
+        apply_motif_nets_3_channels_2_motifs(None, 4321, 10, new_apply_motif_nets, |device, motif| motif_test_net_(device, motif, 10, 100), Default::default(), 100, 100).await
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_apply_motif_nets_3_channels_2_motifs_step_1_with_oom() -> Result<(), ThoError> {
-        apply_motif_nets_3_channels_2_motifs(Some(1000), 4000, 10, new_apply_motif_nets, |device, motif, |motif_test_net_(device, motif, 10, 100), Default::default(), 100, 100).await
+        apply_motif_nets_3_channels_2_motifs(Some(1000), 4000, 10, new_apply_motif_nets, |device, motif| motif_test_net_(device, motif, 10, 100), Default::default(), 100, 100).await
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_apply_motif_nets_3_channels_2_motifs_step_2_with_oom() -> Result<(), ThoError> {
-        apply_motif_nets_3_channels_2_motifs(Some(1000), 4000, 10, new_apply_motif_nets, |device, motif, |motif_test_net_(device, motif, 10, 100), Default::default(), 100, 100).await
+        apply_motif_nets_3_channels_2_motifs(Some(1000), 4000, 10, new_apply_motif_nets, |device, motif| motif_test_net_(device, motif, 10, 100), Default::default(), 100, 100).await
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_apply_motif_nets_3_channels_2_motifs_with_oom_uneven() -> Result<(), ThoError> {
-        apply_motif_nets_3_channels_2_motifs(Some(987), 4321, 10, new_apply_motif_nets, |device, motif, |motif_test_net_(device, motif, 10, 100), Default::default(), 100, 100).await
+        apply_motif_nets_3_channels_2_motifs(Some(987), 4321, 10, new_apply_motif_nets, |device, motif| motif_test_net_(device, motif, 10, 100), Default::default(), 100, 100).await
     }
 
-    pub async fn apply_motif_nets_3_channels_2_motifs<F,A, MF>(trigger_oom_len: Option<usize>, input_n_0: usize, apply_motif_net_step: u32, apply_motif_net_fn: F, motif_net_fn_: MF, stft_config: StftRunConfig/*shouldn't be here, needed only for cosine 2d*/, motif_len: usize, sample_rate: u32) -> Result<(), ThoError>
+    pub async fn apply_motif_nets_3_channels_2_motifs<F, A, MF>(
+        trigger_oom_len: Option<usize>,
+        input_n_0: usize,
+        apply_motif_net_step: u32,
+        apply_motif_net_fn: F,
+        motif_net_fn_: MF,
+        stft_config: StftRunConfig, /*shouldn't be here, needed only for cosine 2d*/
+        motif_len: usize,
+        sample_rate: u32,
+    ) -> Result<(), ThoError>
     where
-        for <'a> A:AsyncStage<In<'a>=Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=MockRunCtx, Out=Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>>, //+ thoosa_common::runner::common::runnable::WrappedRunInputStage,
-        F:AsyncFn(Option<usize>, u32, RunConfigId, &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, &mut Arc<dyn MotifsStore>) -> Result<Arc<A>, ThoError>,
-        MF:Fn(Device, Arc<ThoTensor<Batch<Slice>, SynKey>>) -> (Box<dyn Fn() -> MotifNetParams + Sync + Send>, Box<dyn Fn() -> anyhow::Result<ThoModuleWithStore<Batch<Slice>, MotifProbability>> + Sync + Send>)
+        for<'a> A: AsyncStage<In<'a> = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = MockRunCtx, Out = Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>>, //+ thoosa_common::runner::common::runnable::WrappedRunInputStage,
+        F: AsyncFn(Option<usize>, u32, RunConfigId, &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, &mut Arc<dyn MotifsStore>) -> Result<Arc<A>, ThoError>,
+        MF: Fn(Device, Arc<ThoTensor<Batch<Slice>, SynKey>>) -> (Box<dyn Fn() -> MotifNetParams + Sync + Send>, Box<dyn Fn() -> anyhow::Result<ThoModuleWithStore<Batch<Slice>, MotifProbability>> + Sync + Send>),
     {
         thoosa_shared::test_utils::maybe_init_perf_tracing_stdout("debug");
         // log::set_max_level(Debug);
@@ -1666,85 +1562,89 @@ pub mod tests {
 
         let ws = Arc::new(RwLock::new(
             crate::motifs_ws::MotifsWsMockBuilder::new(None, 3, sample_rate, input_n_0 as u32)
-                .with_try_load_motif_net(vec![
-                    (net_id_0_0.clone(), params_0_0, module_0_0),
-                    (net_id_0_1.clone(), params_0_1, module_0_1),
-                    (net_id_1_0.clone(), params_1_0, module_1_0),
-                ])
+                .with_try_load_motif_net(vec![(net_id_0_0.clone(), params_0_0, module_0_0), (net_id_0_1.clone(), params_0_1, module_0_1), (net_id_1_0.clone(), params_1_0, module_1_0)])
                 .build(),
         ));
 
         let mut store = MockMotifsStoreBuilder::new()
-                .with_run_config_descr([(
-                    find_motifs_run_config_id,
-                    Ok(RunConfigRow {
-                        id: find_motifs_run_config_id,
-                        r#type: "FindMotifsRunConfig".to_string(),
-                        descr: "test find motifs".to_string(),
-                        run_on: "2026-01-01 00:00:00".to_string(),
-                    }),
-                )])
-                .with_list_run_config_values([
-                    (find_motifs_run_config_id, Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_config_id), 0, motif_len as u32, None, None).to_properties_iter(None).collect())),
-                    (train_motifs_run_config_id, Ok(TrainMotifNetRunConfig::new(Some(train_motifs_run_config_id), CommonTrainingRunConfig::new(10, 2, 0.1), MotifNetTypeArgs::Cosine2DNet(MotifCosine2DNetArgs{
-                        a: 10.0,
-                        b: 0.0,
-                        init_mode: Default::default(),
-                        stft_config,
-                    })).to_properties_iter(None).collect())),
-                ])
-                .with_get_input_run_config_ids([
-                    (train_motifs_run_config_id, Ok(vec![select_motifs_run_config_id])),
-                    (select_motifs_run_config_id, Ok(vec![find_motifs_run_config_id]))
-                ])
-                .with_get_motif_meta([
-                    (motif_0_0_id, Ok((0usize, find_motifs_run_config_id))),
-                    (motif_0_1_id, Ok((0usize, find_motifs_run_config_id))),
-                    (motif_1_0_id, Ok((1usize, find_motifs_run_config_id))),
-                ])
-                .with_list_selected_motifs([
-                    (vec![select_motifs_run_config_id], Ok(
-                        HashMap::from([(
-                                select_motifs_run_config_id,
-                                vec![
-                                    vec![(motif_0_0_id, 1.0f64), (motif_0_1_id, 1.0f64)], //channel 0
-                                    vec![(motif_1_0_id, 1.0f64)], //channel 1
-                                    vec![]//channel 2
-                                ]
-
-                        )])
-                    ))
-                ])
-                .with_list_trained_nets([
-                    (vec![select_motifs_run_config_id], Some(0.3), None, Ok(vec![
-                        TrainedNet { id: 0, run_config_id: train_motifs_run_config_id, net_path: net_id_0_0.clone(), loss: 0.1f32 },
-                        TrainedNet { id: 1, run_config_id: train_motifs_run_config_id, net_path: net_id_0_1.clone(), loss: 0.2f32 },
-                        TrainedNet { id: 2, run_config_id: train_motifs_run_config_id, net_path: net_id_1_0.clone(), loss: 0.25f32 },
-                    ]))
-                ])
-                .build();
+            .with_run_config_descr([(
+                find_motifs_run_config_id,
+                Ok(RunConfigRow {
+                    id: find_motifs_run_config_id,
+                    r#type: "FindMotifsRunConfig".to_string(),
+                    descr: "test find motifs".to_string(),
+                    run_on: "2026-01-01 00:00:00".to_string(),
+                }),
+            )])
+            .with_list_run_config_values([
+                (find_motifs_run_config_id, Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_config_id), 0, motif_len as u32, None, None).to_properties_iter(None).collect())),
+                (
+                    train_motifs_run_config_id,
+                    Ok(TrainMotifNetRunConfig::new(
+                        Some(train_motifs_run_config_id),
+                        CommonTrainingRunConfig::new(10, 2, 0.1),
+                        MotifNetTypeArgs::Cosine2DNet(MotifCosine2DNetArgs {
+                            a: 10.0,
+                            b: 0.0,
+                            init_mode: Default::default(),
+                            stft_config,
+                        }),
+                    )
+                    .to_properties_iter(None)
+                    .collect()),
+                ),
+            ])
+            .with_get_input_run_config_ids([(train_motifs_run_config_id, Ok(vec![select_motifs_run_config_id])), (select_motifs_run_config_id, Ok(vec![find_motifs_run_config_id]))])
+            .with_get_motif_meta([(motif_0_0_id, Ok((0usize, find_motifs_run_config_id))), (motif_0_1_id, Ok((0usize, find_motifs_run_config_id))), (motif_1_0_id, Ok((1usize, find_motifs_run_config_id)))])
+            .with_list_selected_motifs([(
+                vec![select_motifs_run_config_id],
+                Ok(HashMap::from([(
+                    select_motifs_run_config_id,
+                    vec![
+                        vec![(motif_0_0_id, 1.0f64), (motif_0_1_id, 1.0f64)], //channel 0
+                        vec![(motif_1_0_id, 1.0f64)],                         //channel 1
+                        vec![],                                               //channel 2
+                    ],
+                )])),
+            )])
+            .with_list_trained_nets([(
+                vec![select_motifs_run_config_id],
+                Some(0.3),
+                None,
+                Ok(vec![
+                    TrainedNet {
+                        id: 0,
+                        run_config_id: train_motifs_run_config_id,
+                        net_path: net_id_0_0.clone(),
+                        loss: 0.1f32,
+                    },
+                    TrainedNet {
+                        id: 1,
+                        run_config_id: train_motifs_run_config_id,
+                        net_path: net_id_0_1.clone(),
+                        loss: 0.2f32,
+                    },
+                    TrainedNet {
+                        id: 2,
+                        run_config_id: train_motifs_run_config_id,
+                        net_path: net_id_1_0.clone(),
+                        loss: 0.25f32,
+                    },
+                ]),
+            )])
+            .build();
 
         let apply_motif_nets = apply_motif_net_fn(trigger_oom_len, apply_motif_net_step, select_motifs_run_config_id, &ws, &mut store).await?;
 
-        let channels_patterns = vec![
-            vec![motif_0_0.local()?.i((0, ..)), motif_0_1.local()?.i((0, ..))],
-            vec![motif_1_0.local()?.i((0, ..))],
-            Vec::new(),
-        ];
+        let channels_patterns = vec![vec![motif_0_0.local()?.i((0, ..)), motif_0_1.local()?.i((0, ..))], vec![motif_1_0.local()?.i((0, ..))], Vec::new()];
         let (resource_a_t, resource_a_intervals) = tch_test_utils::resource_tensor_from_patterns(input_n_0, channels_patterns.as_slice(), 300, apply_motif_net_step as usize)?;
 
-
-        debug!("test_apply_motif_nets_3_channels_1_motif: resource_a_t={resource_a_t:?}");// resource_b_t={resource_b_t:?} resource_c_t={resource_c_t:?}
-
+        debug!("test_apply_motif_nets_3_channels_1_motif: resource_a_t={resource_a_t:?}"); // resource_b_t={resource_b_t:?} resource_c_t={resource_c_t:?}
 
         let run_ctx_branch = mock_run_ctx::default(1);
-        let out = apply_motif_nets.run(
-            Arc::new(DevicesWrap::wrap(ThoTensor::new(SynKey::new([mono_key!("test_batch", "test_batch")]), resource_a_t)?)),
-            run_ctx_branch
-        ).await?;
+        let out = apply_motif_nets.run(Arc::new(DevicesWrap::wrap(ThoTensor::new(SynKey::new([mono_key!("test_batch", "test_batch")]), resource_a_t)?)), run_ctx_branch).await?;
 
         debug!("test_apply_motif_nets_3_channels_1_motif: out={:?}", out);
-
 
         debug!("test_apply_motif_nets_3_channels_1_motif: resource_a_intervals={resource_a_intervals:?}");
 
@@ -1779,17 +1679,7 @@ pub mod tests {
     }
 
     async fn new_apply_motif_nets(trigger_oom_len: Option<usize>, slice_step: u32, select_motifs_run_config_id: RunConfigId, ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, store: &mut Arc<dyn MotifsStore>) -> Result<Arc<ApplyMotifNets<MockRunCtx>>, ThoError> {
-        let apply_motif_nets = Arc::new(ApplyMotifNets::new(
-            &ws,
-            &store,
-            vec![select_motifs_run_config_id],
-            mock_run_ctx::default(1),
-            Some(0.3),
-            None,
-            slice_step,
-            trigger_oom_len,
-            false,
-        ).await?);
+        let apply_motif_nets = Arc::new(ApplyMotifNets::new(&ws, &store, vec![select_motifs_run_config_id], mock_run_ctx::default(1), Some(0.3), None, slice_step, trigger_oom_len, false).await?);
         Ok(apply_motif_nets)
     }
 
@@ -1834,79 +1724,51 @@ pub mod tests {
 
         let ws = Arc::new(RwLock::new(
             crate::motifs_ws::MotifsWsMockBuilder::new(None, 1, 100, input_len as u32)
-                .with_try_load_motif_net(vec![
-                    (net_id_0_0.clone(), params_0_0, module_0_0),
-                    (net_id_0_1.clone(), params_0_1, module_0_1),
-                ])
+                .with_try_load_motif_net(vec![(net_id_0_0.clone(), params_0_0, module_0_0), (net_id_0_1.clone(), params_0_1, module_0_1)])
                 .build(),
         ));
 
         let store = MockMotifsStoreBuilder::new()
-                .with_run_config_descr([(
-                    find_motifs_run_config_id,
-                    Ok(RunConfigRow {
-                        id: find_motifs_run_config_id,
-                        r#type: "FindMotifsRunConfig".to_string(),
-                        descr: "test find motifs".to_string(),
-                        run_on: "2026-01-01 00:00:00".to_string(),
-                    }),
-                )])
-                .with_list_run_config_values([(
-                    find_motifs_run_config_id,
-                    Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_config_id), step, 100, None, None).to_properties_iter(None).collect()),
-                )])
-                .with_get_input_run_config_ids([
-                    (train_motifs_run_config_id, Ok(vec![select_motifs_run_config_id])),
-                    (select_motifs_run_config_id, Ok(vec![find_motifs_run_config_id])),
-                ])
-                .with_get_motif_meta([
-                    (motif_0_0_id, Ok((0usize, find_motifs_run_config_id))),
-                    (motif_0_1_id, Ok((0usize, find_motifs_run_config_id))),
-                ])
-                .with_list_selected_motifs([
-                    (
-                        vec![select_motifs_run_config_id],
-                        Ok(
-                            HashMap::from([(
-                                select_motifs_run_config_id,
-                                vec![vec![(motif_0_0_id, 1.0f64), (motif_0_1_id, 1.0f64)]]
-                            )])
-                        )
-                    ),
-                ])
-                .with_list_trained_nets([
-                    (vec![select_motifs_run_config_id], Some(0.3), None, Ok(vec![
-                        TrainedNet { id: 0, run_config_id: select_motifs_run_config_id, net_path: net_id_0_0.clone(), loss: 0.1f32 },
-                        TrainedNet { id: 1, run_config_id: select_motifs_run_config_id, net_path: net_id_0_1.clone(), loss: 0.2f32 },
-                    ])),
-                ])
-                .build( );
+            .with_run_config_descr([(
+                find_motifs_run_config_id,
+                Ok(RunConfigRow {
+                    id: find_motifs_run_config_id,
+                    r#type: "FindMotifsRunConfig".to_string(),
+                    descr: "test find motifs".to_string(),
+                    run_on: "2026-01-01 00:00:00".to_string(),
+                }),
+            )])
+            .with_list_run_config_values([(find_motifs_run_config_id, Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_config_id), step, 100, None, None).to_properties_iter(None).collect()))])
+            .with_get_input_run_config_ids([(train_motifs_run_config_id, Ok(vec![select_motifs_run_config_id])), (select_motifs_run_config_id, Ok(vec![find_motifs_run_config_id]))])
+            .with_get_motif_meta([(motif_0_0_id, Ok((0usize, find_motifs_run_config_id))), (motif_0_1_id, Ok((0usize, find_motifs_run_config_id)))])
+            .with_list_selected_motifs([(vec![select_motifs_run_config_id], Ok(HashMap::from([(select_motifs_run_config_id, vec![vec![(motif_0_0_id, 1.0f64), (motif_0_1_id, 1.0f64)]])])))])
+            .with_list_trained_nets([(
+                vec![select_motifs_run_config_id],
+                Some(0.3),
+                None,
+                Ok(vec![
+                    TrainedNet {
+                        id: 0,
+                        run_config_id: select_motifs_run_config_id,
+                        net_path: net_id_0_0.clone(),
+                        loss: 0.1f32,
+                    },
+                    TrainedNet {
+                        id: 1,
+                        run_config_id: select_motifs_run_config_id,
+                        net_path: net_id_0_1.clone(),
+                        loss: 0.2f32,
+                    },
+                ]),
+            )])
+            .build();
 
-        let apply_motif_nets = Arc::new(ApplyMotifNets::new(
-            &ws,
-            &store,
-            vec![select_motifs_run_config_id],
-            mock_run_ctx::default(1),
-            Some(0.3),
-            None,
-            step,
-            None,
-            false,
-        ).await?);
+        let apply_motif_nets = Arc::new(ApplyMotifNets::new(&ws, &store, vec![select_motifs_run_config_id], mock_run_ctx::default(1), Some(0.3), None, step, None, false).await?);
 
-        let input = ThoTensor::new(
-            SynKey::new([mono_key!("mixed_motif_input", "test_batch")]),
-            tch_result(Tensor::f_zeros([1, input_len as i64], FLOAT_CPU))?,
-        )?;
-        let out = apply_motif_nets.run(
-            Arc::new(DevicesWrap::wrap(input)),
-            mock_run_ctx::default(1),
-        ).await?;
+        let input = ThoTensor::new(SynKey::new([mono_key!("mixed_motif_input", "test_batch")]), tch_result(Tensor::f_zeros([1, input_len as i64], FLOAT_CPU))?)?;
+        let out = apply_motif_nets.run(Arc::new(DevicesWrap::wrap(input)), mock_run_ctx::default(1)).await?;
 
-        let expected_lengths = vec![
-            ((input_len as i64 - motif_0_0.size()[1]) / step as i64) + 1,
-            ((input_len as i64 - motif_0_1.size()[1]) / step as i64) + 1,
-        ];
+        let expected_lengths = vec![((input_len as i64 - motif_0_0.size()[1]) / step as i64) + 1, ((input_len as i64 - motif_0_1.size()[1]) / step as i64) + 1];
         let max_len = *expected_lengths.iter().max().expect("no max len");
 
         {
@@ -1919,7 +1781,6 @@ pub mod tests {
 
         Ok(())
     }
-
 
     async fn test_apply_motif_single_net_1_channel_1_motif(trigger_oom_len: Option<usize>, input_n_0: usize, step: u32) -> Result<(), ThoError> {
         thoosa_shared::test_utils::maybe_init_perf_tracing_stdout("debug");
@@ -1939,13 +1800,7 @@ pub mod tests {
         let net_id_0_0 = PathBuf::from(format!("0/{}_{}", motif_0_0_id, train_motifs_run_config_id));
         let (params_0_0, module_0_0) = motif_test_net_(Cpu, Arc::clone(&motif_0_0), step, 100);
 
-        let ws = Arc::new(RwLock::new(
-            crate::motifs_ws::MotifsWsMockBuilder::new(None, 1, 100, input_n_0 as u32)
-                .with_try_load_motif_net(vec![
-                    (net_id_0_0.clone(), params_0_0, module_0_0),
-                ])
-                .build(),
-        ));
+        let ws = Arc::new(RwLock::new(crate::motifs_ws::MotifsWsMockBuilder::new(None, 1, 100, input_n_0 as u32).with_try_load_motif_net(vec![(net_id_0_0.clone(), params_0_0, module_0_0)]).build()));
 
         let store = MockMotifsStoreBuilder::new()
             .with_run_config_descr([(
@@ -1957,70 +1812,64 @@ pub mod tests {
                     run_on: "2026-01-01 00:00:00".to_string(),
                 }),
             )])
-            .with_list_run_config_values([(
-                find_motifs_run_config_id,
-                Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_config_id), step, 100, None, None).to_properties_iter(None).collect()),
+            .with_list_run_config_values([(find_motifs_run_config_id, Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_config_id), step, 100, None, None).to_properties_iter(None).collect()))])
+            .with_get_input_run_config_ids([(train_motifs_run_config_id, Ok(vec![select_motifs_run_config_id])), (select_motifs_run_config_id, Ok(vec![find_motifs_run_config_id]))])
+            .with_get_motif_meta([(motif_0_0_id, Ok((0usize, find_motifs_run_config_id)))])
+            .with_list_selected_motifs([(
+                vec![select_motifs_run_config_id],
+                Ok(HashMap::from([(
+                    select_motifs_run_config_id,
+                    vec![
+                        vec![(motif_0_0_id, 1.0f64)], //channel 0
+                    ],
+                )])),
             )])
-
-            .with_get_input_run_config_ids([
-                (train_motifs_run_config_id, Ok(vec![select_motifs_run_config_id])),
-                (select_motifs_run_config_id, Ok(vec![find_motifs_run_config_id]))
-            ])
-            .with_get_motif_meta( [(motif_0_0_id, Ok((0usize, find_motifs_run_config_id)))])
-            .with_list_selected_motifs([
-                (vec![select_motifs_run_config_id], Ok(
-                    HashMap::from([(
-                        select_motifs_run_config_id,
-                        vec![
-                            vec![(motif_0_0_id, 1.0f64)], //channel 0
-                        ]
-                    )])
-                ))
-            ])
-            .with_list_trained_nets([
-                (vec![select_motifs_run_config_id], Some(0.3), None, Ok(vec![
-                    TrainedNet { id: 0, run_config_id: select_motifs_run_config_id, net_path: net_id_0_0.clone(), loss: 0.1f32 },
-                ]))
-            ])
+            .with_list_trained_nets([(
+                vec![select_motifs_run_config_id],
+                Some(0.3),
+                None,
+                Ok(vec![TrainedNet {
+                    id: 0,
+                    run_config_id: select_motifs_run_config_id,
+                    net_path: net_id_0_0.clone(),
+                    loss: 0.1f32,
+                }]),
+            )])
             .build();
 
-
-        let apply_motif_nets = Arc::new(ApplyMotifNets::new(
-            &ws,
-            &store,
-            vec![select_motifs_run_config_id],
-            mock_run_ctx::default(1), Some(0.3) //Some(1000)
-            ,
-            None,
-            step,
-            trigger_oom_len,
-            false
-        ).await?);
+        let apply_motif_nets = Arc::new(
+            ApplyMotifNets::new(
+                &ws,
+                &store,
+                vec![select_motifs_run_config_id],
+                mock_run_ctx::default(1),
+                Some(0.3), //Some(1000)
+                None,
+                step,
+                trigger_oom_len,
+                false,
+            )
+            .await?,
+        );
 
         debug_plot!(&*motif_0_0.local()?, "motif_test")?;
 
         let channels_patterns = vec![vec![motif_0_0.local()?.i((0, ..))]];
         let (resource_a_t, resource_a_intervals) = tch_test_utils::resource_tensor_from_patterns(input_n_0, channels_patterns.as_slice(), 200, step as usize)?;
 
-
-        debug!("test_apply_motif_nets_3_channels_1_motif: resource_a_t={resource_a_t:?}");// resource_b_t={resource_b_t:?} resource_c_t={resource_c_t:?}
+        debug!("test_apply_motif_nets_3_channels_1_motif: resource_a_t={resource_a_t:?}"); // resource_b_t={resource_b_t:?} resource_c_t={resource_c_t:?}
 
         let run_ctx = Arc::new(RwLock::new(mock_run_ctx::default(1)));
 
         let run_ctx_branch = thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(run_ctx)).branch(false);
 
-        let out = apply_motif_nets.run(
-            Arc::new(DevicesWrap::wrap(ThoTensor::new(SynKey::new([mono_key!("test_batch", "test_batch")]), resource_a_t)?)),
-            run_ctx_branch
-        ).await?;
+        let out = apply_motif_nets.run(Arc::new(DevicesWrap::wrap(ThoTensor::new(SynKey::new([mono_key!("test_batch", "test_batch")]), resource_a_t)?)), run_ctx_branch).await?;
 
         debug!("test_apply_motif_nets_3_channels_1_motif: PERF={:?}", PERF);
-
 
         debug!("test_apply_motif_nets_3_channels_1_motif: resource_a_intervals={resource_a_intervals:?}");
 
         let pulse_interval_starts_in_resources_a = resource_a_intervals[0][0][0].start;
-
 
         let motif_width = motif_0_0.size()[1] as i64;
         let slices = ((input_n_0 as i64 - motif_width) / step as i64) + 1;
@@ -2054,11 +1903,10 @@ pub mod tests {
 
         let test_dir = Path::new("/tmp/test_test_net"); //.join(cdt_for_dir());
 
-
         let test_net = dummy_motif_net::<AnyDims, AnyDims, &str>("test", 100, 1., Cpu, "test", &motif_t.i((0, ..)), 1)?;
 
         let resource: ThoTensor<AnyDims, DebugId> = resource_a_t.shallow_clone().into();
-        let out = test_net.tho_forward(&resource, None, false)?.into_local()?;//.i((0, .., 0));//channel[1], slices, vals[1]
+        let out = test_net.tho_forward(&resource, None, false)?.into_local()?; //.i((0, .., 0));//channel[1], slices, vals[1]
 
         plot_series_with_lanes(
             vec![
@@ -2075,14 +1923,12 @@ pub mod tests {
         debug!("test_test_net: out.size={:?}", out.size());
 
         plot_series_with_lanes(
-             vec![
-                 (format!("Results"), RED, to_vec_f32(&out.i((0, ..)))?.into_iter().enumerate().map(|(i, v)| (i as f32, v)).collect::<Vec<(f32, f32)>>()),
-             ],
-             format!("sig").as_str(),
-             (2000, 1000),
-             &test_dir.join(&format!("matches_{}.png", 1)),
-             &[(0, 1000)],
-         )?;
+            vec![(format!("Results"), RED, to_vec_f32(&out.i((0, ..)))?.into_iter().enumerate().map(|(i, v)| (i as f32, v)).collect::<Vec<(f32, f32)>>())],
+            format!("sig").as_str(),
+            (2000, 1000),
+            &test_dir.join(&format!("matches_{}.png", 1)),
+            &[(0, 1000)],
+        )?;
 
         debug!("test_test_net: resource_a_intervals={resource_a_intervals:?}");
 
@@ -2091,15 +1937,10 @@ pub mod tests {
         trace!("test_test_net: topk=\n{topk_0} \n{topk_1}");
 
         //0 chanel/0 motif
-        assert!(
-            Tensor::from_slice(resource_a_intervals[0][0].iter().map(|i|i.start as i64).collect::<Vec<i64>>().as_slice())
-                .allclose(&topk_1.i(0), 10., 10., false)
-        );
+        assert!(Tensor::from_slice(resource_a_intervals[0][0].iter().map(|i| i.start as i64).collect::<Vec<i64>>().as_slice()).allclose(&topk_1.i(0), 10., 10., false));
 
         Ok(())
     }
-
-
 }
 
 #[cfg(test)]

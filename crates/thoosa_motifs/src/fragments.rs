@@ -7,23 +7,22 @@ use clap::{Args, ValueEnum};
 use thoosa_common::transforms::filters::InputFilter;
 use thoosa_common::utils::*;
 use thoosa_shared::resource::ResourceId;
-use thoosa_shared::run_configs::{RunConfigId};
+use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::*;
-
-
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum DataBy {
-
     //--data-by=motif_id:1234[,5678]
     MotifId(Vec<usize>), //TODO u32
     //--data-by=find_motifs_run_config_id:1234[,5678][;select_motifs_run_config_ids:12,34,56]
     RunId {
         find_motifs_run_config_ids: Vec<RunConfigId>,
-        select_motifs_run_config_ids: Option<Vec<RunConfigId>>,//for list_motif_slices's select_motifs_run_config_ids param
+        select_motifs_run_config_ids: Option<Vec<RunConfigId>>, //for list_motif_slices's select_motifs_run_config_ids param
     },
     //--data-by=select_motifs_run_config_ids:12,34,56
-    SelectedMotifs { select_motifs_run_config_ids: Vec<RunConfigId> },
+    SelectedMotifs {
+        select_motifs_run_config_ids: Vec<RunConfigId>,
+    },
     //--data-by=resource:<resource_id>[;channels=1,2][;freq_filters=[...]]
     Resource {
         resource_id: ResourceId,
@@ -38,21 +37,13 @@ pub enum DataBy {
 }
 
 impl DataBy {
-
     fn parse_motif_ids(payload: &str) -> anyhow::Result<Vec<usize>> {
         let motif_ids = payload
             .trim()
             .trim_matches(|ch| ch == '\'' || ch == '"')
             .split(',')
             .filter(|part| !part.is_empty())
-            .map(|part| {
-                Ok(part
-                    .trim()
-                    .trim_matches(|ch| ch == '\'' || ch == '"')
-                    .replace(" ", "")
-                    .parse::<usize>()
-                    .with_context(|| format!("can't parse {part:?} to motif_id"))?)
-            })
+            .map(|part| Ok(part.trim().trim_matches(|ch| ch == '\'' || ch == '"').replace(" ", "").parse::<usize>().with_context(|| format!("can't parse {part:?} to motif_id"))?))
             .collect::<anyhow::Result<Vec<_>>>()?;
         if motif_ids.is_empty() {
             anyhow::bail!("motif_id payload is empty");
@@ -73,30 +64,19 @@ impl DataBy {
     }
 
     fn parse_run_config_id_payload(payload: &str) -> anyhow::Result<Self> {
-        let payload = payload
-            .trim()
-            .trim_matches(|ch| ch == '\'' || ch == '"');
+        let payload = payload.trim().trim_matches(|ch| ch == '\'' || ch == '"');
 
         if payload.contains(';') {
             let mut segments = payload.split(';').filter(|segment| !segment.is_empty());
-            let find_part = segments
-                .next()
-                .context("find_motifs_run_config_id payload is empty")?;
+            let find_part = segments.next().context("find_motifs_run_config_id payload is empty")?;
 
             let find_motifs_run_config_ids = Self::parse_find_motifs_run_config_ids(find_part)?;
 
             let mut select_motifs_run_config_ids = None;
             for segment in segments {
-                let (raw_key, raw_value) = segment
-                    .split_once('=')
-                    .or_else(|| segment.split_once(':'))
-                    .with_context(|| format!("run_config_id payload segment {segment:?} should be key=value or key:value"))?;
-                let key = raw_key
-                    .trim()
-                    .trim_matches(|ch| ch == '\'' || ch == '"');
-                let value = raw_value
-                    .trim()
-                    .trim_matches(|ch| ch == '\'' || ch == '"');
+                let (raw_key, raw_value) = segment.split_once('=').or_else(|| segment.split_once(':')).with_context(|| format!("run_config_id payload segment {segment:?} should be key=value or key:value"))?;
+                let key = raw_key.trim().trim_matches(|ch| ch == '\'' || ch == '"');
+                let value = raw_value.trim().trim_matches(|ch| ch == '\'' || ch == '"');
                 match key {
                     "select_motifs_run_config_ids" | "select_motifs_run_config_id" => {
                         select_motifs_run_config_ids = Some(Self::parse_select_motifs_run_config_ids(value)?);
@@ -111,11 +91,7 @@ impl DataBy {
             });
         }
 
-        let (find_part, select_part) = if let Some((find, rest)) = payload.split_once('_') {
-            (find, Some(rest))
-        } else {
-            (payload, None)
-        };
+        let (find_part, select_part) = if let Some((find, rest)) = payload.split_once('_') { (find, Some(rest)) } else { (payload, None) };
 
         let find_motifs_run_config_ids = Self::parse_find_motifs_run_config_ids(find_part)?;
 
@@ -136,14 +112,10 @@ impl DataBy {
             .split(',')
             .filter(|segment| !segment.is_empty())
             .map(|segment| {
-
                 #[cfg(any(debug_assertions, tho_debug))] //logging is set up after cli args are parsed
                 println!("parse_channels: segment={segment:?}");
 
-                Ok(segment
-                    .replace(" ", "")
-                    .parse::<u32>()
-                    .with_context(|| format!("can't parse {segment:?} to channel"))?)
+                Ok(segment.replace(" ", "").parse::<u32>().with_context(|| format!("can't parse {segment:?} to channel"))?)
             })
             .collect()
     }
@@ -153,11 +125,7 @@ impl DataBy {
         println!("parse_resource_payload: payload={payload}");
 
         let mut segments = payload.split(';').filter(|segment| !segment.is_empty());
-        let resource_id = segments
-            .next()
-            .context("resource payload is empty")?
-            .parse::<ResourceId>()
-            .with_context(|| format!("can't parse resource_id in {payload:?}"))?;
+        let resource_id = segments.next().context("resource payload is empty")?.parse::<ResourceId>().with_context(|| format!("can't parse resource_id in {payload:?}"))?;
 
         let mut channels = None;
         let mut freq_filters = None;
@@ -166,9 +134,7 @@ impl DataBy {
         println!("parse_resource_payload: segments={segments:?}");
 
         for segment in segments {
-            let (key, value) = segment
-                .split_once('=')
-                .with_context(|| format!("resource payload segment {segment:?} should be key=value"))?;
+            let (key, value) = segment.split_once('=').with_context(|| format!("resource payload segment {segment:?} should be key=value"))?;
 
             #[cfg(any(debug_assertions, tho_debug))]
             println!("parse_resource_payload: key={key:?} value={value:?}");
@@ -178,8 +144,7 @@ impl DataBy {
                     channels = Some(Self::parse_channels(value)?);
                 }
                 "freq_filters" => {
-                    let parsed = serde_json5::from_str::<Vec<InputFilter>>(value)
-                        .with_context(|| format!("can't parse freq_filters JSON5 {value:?}"))?;
+                    let parsed = serde_json5::from_str::<Vec<InputFilter>>(value).with_context(|| format!("can't parse freq_filters JSON5 {value:?}"))?;
                     freq_filters = Some(parsed);
                 }
                 _ => {
@@ -188,24 +153,15 @@ impl DataBy {
             }
         }
 
-        Ok(DataBy::Resource {
-            resource_id,
-            channels,
-            freq_filters,
-        })
+        Ok(DataBy::Resource { resource_id, channels, freq_filters })
     }
 
     fn parse_motif_net_applied_payload(payload: &str) -> anyhow::Result<Self> {
-        let segments = payload
-            .split(';')
-            .filter(|segment| !segment.is_empty())
-            .collect::<Vec<_>>();
+        let segments = payload.split(';').filter(|segment| !segment.is_empty()).collect::<Vec<_>>();
 
         if segments.len() == 2 && !segments[0].contains('=') && !segments[1].contains('=') {
             return Ok(DataBy::MotifNetApplied {
-                resource_id: segments[0]
-                    .parse::<ResourceId>()
-                    .with_context(|| format!("can't parse resource_id in {payload:?}"))?,
+                resource_id: segments[0].parse::<ResourceId>().with_context(|| format!("can't parse resource_id in {payload:?}"))?,
                 net_path: PathBuf::from(segments[1]),
             });
         }
@@ -213,16 +169,10 @@ impl DataBy {
         let mut resource_id = None;
         let mut net_path = None;
         for segment in segments {
-            let (key, value) = segment
-                .split_once('=')
-                .with_context(|| format!("motif_net_applied payload segment {segment:?} should be key=value"))?;
+            let (key, value) = segment.split_once('=').with_context(|| format!("motif_net_applied payload segment {segment:?} should be key=value"))?;
             match key {
                 "resource_id" => {
-                    resource_id = Some(
-                        value
-                            .parse::<ResourceId>()
-                            .with_context(|| format!("can't parse resource_id {value:?}"))?,
-                    );
+                    resource_id = Some(value.parse::<ResourceId>().with_context(|| format!("can't parse resource_id {value:?}"))?);
                 }
                 "net_path" => {
                     net_path = Some(PathBuf::from(value));
@@ -263,15 +213,10 @@ impl FromStr for DataBy {
     fn from_str(v: &str) -> Result<Self, Self::Err> {
         if let Some(rest) = v.strip_prefix("motif_id:") {
             Ok(DataBy::MotifId(Self::parse_motif_ids(rest)?))
-        } else if let Some(rest) = v
-            .strip_prefix("find_motifs_run_config_ids:")
-            .or_else(|| v.strip_prefix("find_motifs_run_config_id:"))
-            .or_else(|| v.strip_prefix("run_config_id:")) {
+        } else if let Some(rest) = v.strip_prefix("find_motifs_run_config_ids:").or_else(|| v.strip_prefix("find_motifs_run_config_id:")).or_else(|| v.strip_prefix("run_config_id:")) {
             DataBy::parse_run_config_id_payload(rest)
-        } else if let Some(rest) = v
-            .strip_prefix("select_motifs_run_config_ids:")
-            .or_else(|| v.strip_prefix("select_motifs_run_config_id:"))
-            .or_else(|| v.strip_prefix("good_motifs_run_config_id:")) {//renamed to select_motifs_run_config_id
+        } else if let Some(rest) = v.strip_prefix("select_motifs_run_config_ids:").or_else(|| v.strip_prefix("select_motifs_run_config_id:")).or_else(|| v.strip_prefix("good_motifs_run_config_id:")) {
+            //renamed to select_motifs_run_config_id
             Ok(DataBy::SelectedMotifs {
                 select_motifs_run_config_ids: Self::parse_select_motifs_run_config_ids(rest)?,
             })
@@ -354,7 +299,6 @@ mod motifs_tests {
     use super::{DataBy, PlotDataArgs, Resolution};
     use std::path::PathBuf;
 
-
     use thoosa_common::transforms::filters::InputFilter;
 
     #[ctor::ctor]
@@ -386,7 +330,13 @@ mod motifs_tests {
         use std::str::FromStr;
 
         let parsed = DataBy::from_str("find_motifs_run_config_id:11").unwrap();
-        assert_eq!(parsed, DataBy::RunId { find_motifs_run_config_ids: vec![11], select_motifs_run_config_ids: None });
+        assert_eq!(
+            parsed,
+            DataBy::RunId {
+                find_motifs_run_config_ids: vec![11],
+                select_motifs_run_config_ids: None
+            }
+        );
     }
 
     #[test]
@@ -394,7 +344,13 @@ mod motifs_tests {
         use std::str::FromStr;
 
         let parsed = DataBy::from_str("find_motifs_run_config_id:7;select_motifs_run_config_ids=10,20,30").unwrap();
-        assert_eq!(parsed, DataBy::RunId { find_motifs_run_config_ids: vec![7], select_motifs_run_config_ids: Some(vec![10, 20, 30]) });
+        assert_eq!(
+            parsed,
+            DataBy::RunId {
+                find_motifs_run_config_ids: vec![7],
+                select_motifs_run_config_ids: Some(vec![10, 20, 30])
+            }
+        );
     }
 
     #[test]
@@ -402,10 +358,22 @@ mod motifs_tests {
         use std::str::FromStr;
 
         let parsed = DataBy::from_str("run_config_id:1,2,3;select_motifs_run_config_ids:3,4,5").unwrap();
-        assert_eq!(parsed, DataBy::RunId { find_motifs_run_config_ids: vec![1, 2, 3], select_motifs_run_config_ids: Some(vec![3, 4, 5]) });
+        assert_eq!(
+            parsed,
+            DataBy::RunId {
+                find_motifs_run_config_ids: vec![1, 2, 3],
+                select_motifs_run_config_ids: Some(vec![3, 4, 5])
+            }
+        );
 
         let parsed_quoted = DataBy::from_str("run_config_id:'1,2,3;select_motifs_run_config_ids:'3,4,5'").unwrap();
-        assert_eq!(parsed_quoted, DataBy::RunId { find_motifs_run_config_ids: vec![1, 2, 3], select_motifs_run_config_ids: Some(vec![3, 4, 5]) });
+        assert_eq!(
+            parsed_quoted,
+            DataBy::RunId {
+                find_motifs_run_config_ids: vec![1, 2, 3],
+                select_motifs_run_config_ids: Some(vec![3, 4, 5])
+            }
+        );
     }
 
     #[test]
@@ -413,7 +381,13 @@ mod motifs_tests {
         use std::str::FromStr;
 
         let parsed = DataBy::from_str("run_config_id:1,2,3").unwrap();
-        assert_eq!(parsed, DataBy::RunId { find_motifs_run_config_ids: vec![1, 2, 3], select_motifs_run_config_ids: None });
+        assert_eq!(
+            parsed,
+            DataBy::RunId {
+                find_motifs_run_config_ids: vec![1, 2, 3],
+                select_motifs_run_config_ids: None
+            }
+        );
     }
 
     #[test]
@@ -437,7 +411,13 @@ mod motifs_tests {
         use std::str::FromStr;
 
         let empty = DataBy::from_str("run_config_id:42_").unwrap();
-        assert_eq!(empty, DataBy::RunId { find_motifs_run_config_ids: vec![42], select_motifs_run_config_ids: Some(vec![]) });
+        assert_eq!(
+            empty,
+            DataBy::RunId {
+                find_motifs_run_config_ids: vec![42],
+                select_motifs_run_config_ids: Some(vec![])
+            }
+        );
     }
 
     #[test]
@@ -478,10 +458,7 @@ mod motifs_tests {
             DataBy::Resource {
                 resource_id: 12,
                 channels: None,
-                freq_filters: Some(vec![InputFilter::NotchBandFilter(thoosa_common::transforms::filters::NotchBandFilterParams {
-                    low_hz: 58.0,
-                    high_hz: 62.0,
-                })]),
+                freq_filters: Some(vec![InputFilter::NotchBandFilter(thoosa_common::transforms::filters::NotchBandFilterParams { low_hz: 58.0, high_hz: 62.0 })]),
             }
         );
     }

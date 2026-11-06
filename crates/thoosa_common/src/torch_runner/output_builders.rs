@@ -1,13 +1,13 @@
+use crate::dims::Dims;
+use crate::runner::adjusters::splits::OutputBuilder;
 use crate::tho_tensor::ThoTensor;
+use log::debug;
 use std::fmt::Debug;
 use std::hash::Hash;
-use log::debug;
 use tch::Device;
 use tch::Kind;
-use crate::runner::adjusters::splits::OutputBuilder;
-use crate::dims::Dims;
-use thoosa_shared::ThoError;
 use thoosa_shared::CopyToDevice;
+use thoosa_shared::ThoError;
 use thoosa_shared::traits::{Named, WithId};
 
 #[allow(dead_code)]
@@ -21,7 +21,7 @@ pub enum BuildAs {
 #[derive(Debug)]
 pub struct SingleDimTensorOutputBuilder<Id, D>
 where
-    Id:Named + Eq + Hash + Clone +Debug + Send + Sync + 'static,
+    Id: Named + Eq + Hash + Clone + Debug + Send + Sync + 'static,
     D: Dims,
 {
     output: ThoTensor<D, Id>,
@@ -33,18 +33,11 @@ where
 
 impl<Id, D: Dims> SingleDimTensorOutputBuilder<Id, D>
 where
-    Id:Named + Eq + Hash + Clone +Debug  + Send  + Sync + 'static,
+    Id: Named + Eq + Hash + Clone + Debug + Send + Sync + 'static,
     D: Dims,
-
 {
     #[allow(dead_code)]
-    pub fn new(
-        id: <ThoTensor<D, Id> as WithId>::ID,
-        dim: i64,
-        size: &[i64],
-        options: (Kind, Device),
-        add: BuildAs,
-    ) -> Result<Self, ThoError> {
+    pub fn new(id: <ThoTensor<D, Id> as WithId>::ID, dim: i64, size: &[i64], options: (Kind, Device), add: BuildAs) -> Result<Self, ThoError> {
         Ok(Self {
             output: ThoTensor::zeros(id, size, options)?,
             added_partial_output_len: 0,
@@ -63,18 +56,14 @@ where
 impl<Id, D> OutputBuilder for SingleDimTensorOutputBuilder<Id, D>
 where
     D: Dims,
-    Id:Named + Eq + Hash + Clone +Debug  + Send  + Sync + 'static,
+    Id: Named + Eq + Hash + Clone + Debug + Send + Sync + 'static,
 {
     type O = ThoTensor<D, Id>;
 
     async fn add_partial_output(&mut self, partial: Self::O) -> Result<(), ThoError> {
         // Report transfer failures before the caller commits split progress.
         let partial = if let Some(device_idx) = self.partial_output_device_idx {
-            if partial.tho_device_idx() == device_idx {
-                partial
-            } else {
-                partial.copy_to_device(device_idx).await?
-            }
+            if partial.tho_device_idx() == device_idx { partial } else { partial.copy_to_device(device_idx).await? }
         } else {
             partial
         };
@@ -82,10 +71,15 @@ where
         let partial_size = partial.size();
         let partial_len = *partial_size.get(self.dim as usize).ok_or_else(|| ThoError::new("partial output dimension is out of bounds"))?;
 
-
         match self.add {
             BuildAs::Append => {
-                debug!("SingleDimTensorOutputBuilder::add_partial_output, BuildAs::Append: self.dim={} self.output.size={:?} self.added_partial_output_len={:?} self.output.size={:?} partial_size={partial_size:?}",self.dim,  self.output.size(),  self.added_partial_output_len, self.output.size());
+                debug!(
+                    "SingleDimTensorOutputBuilder::add_partial_output, BuildAs::Append: self.dim={} self.output.size={:?} self.added_partial_output_len={:?} self.output.size={:?} partial_size={partial_size:?}",
+                    self.dim,
+                    self.output.size(),
+                    self.added_partial_output_len,
+                    self.output.size()
+                );
 
                 let mut t = self.output.local_mut()?;
 
@@ -101,7 +95,6 @@ where
                     let mut t = self.output.local_mut()?;
                     t.add_(&partial)?;
                 }
-    
             }
         }
 
@@ -117,17 +110,17 @@ where
 #[cfg(test)]
 #[allow(unused_imports)]
 mod tests {
+    use crate::dims::{AnyMetrics, Dims};
+    use crate::runner::adjusters::splits::OutputBuilder;
     use crate::tho_tensor::ThoTensor;
+    use crate::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
     use log::debug;
     use tch::Kind::Float;
     use tch::Tensor;
     use tch::kind::FLOAT_CPU;
-    use crate::runner::adjusters::splits::OutputBuilder;
-    use crate::dims::{AnyMetrics, Dims};
-    use thoosa_shared::debug_id;
     use thoosa_shared::ThoError;
+    use thoosa_shared::debug_id;
     use thoosa_shared::traits::DebugId;
-    use crate::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
 
     #[derive(Debug, Clone)]
     struct TestDims;
@@ -137,8 +130,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_sum_copies_to_destination_device() -> Result<(), ThoError> {
-        use crate::tch_error::tch_result;
         use crate::runner::global_ctx::GlobalCtx;
+        use crate::tch_error::tch_result;
         use tch::Device::{Cpu, Cuda};
         GlobalCtx::init_devices(2)?;
         let _ctx = crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
@@ -194,10 +187,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_append() -> Result<(), ThoError>{
-        let mut builder: Box<SingleDimTensorOutputBuilder<DebugId, TestDims>> = Box::new(
-            SingleDimTensorOutputBuilder::new(debug_id!("test"), 0, &[10], FLOAT_CPU, BuildAs::Append)?,
-        );
+    async fn test_append() -> Result<(), ThoError> {
+        let mut builder: Box<SingleDimTensorOutputBuilder<DebugId, TestDims>> = Box::new(SingleDimTensorOutputBuilder::new(debug_id!("test"), 0, &[10], FLOAT_CPU, BuildAs::Append)?);
 
         builder.add_partial_output(ThoTensor::new(debug_id!("1"), Tensor::from_slice(&[0, 1, 2]))?).await?;
         builder.add_partial_output(ThoTensor::new(debug_id!("1"), Tensor::from_slice(&[3, 4, 5]))?).await?;
@@ -208,21 +199,14 @@ mod tests {
 
         debug!("out=\n{}", out);
 
-        assert!(out.local()?.allclose(
-            &Tensor::from_slice(&[0., 1., 2., 3., 4., 5., 6., 7., 8., 9.]).totype(Float),
-            0.01,
-            0.01,
-            false
-        ));
+        assert!(out.local()?.allclose(&Tensor::from_slice(&[0., 1., 2., 3., 4., 5., 6., 7., 8., 9.]).totype(Float), 0.01, 0.01, false));
 
         Ok(())
     }
 
     #[tokio::test]
-    async fn test_sum() -> Result<(), ThoError>{
-        let mut builder: Box<SingleDimTensorOutputBuilder<DebugId, TestDims>> = Box::new(
-            SingleDimTensorOutputBuilder::new(debug_id!("test"), 0, &[3], FLOAT_CPU, BuildAs::Sum)?,
-        );
+    async fn test_sum() -> Result<(), ThoError> {
+        let mut builder: Box<SingleDimTensorOutputBuilder<DebugId, TestDims>> = Box::new(SingleDimTensorOutputBuilder::new(debug_id!("test"), 0, &[3], FLOAT_CPU, BuildAs::Sum)?);
 
         builder.add_partial_output(ThoTensor::new(debug_id!("1"), Tensor::from_slice(&[0, 1, 2]))?).await?;
         builder.add_partial_output(ThoTensor::new(debug_id!("1"), Tensor::from_slice(&[3, 4, 5]))?).await?;
@@ -232,12 +216,7 @@ mod tests {
 
         debug!("out=\n{}", out);
 
-        assert!(out.local()?.allclose(
-            &Tensor::from_slice(&[9., 12., 15.]).totype(Float),
-            0.01,
-            0.01,
-            false
-        ));
+        assert!(out.local()?.allclose(&Tensor::from_slice(&[9., 12., 15.]).totype(Float), 0.01, 0.01, false));
 
         Ok(())
     }

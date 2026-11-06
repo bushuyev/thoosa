@@ -1,7 +1,7 @@
 use std::os::raw::c_int;
-use thoosa_shared::{device_stats::ThoDeviceStats, ThoError};
+use thoosa_shared::{ThoError, device_stats::ThoDeviceStats};
 
-use crate::cuda_result::{check_cuda_status, CuResult};
+use crate::cuda_result::{CuResult, check_cuda_status};
 
 unsafe extern "C" {
     fn tho_get_device_stats(device: c_int, stats_out: *mut ThoDeviceStats) -> CuResult;
@@ -27,7 +27,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_device_stats(){
+    fn test_get_device_stats() {
         let device_count = unsafe { atc_cuda_device_count() };
         if device_count < 1 {
             debug!("Skipping test_get_device_stats: no CUDA devices visible to torch");

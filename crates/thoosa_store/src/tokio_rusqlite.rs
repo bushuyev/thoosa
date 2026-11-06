@@ -22,7 +22,6 @@
     unreachable_pub
 )]
 
-
 use tokio::sync::mpsc::{self, Receiver, Sender};
 
 // Bound queued closures; waiting callers keep ownership until asynchronous admission.
@@ -169,21 +168,14 @@ impl Connection {
     }
 
     /// Open a new connection with flags.
-    pub(crate) async fn open_with_flags<P: AsRef<Path>>(
-        path: P,
-        flags: OpenFlags,
-    ) -> std::result::Result<Self, rusqlite::Error> {
+    pub(crate) async fn open_with_flags<P: AsRef<Path>>(path: P, flags: OpenFlags) -> std::result::Result<Self, rusqlite::Error> {
         let path = path.as_ref().to_owned();
         start(move || rusqlite::Connection::open_with_flags(path, flags)).await
     }
 
     /// Open a new connection with flags and VFS.
     #[expect(dead_code, reason = "Preserve the adapter connection-opening API alongside the constructor used by SqlStore.")]
-    pub(crate) async fn open_with_flags_and_vfs<P: AsRef<Path>>(
-        path: P,
-        flags: OpenFlags,
-        vfs: &str,
-    ) -> std::result::Result<Self, rusqlite::Error> {
+    pub(crate) async fn open_with_flags_and_vfs<P: AsRef<Path>>(path: P, flags: OpenFlags, vfs: &str) -> std::result::Result<Self, rusqlite::Error> {
         let path = path.as_ref().to_owned();
         let vfs = vfs.to_owned();
         start(move || rusqlite::Connection::open_with_flags_and_vfs(path, flags, &*vfs)).await
@@ -191,18 +183,13 @@ impl Connection {
 
     /// Open a new in-memory connection with flags.
     #[expect(dead_code, reason = "Preserve the adapter connection-opening API alongside the constructor used by SqlStore.")]
-    pub(crate) async fn open_in_memory_with_flags(
-        flags: OpenFlags,
-    ) -> std::result::Result<Self, rusqlite::Error> {
+    pub(crate) async fn open_in_memory_with_flags(flags: OpenFlags) -> std::result::Result<Self, rusqlite::Error> {
         start(move || rusqlite::Connection::open_in_memory_with_flags(flags)).await
     }
 
     /// Open a new in-memory connection with flags and VFS.
     #[expect(dead_code, reason = "Preserve the adapter connection-opening API alongside the constructor used by SqlStore.")]
-    pub(crate) async fn open_in_memory_with_flags_and_vfs(
-        flags: OpenFlags,
-        vfs: &str,
-    ) -> std::result::Result<Self, rusqlite::Error> {
+    pub(crate) async fn open_in_memory_with_flags_and_vfs(flags: OpenFlags, vfs: &str) -> std::result::Result<Self, rusqlite::Error> {
         let vfs = vfs.to_owned();
         start(move || rusqlite::Connection::open_in_memory_with_flags_and_vfs(flags, &*vfs)).await
     }
@@ -224,9 +211,9 @@ impl Connection {
         let permit = self.sender.reserve().await.map_err(|_| DispatchError::ConnectionClosed)?;
         let (sender, receiver) = oneshot::channel::<std::thread::Result<R>>();
         permit.send(Message::Execute(Box::new(move |conn| {
-                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| function(conn)));
-                let _ = sender.send(outcome);
-            })));
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| function(conn)));
+            let _ = sender.send(outcome);
+        })));
 
         receiver.await.map_err(|_| DispatchError::WorkerGone)
     }
@@ -355,7 +342,10 @@ fn event_loop(mut conn: rusqlite::Connection, mut receiver: Receiver<Message>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
     use std::time::Duration;
 
     #[tokio::test]
@@ -366,24 +356,31 @@ mod tests {
             let (release_tx, release_rx) = std::sync::mpsc::channel();
             let worker_connection = connection.clone();
             let first = tokio::spawn(async move {
-                worker_connection.call_unwrap(move |_| {
-                    let _ = started_tx.send(());
-                    let _ = release_rx.recv();
-                }).await;
+                worker_connection
+                    .call_unwrap(move |_| {
+                        let _ = started_tx.send(());
+                        let _ = release_rx.recv();
+                    })
+                    .await;
             });
             tokio::time::timeout(Duration::from_secs(5), started_rx).await??;
             let completed = Arc::new(AtomicUsize::new(0));
             let mut queued = Vec::new();
             for _ in 0..REQUEST_QUEUE_CAPACITY {
                 let completed = Arc::clone(&completed);
-                let mut call = Box::pin(connection.call_unwrap(move |_| { completed.fetch_add(1, Ordering::SeqCst); }));
+                let mut call = Box::pin(connection.call_unwrap(move |_| {
+                    completed.fetch_add(1, Ordering::SeqCst);
+                }));
                 assert!(futures::poll!(call.as_mut()).is_pending());
                 queued.push(call);
             }
             assert_eq!(connection.sender.capacity(), 0);
             let retained = Arc::new(());
             let weak = Arc::downgrade(&retained);
-            let mut waiting = Box::pin(connection.call_unwrap(move |_| { let _retained = retained; panic!("cancelled admission must never execute"); }));
+            let mut waiting = Box::pin(connection.call_unwrap(move |_| {
+                let _retained = retained;
+                panic!("cancelled admission must never execute");
+            }));
             assert!(futures::poll!(waiting.as_mut()).is_pending());
             drop(waiting);
             assert!(weak.upgrade().is_none(), "a caller waiting for capacity still owns its request");

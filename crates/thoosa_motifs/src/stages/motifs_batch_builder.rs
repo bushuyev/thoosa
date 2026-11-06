@@ -1,5 +1,5 @@
 use log::debug;
-use tch::{Tensor, Kind, Device, Result as TchResult};
+use tch::{Device, Kind, Result as TchResult, Tensor};
 
 /// Controls mixup+jitter behavior when N is small.
 #[derive(Clone, Copy, Debug)]
@@ -16,7 +16,12 @@ pub struct MixupJitterCfg {
 
 impl Default for MixupJitterCfg {
     fn default() -> Self {
-        Self { alpha: 0.4, sigma: 0.01, do_mixup: true, do_jitter: true }
+        Self {
+            alpha: 0.4,
+            sigma: 0.01,
+            do_mixup: true,
+            do_jitter: true,
+        }
     }
 }
 
@@ -26,24 +31,15 @@ pub fn make_batch(in_tensor: &Tensor, batch_size: i64) -> TchResult<Tensor> {
 }
 
 ///  Expects `x` of shape [num_records X seq_len], float dtype.
-#[tracing::instrument(level = "debug", skip_all, fields(
-    agg_perf = "MixupJitterCfg::make_batch_with"
-))]
-pub fn make_batch_with(
-    in_tensor: &Tensor,
-    batch_size: i64,
-    cfg: Option<MixupJitterCfg>,
-) -> TchResult<Tensor> {
-    debug!("make_batch_with: batch_size={batch_size} in_tensor.size={:?}",in_tensor.size());
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "MixupJitterCfg::make_batch_with"))]
+pub fn make_batch_with(in_tensor: &Tensor, batch_size: i64, cfg: Option<MixupJitterCfg>) -> TchResult<Tensor> {
+    debug!("make_batch_with: batch_size={batch_size} in_tensor.size={:?}", in_tensor.size());
 
     let num_records = in_tensor.size()[0]; // ensures 2-D and returns (N, M)
     let device = in_tensor.device();
     let kind = in_tensor.kind();
 
-    debug_assert!(matches!(
-        kind,
-        Kind::Float | Kind::BFloat16 | Kind::Half | Kind::Double
-    ));
+    debug_assert!(matches!(kind, Kind::Float | Kind::BFloat16 | Kind::Half | Kind::Double));
 
     let sample_without_replacement = || -> TchResult<Tensor> {
         let idx = Tensor::f_randperm(num_records, (Kind::Int64, device))?.f_narrow(0, 0, batch_size.min(num_records))?;
@@ -65,15 +61,11 @@ pub fn make_batch_with(
     // then mixup (optional) and jitter (optional).
     // TODO(perf): random index tensors are rebuilt for every small batch; reuse per-device scratch buffers or pre-generate epoch indices where exact sampling independence is not required.
     let base_idx = Tensor::f_randint(num_records, [batch_size], (Kind::Int64, device))?;
-    let mut out = in_tensor
-        .f_index_select(0, &base_idx)?
-        .f_to_kind(Kind::Float)?;
+    let mut out = in_tensor.f_index_select(0, &base_idx)?.f_to_kind(Kind::Float)?;
 
     if cfg.do_mixup {
         let perm_idx = Tensor::f_randint(num_records, [batch_size], (Kind::Int64, device))?;
-        let partner = in_tensor
-            .f_index_select(0, &perm_idx)?
-            .f_to_kind(Kind::Float)?;
+        let partner = in_tensor.f_index_select(0, &perm_idx)?.f_to_kind(Kind::Float)?;
 
         // TODO(perf): beta_tensor samples on CPU and copies to the target device on every invocation; cache lambda batches or move beta sampling to a device-side approximation.
         let lam = beta_tensor(cfg.alpha, batch_size, device)?.f_to_kind(out.kind())?; // [B]
@@ -113,7 +105,6 @@ fn beta_tensor(alpha: f64, batch_size: i64, device: Device) -> TchResult<Tensor>
     }
     Ok(Tensor::f_from_slice(&buf)?.f_to_device(device)?)
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -166,7 +157,12 @@ mod tests {
         let b = 8;
         let m = 2;
         let x = row_matrix(n, m); // rows: [0,0], [1,2], [2,4]
-        let cfg = MixupJitterCfg { do_mixup: true, do_jitter: false, alpha: 0.4, sigma: 0.0 };
+        let cfg = MixupJitterCfg {
+            do_mixup: true,
+            do_jitter: false,
+            alpha: 0.4,
+            sigma: 0.0,
+        };
         let out = make_batch_with(&x, b, Some(cfg)).expect("ok");
         assert_eq!(out.size().as_slice(), &[b, m]);
 
@@ -192,7 +188,12 @@ mod tests {
         let b = 12;
         let m = 3;
         let x = Tensor::zeros([n, m], (Kind::Float, Device::Cpu));
-        let cfg = MixupJitterCfg { do_mixup: false, do_jitter: true, alpha: 0.4, sigma: 0.05 };
+        let cfg = MixupJitterCfg {
+            do_mixup: false,
+            do_jitter: true,
+            alpha: 0.4,
+            sigma: 0.05,
+        };
         let out = make_batch_with(&x, b, Some(cfg)).expect("ok");
         assert_eq!(out.size().as_slice(), &[b, m]);
 
@@ -209,11 +210,15 @@ mod tests {
         let m = 2;
         let x = row_matrix(n, m).to_kind(Kind::Double); // input as f64
         // Turn off mixup & jitter to isolate dtype path in the small-N branch.
-        let cfg = MixupJitterCfg { do_mixup: false, do_jitter: false, alpha: 0.4, sigma: 0.0 };
+        let cfg = MixupJitterCfg {
+            do_mixup: false,
+            do_jitter: false,
+            alpha: 0.4,
+            sigma: 0.0,
+        };
         let out = make_batch_with(&x, b, Some(cfg)).expect("ok");
         debug!("out: {out:?}");
         assert_eq!(out.kind(), Kind::Double, "output dtype should match input");
         assert_eq!(out.size().as_slice(), &[b, m]);
     }
-
 }

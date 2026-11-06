@@ -1,10 +1,10 @@
 //! Loading a persisted run configuration and resolving its input configuration.
-use std::{fmt::Debug, sync::Arc};
 use log::debug;
-use thoosa_store::Store;
+use std::{fmt::Debug, sync::Arc};
 use thoosa_properties_map::FromHashmap;
 use thoosa_shared::run_configs::{RunConfig, RunConfigId};
 use thoosa_shared::t;
+use thoosa_store::Store;
 
 pub async fn load_run_config<FH, S>(store: &Arc<S>, run_config_id: RunConfigId, run_config_type: &str) -> anyhow::Result<FH>
 where
@@ -18,7 +18,6 @@ where
         *run_config_ids.first().ok_or_else(|| anyhow::anyhow!("load_run_config: no {run_config_type} input for find_motifs_run_config_id={run_config_id}"))?
     };
 
-
     let map = t!(store.list_run_config_values(real_run_config_id)).await?;
     let mut run_config = FH::from_properties_map(None, &map)?;
 
@@ -28,4 +27,3 @@ where
 
     Ok(run_config)
 }
-

@@ -6,12 +6,10 @@ use thoosa_shared::val::{NamedRange, NamedVal};
 pub trait RunConfigRangeOrValue {}
 pub trait OptRunConfigSource {
     type P: FieldName;
-    fn opt_run_configs(
-        &self,
-    ) -> anyhow::Result<thoosa_shared::run_configs::TrainingRunConfigs<Self::P>>;
+    fn opt_run_configs(&self) -> anyhow::Result<thoosa_shared::run_configs::TrainingRunConfigs<Self::P>>;
 }
 
-impl <G:OptRunConfigSource> OptRunConfigSource for Arc<G> {
+impl<G: OptRunConfigSource> OptRunConfigSource for Arc<G> {
     type P = G::P;
 
     fn opt_run_configs(&self) -> anyhow::Result<thoosa_shared::run_configs::TrainingRunConfigs<Self::P>> {
@@ -22,13 +20,10 @@ impl <G:OptRunConfigSource> OptRunConfigSource for Arc<G> {
 pub trait GridRunConfigSource {
     type P: FieldName;
 
-    fn grid_run_configs(
-        &self,
-    ) -> anyhow::Result<thoosa_shared::run_configs::GridRunConfigs<Vec<NamedVal<Self::P>>, Vec<NamedRange<Self::P>>>>;
+    fn grid_run_configs(&self) -> anyhow::Result<thoosa_shared::run_configs::GridRunConfigs<Vec<NamedVal<Self::P>>, Vec<NamedRange<Self::P>>>>;
 }
 
-
-impl <G:GridRunConfigSource> GridRunConfigSource for Arc<G> {
+impl<G: GridRunConfigSource> GridRunConfigSource for Arc<G> {
     type P = G::P;
 
     fn grid_run_configs(&self) -> anyhow::Result<GridRunConfigs<Vec<NamedVal<Self::P>>, Vec<NamedRange<Self::P>>>> {
