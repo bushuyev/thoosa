@@ -485,6 +485,7 @@ impl CudaActorHandle for CudaLocalActorHandle {
     }
 }
 
+//The copy routines bypassing libtorch copy machinery were implemented for the sake of exercise but seem to work ok enough. Also having them allows to keep all threads managed by same tokio runtime.
 pub struct CudaCopier {
     gate: Arc<CudaActivityGate>,
     cuda_device: usize,
