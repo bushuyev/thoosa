@@ -1,19 +1,19 @@
+use anyhow::Context;
 use log::{debug, trace};
 use mockall::automock;
-use rayon::iter::ParallelIterator;
 use rayon::iter::IntoParallelIterator;
+use rayon::iter::ParallelIterator;
 use std::fmt::Debug;
 use std::fs;
 use std::fs::read_dir;
 use std::path::{Path, PathBuf};
-use anyhow::Context;
-use tch::nn::VarStore;
 use tch::Tensor;
+use tch::nn::VarStore;
 use thoosa_shared::resource::{Resource, ResourceStats};
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::tmp_file::TmpFile;
-use thoosa_shared::{cdt_for_dir, panic_to_err, recurse_files, ThoError};
 use thoosa_shared::traits::ToJsonFile;
+use thoosa_shared::{ThoError, cdt_for_dir, panic_to_err, recurse_files};
 
 pub const NET_PARAMS_FILE: &str = "parameters.json";
 pub const NET_WEIGHTS_FILE: &str = "weights.safetensors";
@@ -31,7 +31,6 @@ impl WsConfigs {
     }
 }
 
-
 #[derive(Debug)]
 pub struct FsWorkspace {
     base_path: PathBuf,
@@ -42,22 +41,16 @@ pub struct FsWorkspace {
     log_path: PathBuf,
     tmp_path: PathBuf,
 
-    ws_configs:WsConfigs
+    ws_configs: WsConfigs,
 }
 
 impl FsWorkspace {
-    pub fn new(
-        base_path: impl Into<PathBuf>,
-        ws_configs: WsConfigs,
-    ) -> anyhow::Result<Box<dyn Workspace>> {
+    pub fn new(base_path: impl Into<PathBuf>, ws_configs: WsConfigs) -> anyhow::Result<Box<dyn Workspace>> {
         Ok(Box::new(Self::new_concrete(base_path, ws_configs)?))
     }
 
     /// Builds the concrete workspace so feature crates can expose their own workspace trait objects.
-    pub fn new_concrete(
-        base_path: impl Into<PathBuf>,
-        ws_configs: WsConfigs,
-    ) -> anyhow::Result<Self> {
+    pub fn new_concrete(base_path: impl Into<PathBuf>, ws_configs: WsConfigs) -> anyhow::Result<Self> {
         let base_path = base_path.into();
         fs::create_dir_all(&base_path)?;
 
@@ -89,20 +82,12 @@ impl FsWorkspace {
         })
     }
 
-    pub fn new_with_models_dir(
-        base_path: impl Into<PathBuf>,
-        app_configs:&WsConfigs,
-        models_dir:&String
-    ) -> anyhow::Result<Box<dyn Workspace>> {
+    pub fn new_with_models_dir(base_path: impl Into<PathBuf>, app_configs: &WsConfigs, models_dir: &String) -> anyhow::Result<Box<dyn Workspace>> {
         Ok(Box::new(Self::new_concrete_with_models_dir(base_path, app_configs, models_dir)?))
     }
 
     /// Builds the concrete workspace with an external model directory for feature-specific trait objects.
-    pub fn new_concrete_with_models_dir(
-        base_path: impl Into<PathBuf>,
-        app_configs:&WsConfigs,
-        models_dir:&String
-    ) -> anyhow::Result<Self> {
+    pub fn new_concrete_with_models_dir(base_path: impl Into<PathBuf>, app_configs: &WsConfigs, models_dir: &String) -> anyhow::Result<Self> {
         let base_path = base_path.into();
         fs::create_dir_all(&base_path)?;
 
@@ -130,17 +115,12 @@ impl FsWorkspace {
             plots_path,
             log_path,
             tmp_path,
-            ws_configs:app_configs.clone()
+            ws_configs: app_configs.clone(),
         })
     }
 
-
     pub fn resource_tensor_path(tensors_path: &PathBuf, resource: &Resource) -> PathBuf {
-        tensors_path.join(format!(
-            "{}_{}.pt",
-            resource.import_id(),
-            resource.file_stem()
-        ))
+        tensors_path.join(format!("{}_{}.pt", resource.import_id(), resource.file_stem()))
     }
 
     /// Resolves one model category lazily so feature crates own category names and creation timing.
@@ -181,7 +161,9 @@ pub fn publish_net(base: &Path, params: &str, write_weights: impl FnOnce(&Path) 
         Ok(())
     })();
     if result.is_err() {
-        for path in [&weights, &metadata, &manifest] { let _ = fs::remove_file(path); }
+        for path in [&weights, &metadata, &manifest] {
+            let _ = fs::remove_file(path);
+        }
     }
     result
 }
@@ -190,10 +172,14 @@ pub fn discover_nets(root: &Path) -> anyhow::Result<Vec<(PathBuf, PathBuf)>> {
     let mut models = Vec::new();
     for path in paths {
         if path.file_name().is_some_and(|v| v == NET_MANIFEST) {
-            if let Some(pair) = published_generation(path.parent().context("model manifest has no parent")?)? { models.push(pair); }
+            if let Some(pair) = published_generation(path.parent().context("model manifest has no parent")?)? {
+                models.push(pair);
+            }
         } else if !generation_weights(&path) {
             // A manifest supersedes a legacy pair in the same model directory.
-            if !path.parent().context("model has no parent")?.join(NET_MANIFEST).exists() { models.push(net_files_from_base(&path)?); }
+            if !path.parent().context("model has no parent")?.join(NET_MANIFEST).exists() {
+                models.push(net_files_from_base(&path)?);
+            }
         }
     }
     Ok(models)
@@ -206,7 +192,9 @@ pub fn nested_weights(path: &Path) -> bool {
 }
 pub fn net_files_from_base(base_path: &Path) -> anyhow::Result<(PathBuf, PathBuf)> {
     if base_path.is_dir() {
-        if let Some(pair) = published_generation(base_path)? { return Ok(pair); }
+        if let Some(pair) = published_generation(base_path)? {
+            return Ok(pair);
+        }
     }
     Ok(match base_path.file_name().and_then(|v| v.to_str()) {
         Some(NET_WEIGHTS_FILE) => (base_path.to_path_buf(), base_path.parent().unwrap_or(base_path).join(NET_PARAMS_FILE)),
@@ -232,19 +220,12 @@ pub fn resolve_net_base_path(root: &Path, net_path: &Path) -> PathBuf {
 }
 
 impl Workspace for FsWorkspace {
-    fn import_tensor(
-        &self,
-        t: Tensor,
-        import_id: u32,
-        key: &str,
-    ) -> anyhow::Result<ResourceStats> {
+    fn import_tensor(&self, t: Tensor, import_id: u32, key: &str) -> anyhow::Result<ResourceStats> {
         let path = self.tensors_path.join(format!("{import_id}_{key}.pt"));
         trace!("Workspace:import_tensor {path:?} t.size={:?}", t.size());
         t.save(&path)?;
 
-        Ok(ResourceStats::new(
-            t.size().into_iter().map(|v| v as u32).collect::<Vec<_>>(),
-        ))
+        Ok(ResourceStats::new(t.size().into_iter().map(|v| v as u32).collect::<Vec<_>>()))
     }
 
     fn base_path_as_str(&self) -> String {
@@ -269,8 +250,7 @@ impl Workspace for FsWorkspace {
         &self.tensors_path
     }
     fn tensor_path(&self, key: &Resource) -> PathBuf {
-        self.tensors_path
-            .join(format!("{}_{}.pt", key.import_id(), key.file_stem()))
+        self.tensors_path.join(format!("{}_{}.pt", key.import_id(), key.file_stem()))
     }
     fn models_path(&self) -> &PathBuf {
         &self.nets_path
@@ -280,15 +260,7 @@ impl Workspace for FsWorkspace {
         &self.plots_path
     }
 
-    fn save_net<'a>(
-        &self,
-        run_config_id: RunConfigId,
-        vs_or_path: VarStoreOrPath<'a>,
-        model_type:&str,
-        params: &dyn ToJsonFile,
-    ) -> anyhow::Result<PathBuf> {
-
-
+    fn save_net<'a>(&self, run_config_id: RunConfigId, vs_or_path: VarStoreOrPath<'a>, model_type: &str, params: &dyn ToJsonFile) -> anyhow::Result<PathBuf> {
         let net_id = PathBuf::from(format!("{run_config_id}"));
         let base_path = self.models_path().join(model_type).join(&net_id);
 
@@ -299,7 +271,6 @@ impl Workspace for FsWorkspace {
         panic_to_err!(vs_or_path.save(&dst))?;
 
         params.to_file(&base_path.join(NET_PARAMS_FILE))?;
-
 
         Ok(dst)
     }
@@ -318,29 +289,16 @@ impl Workspace for FsWorkspace {
         self.ws_configs.max_input
     }
 
-    fn ws_configs(&self)->WsConfigs {
+    fn ws_configs(&self) -> WsConfigs {
         self.ws_configs
     }
 
     fn clc_records(&self, _resource_ids: &Vec<String>) -> anyhow::Result<i64> {
-        debug!(
-            "FsWorkspace::clc_records: self.tensors_path={:?}",
-            self.tensors_path
-        );
+        debug!("FsWorkspace::clc_records: self.tensors_path={:?}", self.tensors_path);
 
         Ok(read_dir(&self.tensors_path)?
             .enumerate()
-            .map(|(i, dir)| {
-                (
-                    i,
-                    dir.unwrap()
-                        .path()
-                        .as_os_str()
-                        .to_str()
-                        .unwrap()
-                        .to_string(),
-                )
-            })
+            .map(|(i, dir)| (i, dir.unwrap().path().as_os_str().to_str().unwrap().to_string()))
             .collect::<Vec<(usize, String)>>()
             .into_par_iter()
             .map(|(i, path)| {
@@ -369,13 +327,12 @@ impl Workspace for FsWorkspace {
 //TODO remove it - was used to migrate from saving VarStore directly to moving from tmp
 pub enum VarStoreOrPath<'a> {
     VarStore(&'a VarStore),
-    Path(&'a Path)
+    Path(&'a Path),
 }
 
-impl <'a> VarStoreOrPath<'a> {
+impl<'a> VarStoreOrPath<'a> {
     /// Saves or moves a checkpoint so feature-specific workspace extensions can reuse the common transport.
-    pub fn save(&self, to:&PathBuf) -> anyhow::Result<()> {
-
+    pub fn save(&self, to: &PathBuf) -> anyhow::Result<()> {
         match self {
             VarStoreOrPath::VarStore(vs) => {
                 vs.save(to)?;
@@ -390,19 +347,19 @@ impl <'a> VarStoreOrPath<'a> {
     }
 }
 
-impl <'a>  From<&'a VarStore> for VarStoreOrPath<'a> {
+impl<'a> From<&'a VarStore> for VarStoreOrPath<'a> {
     fn from(value: &'a VarStore) -> Self {
         Self::VarStore(value)
     }
 }
 
-impl <'a>  From<&'a PathBuf> for VarStoreOrPath<'a> {
+impl<'a> From<&'a PathBuf> for VarStoreOrPath<'a> {
     fn from(value: &'a PathBuf) -> Self {
         Self::Path(value.as_path())
     }
 }
 
-impl <'a> From<&'a TmpFile> for VarStoreOrPath<'a> {
+impl<'a> From<&'a TmpFile> for VarStoreOrPath<'a> {
     fn from(value: &'a TmpFile) -> Self {
         // Preserve TmpFile ownership while the workspace atomically moves its checkpoint.
         Self::Path(value.path())
@@ -411,12 +368,7 @@ impl <'a> From<&'a TmpFile> for VarStoreOrPath<'a> {
 
 #[automock]
 pub trait Workspace: Sync + Send + Debug {
-    fn import_tensor<'a>(
-        &self,
-        t: Tensor,
-        import_id: u32,
-        key: &'a str,
-    ) -> anyhow::Result<ResourceStats>;
+    fn import_tensor<'a>(&self, t: Tensor, import_id: u32, key: &'a str) -> anyhow::Result<ResourceStats>;
     fn base_path_as_str(&self) -> String;
     fn base_path(&self) -> &PathBuf;
     fn store_path(&self) -> &PathBuf;
@@ -427,40 +379,26 @@ pub trait Workspace: Sync + Send + Debug {
     fn tensor_path(&self, key: &Resource) -> PathBuf;
     fn models_path(&self) -> &PathBuf;
     fn plots_path(&self) -> &PathBuf;
-    fn save_net<'a>(
-        &self,
-        run_config_id: RunConfigId,
-        vs_or_path: VarStoreOrPath<'a>,
-        model_type:&str,
-        params: &dyn ToJsonFile,
-    ) -> anyhow::Result<PathBuf>;
+    fn save_net<'a>(&self, run_config_id: RunConfigId, vs_or_path: VarStoreOrPath<'a>, model_type: &str, params: &dyn ToJsonFile) -> anyhow::Result<PathBuf>;
     fn channels(&self) -> u32;
     fn sample_rate(&self) -> u32;
     fn max_input(&self) -> u32;
     fn clc_records(&self, resource_ids: &Vec<String>) -> anyhow::Result<i64>;
-    fn ws_configs(&self)->WsConfigs;
+    fn ws_configs(&self) -> WsConfigs;
 }
 
-pub fn mock_ws_simp(
-    path: Option<&PathBuf>,
-    channels: u32,
-    sample_rate: u32,
-    max_input: u32,
-) -> anyhow::Result<Box<dyn Workspace>> {
+pub fn mock_ws_simp(path: Option<&PathBuf>, channels: u32, sample_rate: u32, max_input: u32) -> anyhow::Result<Box<dyn Workspace>> {
     let ws_mock = _mock_simp(path, channels, sample_rate, max_input)?;
 
     Ok(Box::new(ws_mock))
 }
 
-fn _mock_simp(
-    path: Option<&PathBuf>,
-    channels: u32,
-    sample_rate: u32,
-    max_input: u32,
-) -> anyhow::Result<MockWorkspace> {
+fn _mock_simp(path: Option<&PathBuf>, channels: u32, sample_rate: u32, max_input: u32) -> anyhow::Result<MockWorkspace> {
     let base = path.cloned().unwrap_or_else(|| Path::new("/tmp").join(cdt_for_dir()));
     // Fixture creation is fallible too; callers choose how to report setup failure.
-    if path.is_none() { fs::create_dir_all(&base)?; }
+    if path.is_none() {
+        fs::create_dir_all(&base)?;
+    }
 
     let mut ws_mock = MockWorkspace::new();
 
@@ -471,7 +409,7 @@ fn _mock_simp(
     ws_mock.expect_sample_rate().return_const(sample_rate);
     ws_mock.expect_channels().return_const(channels);
     ws_mock.expect_max_input().return_const(max_input);
-    ws_mock.expect_import_tensor().returning(|_, _, _|Ok(ResourceStats::new(vec![20, 100])));
+    ws_mock.expect_import_tensor().returning(|_, _, _| Ok(ResourceStats::new(vec![20, 100])));
     Ok(ws_mock)
 }
 
@@ -482,7 +420,9 @@ pub struct WsMockBuilder {
 
 impl WsMockBuilder {
     pub fn new(path: Option<&PathBuf>, channels: u32, sample_rate: u32, max_input: u32) -> anyhow::Result<Self> {
-        Ok(Self { mock: _mock_simp(path, channels, sample_rate, max_input)? })
+        Ok(Self {
+            mock: _mock_simp(path, channels, sample_rate, max_input)?,
+        })
     }
 
     pub fn build(self) -> Box<dyn Workspace> {

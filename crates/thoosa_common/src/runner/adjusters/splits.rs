@@ -15,9 +15,9 @@ use thoosa_shared::traits::{Adjustable, Data, Metrics};
 #[derive(Debug)]
 pub struct SplitsAdjuster<A, M>
 where
-    A:Adjustable + From<Range<M>> + Debug,
+    A: Adjustable + From<Range<M>> + Debug,
     M: Metrics + Debug + Clone + Default + Send + Sync,
-    M: DivAssign<i64>,//TODO replace i64 with num_traits type
+    M: DivAssign<i64>, //TODO replace i64 with num_traits type
     M: PartialOrd<M>,
     M: AddAssign<M>,
 {
@@ -28,9 +28,9 @@ where
 
 impl<A, M> SplitsAdjuster<A, M>
 where
-    A:Adjustable + From<Range<M>> + Debug,
+    A: Adjustable + From<Range<M>> + Debug,
     M: Metrics + Debug + Clone + Default + Send + Sync,
-    M: DivAssign<i64>,//TODO replace i64 with num_traits type
+    M: DivAssign<i64>, //TODO replace i64 with num_traits type
     M: PartialOrd<M>,
     M: AddAssign<M>,
 {
@@ -40,38 +40,34 @@ where
         Self {
             pd: Default::default(),
             min_split_len,
-            overlap_len:None
+            overlap_len: None,
         }
     }
 
-    pub fn new_with_overlap(min_split_len: M, overlap_len:M) -> Self {
+    pub fn new_with_overlap(min_split_len: M, overlap_len: M) -> Self {
         debug!("SplitsAdjuster::new_with_overlap: min_split_len={min_split_len:?}");
 
         Self {
             pd: Default::default(),
             min_split_len,
-            overlap_len:Some(overlap_len)
+            overlap_len: Some(overlap_len),
         }
     }
 }
 
 #[async_trait]
-impl <AC,  A, M> Adjuster<AC> for SplitsAdjuster<A, M>
+impl<AC, A, M> Adjuster<AC> for SplitsAdjuster<A, M>
 where
-    AC:SplitsAdjusterContext<Metrics =M>,
-    A:Adjustable + From<Range<M>> + Debug,
+    AC: SplitsAdjusterContext<Metrics = M>,
+    A: Adjustable + From<Range<M>> + Debug,
     M: Metrics + Debug + Clone + Default + Send + Sync,
-    M: DivAssign<i64>,//TODO replace i64 with num_traits type
+    M: DivAssign<i64>, //TODO replace i64 with num_traits type
     M: PartialOrd<M>,
     M: AddAssign<M>,
 {
     type A = A;
 
-    async fn adjust(
-        &self,
-        _adjustable: A,
-        adjust_context: &mut AC,
-    ) -> Result<A, AdjusterError<A>> {
+    async fn adjust(&self, _adjustable: A, adjust_context: &mut AC) -> Result<A, AdjusterError<A>> {
         info!("SplitsAdjuster::adjust, self={:?}", self);
 
         let split_start = adjust_context.done_to();
@@ -86,12 +82,10 @@ where
 
         info!("SplitsAdjuster::adjust: split_start={split_start:?} split_end={split_end:?} adjustable.size={:?}", adjust_context.input_len());
 
-
         Ok((split_start.clone()..split_end).into())
     }
 
     fn degrade(&self, adjust_context: &mut AC) -> bool {
-        
         debug!("SplitsAdjuster::degrade: 0. adjust_context={adjust_context:?}");
 
         (*adjust_context.split_len_mut()) /= 2; //TODO configure degrade step
@@ -119,7 +113,7 @@ pub struct SplitsAdjusterContextImpl<'a, R, B>
 where
     R: Stage + Adjustable + 'a,
     <R as Stage>::In<'a>: Data,
-    B:OutputBuilder<O = <R as Stage>::Out>
+    B: OutputBuilder<O = <R as Stage>::Out>,
 {
     done_to: <<R as Stage>::In<'a> as Data>::Metrics,
     split_len: <<R as Stage>::In<'a> as Data>::Metrics,
@@ -130,8 +124,8 @@ where
 
 impl<'a, 'b, R, B> InputContext<'a, R> for SplitsAdjusterContextImpl<'b, R, B>
 where
-    R:Stage + Adjustable + 'a,
-    B:OutputBuilder<O = <R as Stage>::Out>,
+    R: Stage + Adjustable + 'a,
+    B: OutputBuilder<O = <R as Stage>::Out>,
     <R as Stage>::In<'b>: Data,
     <<R as Stage>::In<'b> as Data>::Metrics: AddAssign<<<R as Stage>::In<'b> as Data>::Metrics>,
     <<R as Stage>::In<'b> as Data>::Metrics: PartialOrd,
@@ -142,14 +136,13 @@ where
 
         self.done_to += self.split_len.clone();
 
-        debug!("SplitsAdjusterContextImpl::add_partial_output: self.done_to={:?}  self.split_len={:?}",self.done_to, self.split_len);
+        debug!("SplitsAdjusterContextImpl::add_partial_output: self.done_to={:?}  self.split_len={:?}", self.done_to, self.split_len);
         Ok(())
     }
 
     fn all_done(&self) -> bool {
         self.done_to >= self.input_len
     }
-
 
     async fn build_final_output(self) -> Result<R::Out, ThoError> {
         t!(self.output_builder.build()).await
@@ -158,16 +151,13 @@ where
 
 impl<'a, R, B> SplitsAdjusterContextImpl<'a, R, B>
 where
-    R:Stage + Adjustable + 'a,
-    B:OutputBuilder<O = <R as Stage>::Out>,
+    R: Stage + Adjustable + 'a,
+    B: OutputBuilder<O = <R as Stage>::Out>,
     <R as Stage>::In<'a>: Data,
     <<R as Stage>::In<'a> as Data>::Metrics: AddAssign<<<R as Stage>::In<'a> as Data>::Metrics>,
     <<R as Stage>::In<'a> as Data>::Metrics: PartialOrd,
 {
-    pub fn new(
-        input_len: <<R as Stage>::In<'a> as Data>::Metrics,
-        output_builder: B,
-    ) -> Self {
+    pub fn new(input_len: <<R as Stage>::In<'a> as Data>::Metrics, output_builder: B) -> Self {
         debug!("SplitsAdjusterContextImpl::new: input_len={input_len:?}");
         Self {
             done_to: input_len.default_end(),
@@ -180,8 +170,8 @@ where
 
 impl<'a, R, B> SplitsAdjusterContext for SplitsAdjusterContextImpl<'a, R, B>
 where
-    R:Stage + Adjustable + 'a,
-    B:OutputBuilder<O = <R as Stage>::Out>,
+    R: Stage + Adjustable + 'a,
+    B: OutputBuilder<O = <R as Stage>::Out>,
     <R as Stage>::In<'a>: Data,
     <<R as Stage>::In<'a> as Data>::Metrics: AddAssign<<<R as Stage>::In<'a> as Data>::Metrics>,
     <<R as Stage>::In<'a> as Data>::Metrics: PartialOrd,
@@ -195,7 +185,6 @@ where
     fn input_len(&self) -> &Self::Metrics {
         &self.input_len
     }
-
 
     fn done_to(&self) -> &Self::Metrics {
         &self.done_to
@@ -224,11 +213,11 @@ mod tests {
     use parking_lot::RwLock;
     use std::ops::Range;
     use std::sync::Arc;
+    use thoosa_common::runner::sync_stage::SyncStage;
     use thoosa_shared::CopyToDevice;
+    use thoosa_shared::ThoError;
     use thoosa_shared::applicables_runner::{Input, Output};
     use thoosa_shared::traits::{Adjustable, Data, Stage};
-    use thoosa_common::runner::sync_stage::{SyncStage};
-    use thoosa_shared::ThoError;
 
     mock! {
         #[derive(Debug)]
@@ -316,7 +305,7 @@ mod tests {
         }
     }
 
-    mock!{
+    mock! {
 
         #[derive(Debug)]
         TestOutputBuilder {
@@ -332,15 +321,13 @@ mod tests {
 
     #[allow(dead_code)]
     pub struct MockTestOutputBuilderBuilder {
-        mock:MockTestOutputBuilder
+        mock: MockTestOutputBuilder,
     }
 
     #[allow(dead_code)]
     impl MockTestOutputBuilderBuilder {
         fn build() -> MockTestOutputBuilderBuilder {
-            MockTestOutputBuilderBuilder {
-                mock: MockTestOutputBuilder::new(),
-            }
+            MockTestOutputBuilderBuilder { mock: MockTestOutputBuilder::new() }
         }
         fn with_add_partial_output(mut self) -> Self {
             self.mock.expect_add_partial_output().returning(|_| Ok(()));
@@ -356,31 +343,26 @@ mod tests {
             self
         }
 
-        fn finish(self)->MockTestOutputBuilder {
+        fn finish(self) -> MockTestOutputBuilder {
             self.mock
         }
 
-        fn default()->MockTestOutputBuilder {
-            MockTestOutputBuilderBuilder::build()
-                .with_add_partial_output()
-                .finish()
+        fn default() -> MockTestOutputBuilder {
+            MockTestOutputBuilderBuilder::build().with_add_partial_output().finish()
         }
     }
 
     #[allow(dead_code)]
     pub struct MockTestSelectorBuilder {
-        mock:MockTestSelector
+        mock: MockTestSelector,
     }
-
-
 
     #[allow(dead_code)]
     impl MockTestSelectorBuilder {
-
-        pub fn finish_with_from_ranges(ranges:Arc<parking_lot::RwLock<Vec<Range<i64>>>>) -> impl Default {
+        pub fn finish_with_from_ranges(ranges: Arc<parking_lot::RwLock<Vec<Range<i64>>>>) -> impl Default {
             let from_ctx = MockTestSelector::from_context();
 
-            from_ctx.expect().returning( move |range|{
+            from_ctx.expect().returning(move |range| {
                 ranges.write().push(range);
                 Default::default()
             });
@@ -407,10 +389,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_failed_assembly_preserves_cuda_error_and_split_progress() -> Result<(), ThoError> {
-        for (message, oom, reset) in [
-            ("CUDA out of memory", true, false),
-            ("CUDA error: an illegal memory access was encountered", false, true),
-        ] {
+        for (message, oom, reset) in [("CUDA out of memory", true, false), ("CUDA error: an illegal memory access was encountered", false, true)] {
             let error = crate::tch_error::tch_error(tch::TchError::Torch(message.into()));
             let builder = MockTestOutputBuilderBuilder::build().with_partial_output_results(vec![Err(error), Ok(())]).finish();
             let mut context: SplitsAdjusterContextImpl<MockTestStage, MockTestOutputBuilder> = SplitsAdjusterContextImpl::new(100, builder);
@@ -431,25 +410,23 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 64)]
-    async fn test_degrade_once() -> anyhow::Result<()>{
-        let ranges:Arc<parking_lot::RwLock<Vec<Range<i64>>>> = Arc::new(RwLock::new(vec![]));
+    async fn test_degrade_once() -> anyhow::Result<()> {
+        let ranges: Arc<parking_lot::RwLock<Vec<Range<i64>>>> = Arc::new(RwLock::new(vec![]));
 
         let _from_ctx = MockTestSelectorBuilder::finish_with_from_ranges(Arc::clone(&ranges));
 
         let splits_adjuster: SplitsAdjuster<MockTestSelector, i64> = SplitsAdjuster::new(1);
         let output_builder = MockTestOutputBuilderBuilder::default();
-        let mut context_impl:SplitsAdjusterContextImpl<MockTestStage, MockTestOutputBuilder>= SplitsAdjusterContextImpl::new(100, output_builder);
-
+        let mut context_impl: SplitsAdjusterContextImpl<MockTestStage, MockTestOutputBuilder> = SplitsAdjusterContextImpl::new(100, output_builder);
 
         let selector = MockTestSelector::new();
-
 
         let adjusted_selector = match splits_adjuster.adjust(selector, &mut context_impl).await {
             Ok(selector) => selector,
             Err(error) => anyhow::bail!("initial adjust failed: {error:?}"),
         };
 
-        assert!(splits_adjuster.degrade(&mut context_impl));//returns true, can degrade further
+        assert!(splits_adjuster.degrade(&mut context_impl)); //returns true, can degrade further
 
         let adjusted_selector = match splits_adjuster.adjust(adjusted_selector, &mut context_impl).await {
             Ok(selector) => selector,
@@ -470,12 +447,12 @@ mod tests {
         assert_eq!(
             &vec![
                 0..100i64, //degrade ->
-                0..50, 50..100
+                0..50,
+                50..100
             ],
             &*ranges.read()
         );
 
         Ok(())
-
     }
 }

@@ -15,16 +15,13 @@ impl ResourceSlices {
 
 impl From<(ResourceId, usize)> for ResourceSlices {
     fn from(value: (ResourceId, usize)) -> Self {
-        Self {
-            id: value.0,
-            size: value.1,
-        }
+        Self { id: value.0, size: value.1 }
     }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)] //TODO clone? reset idx
 pub struct SlicesIter {
-    pub step: usize,//TODO pub
+    pub step: usize, //TODO pub
     pub resource_ids_sizes: Vec<ResourceSlices>,
     outer_idx: usize, // which (ResourceId, len) we're on
     inner_idx: usize, // position within the current len
@@ -32,20 +29,12 @@ pub struct SlicesIter {
 
 impl SlicesIter {
     pub fn new(step: usize, resource_ids_sizes: Vec<(ResourceId, usize)>) -> Self {
-        let resource_ids_sizes = resource_ids_sizes
-            .into_iter()
-            .map(ResourceSlices::from)
-            .collect();
+        let resource_ids_sizes = resource_ids_sizes.into_iter().map(ResourceSlices::from).collect();
         Self::new_with_offsets(step, resource_ids_sizes)
     }
 
     pub fn new_with_offsets(step: usize, resource_ids_sizes: Vec<ResourceSlices>) -> Self {
-        Self {
-            step,
-            resource_ids_sizes,
-            outer_idx: 0,
-            inner_idx: 0,
-        }
+        Self { step, resource_ids_sizes, outer_idx: 0, inner_idx: 0 }
     }
 }
 
@@ -62,10 +51,7 @@ impl Iterator for SlicesIter {
 
             // If there is still something to yield for the current (rid, size)…
             if self.inner_idx < size {
-                let out = TensorIdSliceIdx(
-                    rid,
-                    (self.inner_idx * self.step) as u32,
-                );
+                let out = TensorIdSliceIdx(rid, (self.inner_idx * self.step) as u32);
                 self.inner_idx += 1;
                 return Some(out);
             }
@@ -84,10 +70,7 @@ impl Iterator for SlicesIter {
             total += entry.size.saturating_sub(self.inner_idx);
         }
         if self.outer_idx + 1 < self.resource_ids_sizes.len() {
-            total += self.resource_ids_sizes[(self.outer_idx + 1)..]
-                .iter()
-                .map(|entry| entry.size)
-                .sum::<usize>();
+            total += self.resource_ids_sizes[(self.outer_idx + 1)..].iter().map(|entry| entry.size).sum::<usize>();
         }
         (total, Some(total))
     }
@@ -108,15 +91,7 @@ mod tests {
         // Expected:
         // (1, 0), (1, 3), (1, 6), (1, 9),
         // (2, 0), (2, 3), (2, 6)
-        let expected = vec![
-            TensorIdSliceIdx(1, 0),
-            TensorIdSliceIdx(1, 3),
-            TensorIdSliceIdx(1, 6),
-            TensorIdSliceIdx(1, 9),
-            TensorIdSliceIdx(2, 0),
-            TensorIdSliceIdx(2, 3),
-            TensorIdSliceIdx(2, 6),
-        ];
+        let expected = vec![TensorIdSliceIdx(1, 0), TensorIdSliceIdx(1, 3), TensorIdSliceIdx(1, 6), TensorIdSliceIdx(1, 9), TensorIdSliceIdx(2, 0), TensorIdSliceIdx(2, 3), TensorIdSliceIdx(2, 6)];
         assert_eq!(got, expected);
     }
 
@@ -124,29 +99,15 @@ mod tests {
     fn test_zero_lengths_and_step_1() {
         let it = SlicesIter::new(1, vec![(10, 0), (11, 1), (12, 2), (13, 0)]);
         let got: Vec<_> = it.collect();
-        let expected = vec![
-            TensorIdSliceIdx(11, 0),
-            TensorIdSliceIdx(12, 0),
-            TensorIdSliceIdx(12, 1),
-        ];
+        let expected = vec![TensorIdSliceIdx(11, 0), TensorIdSliceIdx(12, 0), TensorIdSliceIdx(12, 1)];
         assert_eq!(got, expected);
     }
 
     #[test]
     fn test_offsets() {
-        let it = SlicesIter::new_with_offsets(
-            2,
-            vec![
-                ResourceSlices::new(1, 2),
-                ResourceSlices::new(2, 1),
-            ],
-        );
+        let it = SlicesIter::new_with_offsets(2, vec![ResourceSlices::new(1, 2), ResourceSlices::new(2, 1)]);
         let got: Vec<_> = it.collect();
-        let expected = vec![
-            TensorIdSliceIdx(1, 0),
-            TensorIdSliceIdx(1, 2),
-            TensorIdSliceIdx(2, 0),
-        ];
+        let expected = vec![TensorIdSliceIdx(1, 0), TensorIdSliceIdx(1, 2), TensorIdSliceIdx(2, 0)];
         assert_eq!(got, expected);
     }
 }

@@ -1,10 +1,10 @@
 use async_trait::async_trait;
 use log::debug;
-use thoosa_shared::{CopyToDevice, ThoError};
-#[cfg(test)]
-use thoosa_shared::traits::{Data, DummyWithId as DummyCachableId, MockData, MockWithId, Select, WithId};
 #[cfg(test)]
 use thoosa_shared::traits::RangeSelector;
+#[cfg(test)]
+use thoosa_shared::traits::{Data, DummyWithId as DummyCachableId, MockData, MockWithId, Select, WithId};
+use thoosa_shared::{CopyToDevice, ThoError};
 
 #[derive(Debug, Clone)]
 pub struct DummyTensor(pub Vec<f32>);
@@ -69,20 +69,14 @@ impl MockDataWithId {
         me
     }
 
-    pub fn for_device_and_id(device: usize, id:&'static str) -> Self {
+    pub fn for_device_and_id(device: usize, id: &'static str) -> Self {
         let mut with_id = MockWithId::new();
-        with_id
-            .expect_id()
-            .return_const(DummyCachableId::from(id));
+        with_id.expect_id().return_const(DummyCachableId::from(id));
 
         let mut mock_data = MockData::new();
         mock_data.expect_size().return_const([0]);
 
-        Self {
-            data: mock_data,
-            with_id,
-            device,
-        }
+        Self { data: mock_data, with_id, device }
     }
 
     pub fn device(&self) -> &usize {
@@ -102,18 +96,13 @@ impl Select<RangeSelector> for MockDataWithId {
         let mut with_id = MockWithId::new();
         with_id.expect_id().return_const(self.id().clone());
 
-        Ok(MockDataWithId {
-            data,
-            with_id,
-            device: self.device,
-        })
+        Ok(MockDataWithId { data, with_id, device: self.device })
     }
 }
 
 #[cfg(test)]
 impl Data for MockDataWithId {
     type Metrics = [usize; 1];
-
 
     fn size(&self) -> Self::Metrics {
         self.data.size()

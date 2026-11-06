@@ -1,7 +1,3 @@
-#[cfg(test)]
-use thoosa_common::runner::execution::{StageExecution, ExecutionContext, execute_stateful};
-#[cfg(test)]
-use thoosa_common::runner::sync_stage::PrepareStage;
 use crate::cuda_utils::{CopyBufferPool, PinnedHostBuffer, copy_d2h, copy_d2h_to_ptr, copy_h2d, copy_h2d_from_ptr, cuda_mem_for_device};
 #[cfg(test)]
 use crate::runner::common::cachable::ConsumeData;
@@ -24,9 +20,13 @@ use std::sync::Arc;
 use std::time::Duration;
 use tch::Kind::Int64;
 use tch::{Kind, Tensor};
-use thoosa_shared::tracked_await::t;
+#[cfg(test)]
+use thoosa_common::runner::execution::{ExecutionContext, StageExecution, execute_stateful};
 #[cfg(test)]
 use thoosa_common::runner::sync_stage::ConsumeResult;
+#[cfg(test)]
+use thoosa_common::runner::sync_stage::PrepareStage;
+use thoosa_shared::tracked_await::t;
 #[cfg(test)]
 use thoosa_shared::traits::RunCtx;
 #[cfg(test)]
@@ -39,52 +39,57 @@ use tokio::sync::{RwLock, mpsc, oneshot};
 use tokio::time::timeout;
 use tub::{Guard, Pool};
 
-
 enum CudaLocalActorMessage {
-    Copy{ src:ThoTensor, dst_device:ThoDevice, activity: CudaActivityScope, respond_to: Sender<Result<Tensor, ThoError>>},
+    Copy {
+        src: ThoTensor,
+        dst_device: ThoDevice,
+        activity: CudaActivityScope,
+        respond_to: Sender<Result<Tensor, ThoError>>,
+    },
     // Tensor is Send but not Sync; keep the queued message (and SendError) Sync.
-    CopyBatchToCpu { sources: parking_lot::Mutex<Vec<Tensor>>, activity: CudaActivityScope, respond_to: Sender<Result<Vec<Tensor>, ThoError>> },
+    CopyBatchToCpu {
+        sources: parking_lot::Mutex<Vec<Tensor>>,
+        activity: CudaActivityScope,
+        respond_to: Sender<Result<Vec<Tensor>, ThoError>>,
+    },
 
     GetExecStream {
         activity: CudaActivityScope,
-        respond_to: oneshot::Sender<Result<LocalHandleCtx, ThoError>>
+        respond_to: oneshot::Sender<Result<LocalHandleCtx, ThoError>>,
     },
     Restart {
         authority: thoosa_shared::CudaActivityPauseTicket,
-        respond_to: oneshot::Sender<Result<(), ThoError>>
-    }
-
+        respond_to: oneshot::Sender<Result<(), ThoError>>,
+    },
 }
 
 pub trait SyncCtx {}
 
-impl SyncCtx for (){}
+impl SyncCtx for () {}
 
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]
-pub trait HandleCtx:Send {
-
-    fn sync_ctx(&self) ->Result<Box<dyn SyncCtx>, ThoError> {
+pub trait HandleCtx: Send {
+    fn sync_ctx(&self) -> Result<Box<dyn SyncCtx>, ThoError> {
         Ok(Box::new(()))
     }
 
-     fn on_after_run(&mut self) ->Result<(), ThoError> {
-         Ok(())
-     }
-
+    fn on_after_run(&mut self) -> Result<(), ThoError> {
+        Ok(())
+    }
 }
 
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]
 pub trait CudaActorHandle: Debug + Send + Sync {
-    async fn copy(&self, src:ThoTensor, dst_device:ThoDevice) -> Result<ThoTensor, ThoError>;
+    async fn copy(&self, src: ThoTensor, dst_device: ThoDevice) -> Result<ThoTensor, ThoError>;
 
     // Backend work is called by GlobalCtx's coordinator hook after draining.
     // It must neither request a new cycle nor change admission state.
     async fn restart_backend(&self, authority: thoosa_shared::CudaActivityPauseTicket) -> Result<(), ThoError>;
 
     #[cfg(test)]
-    async fn restart(&self) -> Result<(), ThoError>;//shortcut bypassing SyncStageRunner
+    async fn restart(&self) -> Result<(), ThoError>; //shortcut bypassing SyncStageRunner
 }
 // Only the local backend can lend a CUDA stream or copy process-local tensors.
 #[cfg_attr(test, mockall::automock)]
@@ -138,12 +143,7 @@ pub(crate) fn finish_cuda_error(original: ThoError, sync: Result<(), ThoError>) 
         Err(sync) => {
             warn!("finish_cuda_error: original={original:?} sync={sync:?}");
 
-            if sync.is_cuda_recovery_failed()
-                ||
-                (
-                    sync.needs_cuda_recovery() && !original.is_cuda_recovery_failed() && !original.needs_cuda_recovery()
-                )
-            {
+            if sync.is_cuda_recovery_failed() || (sync.needs_cuda_recovery() && !original.is_cuda_recovery_failed() && !original.needs_cuda_recovery()) {
                 sync.context(format!("stage also failed: {original}"))
             } else {
                 original.context(format!("stream synchronization also failed: {sync}"))
@@ -158,11 +158,7 @@ pub(crate) fn finish_cuda_error(original: ThoError, sync: Result<(), ThoError>) 
 pub(crate) fn report_cuda_copy_result<T>(result: Result<T, ThoError>, gate: &Arc<CudaActivityGate>, generation: CudaDeviceGeneration) -> Result<T, ThoError> {
     result.map_err(|error| {
         if error.needs_cuda_recovery() || error.is_cuda_recovery_failed() {
-            GlobalCtx::global()
-                .get_runner(gate.device_idx())
-                .request_cuda_reset_for_generation(generation, error)
-                .err()
-                .unwrap_or(ThoError::CudaBeingRecovered)
+            GlobalCtx::global().get_runner(gate.device_idx()).request_cuda_reset_for_generation(generation, error).err().unwrap_or(ThoError::CudaBeingRecovered)
         } else {
             error
         }
@@ -171,9 +167,9 @@ pub(crate) fn report_cuda_copy_result<T>(result: Result<T, ThoError>, gate: &Arc
 
 struct CudaLocalActor {
     gate: Arc<CudaActivityGate>,
-    tho_device_idx:usize,
+    tho_device_idx: usize,
     receiver: mpsc::Receiver<CudaLocalActorMessage>,
-    cuda_copier:Arc<RwLock<CudaCopier>>,
+    cuda_copier: Arc<RwLock<CudaCopier>>,
 }
 
 impl CudaLocalActor {
@@ -190,8 +186,7 @@ impl CudaLocalActor {
         })
     }
 
-     fn handle_message(&mut self, msg: CudaLocalActorMessage) {
-
+    fn handle_message(&mut self, msg: CudaLocalActorMessage) {
         match msg {
             CudaLocalActorMessage::CopyBatchToCpu { sources, activity, respond_to } => {
                 if let Err(error) = activity.check_operation(&self.gate) {
@@ -208,11 +203,9 @@ impl CudaLocalActor {
                     let _ = respond_to.send(report_cuda_copy_result(result, &gate, generation));
                 }));
             }
-            CudaLocalActorMessage::Copy{ src, dst_device, activity, respond_to } => {
+            CudaLocalActorMessage::Copy { src, dst_device, activity, respond_to } => {
                 if let Err(error) = activity.check_operation(&self.gate) {
-                    let _ = respond_to.send(
-                        Err(error)
-                    );
+                    let _ = respond_to.send(Err(error));
                     return;
                 }
 
@@ -230,7 +223,7 @@ impl CudaLocalActor {
 
                     let result = report_cuda_copy_result(result, &gate, generation);
                     let _ = respond_to.send(result);
-                 }));
+                }));
             }
 
             CudaLocalActorMessage::Restart { authority, respond_to } => {
@@ -247,9 +240,7 @@ impl CudaLocalActor {
             }
             CudaLocalActorMessage::GetExecStream { activity, respond_to } => {
                 if let Err(error) = activity.check_operation(&self.gate) {
-                    let _ = respond_to.send(
-                        Err(error)
-                    );
+                    let _ = respond_to.send(Err(error));
                     return;
                 }
                 let cuda_copier = Arc::clone(&self.cuda_copier);
@@ -275,7 +266,8 @@ impl CudaLocalActor {
             let mut cu_ctx = ThoCudaContext::new(i32::try_from(device.gpu_ordinal()?)?)?;
             cu_ctx.restart()?;
             cuda_copier.restart()
-        }).await?
+        })
+        .await?
     }
 
     async fn run(mut actor: CudaLocalActor) {
@@ -291,7 +283,6 @@ pub struct CudaLocalActorHandle {
     sender: mpsc::Sender<CudaLocalActorMessage>,
 }
 
-
 impl CudaLocalActorHandle {
     pub fn new(gate: Arc<CudaActivityGate>) -> Result<Self, ThoError> {
         let tho_device_id = gate.device_idx();
@@ -301,22 +292,12 @@ impl CudaLocalActorHandle {
         let actor = CudaLocalActor::new(Arc::clone(&gate), receiver)?;
         tokio::spawn(CudaLocalActor::run(actor));
 
-        Ok(Self {
-            gate,
-            sender,
-        })
+        Ok(Self { gate, sender })
     }
 
-    async fn copy_tensor(&self, src:ThoTensor, dst_device:ThoDevice, activity: CudaActivityScope) -> anyhow::Result<Tensor> {
+    async fn copy_tensor(&self, src: ThoTensor, dst_device: ThoDevice, activity: CudaActivityScope) -> anyhow::Result<Tensor> {
         let (respond_to, recv) = oneshot::channel();
-        self.sender.send(
-            CudaLocalActorMessage::Copy {
-                src,
-                dst_device,
-                activity,
-                respond_to,
-            }
-        ).await.context("copy_tensor: CUDA actor channel closed")?;
+        self.sender.send(CudaLocalActorMessage::Copy { src, dst_device, activity, respond_to }).await.context("copy_tensor: CUDA actor channel closed")?;
 
         Ok(recv.await.context("copy_tensor: CUDA actor response channel closed")??)
     }
@@ -324,12 +305,7 @@ impl CudaLocalActorHandle {
     async fn restart_inner(&self, authority: thoosa_shared::CudaActivityPauseTicket) -> anyhow::Result<()> {
         self.gate.check_recovery_authority(authority, true)?;
         let (respond_to, recv) = oneshot::channel();
-        self.sender.send(
-            CudaLocalActorMessage::Restart {
-                authority,
-                respond_to,
-            }
-        ).await.context("restart_inner: CUDA actor channel closed")?;
+        self.sender.send(CudaLocalActorMessage::Restart { authority, respond_to }).await.context("restart_inner: CUDA actor channel closed")?;
 
         Ok(recv.await.context("restart_inner: CUDA actor response channel closed")??)
     }
@@ -337,16 +313,10 @@ impl CudaLocalActorHandle {
     async fn acquire_exec_stream(&self) -> anyhow::Result<LocalHandleCtx> {
         let activity = CudaActivityScope::for_operation(&self.gate)?;
         let (respond_to, recv) = oneshot::channel();
-        self.sender.send(
-            CudaLocalActorMessage::GetExecStream {
-                activity,
-                respond_to,
-            }
-        ).await.context("acquire_exec_stream: CUDA actor channel closed")?;
+        self.sender.send(CudaLocalActorMessage::GetExecStream { activity, respond_to }).await.context("acquire_exec_stream: CUDA actor channel closed")?;
 
         Ok(recv.await.context("acquire_exec_stream: CUDA actor response channel closed")??)
     }
-
 }
 
 // A nonfatal CUDA error can be reported by synchronization without making the
@@ -374,8 +344,7 @@ pub(crate) fn complete_cuda_stream(result: Result<(), ThoError>, retry: impl FnO
                 // Last resort: completion is still unknown, so ordinary reuse
                 // and OOM retries are unsafe. Keep both original classifications;
                 // this is a failed drain, not a fabricated fatal CUDA code.
-                ThoError::CudaRecoveryFailed(Arc::new(thoosa_shared::CudaRecoveryFailure { original: error, recovery: Some(recovery) }))
-                    .context("CUDA stream could not be drained after synchronization failed")
+                ThoError::CudaRecoveryFailed(Arc::new(thoosa_shared::CudaRecoveryFailure { original: error, recovery: Some(recovery) })).context("CUDA stream could not be drained after synchronization failed")
             };
             StreamCompletion { result: Err(error), confirmed: false }
         }
@@ -392,11 +361,18 @@ pub(crate) struct ExecutionStreamPool {
 
 impl ExecutionStreamPool {
     pub(crate) fn new(streams: Vec<ThoCudaStream>) -> Arc<Self> {
-        Arc::new(Self { pool: Pool::from_vec(streams), failure: tokio::sync::watch::channel(None).0, quarantined: parking_lot::Mutex::new(Vec::new()) })
+        Arc::new(Self {
+            pool: Pool::from_vec(streams),
+            failure: tokio::sync::watch::channel(None).0,
+            quarantined: parking_lot::Mutex::new(Vec::new()),
+        })
     }
 
     pub(crate) fn check(&self) -> Result<(), ThoError> {
-        match self.failure.borrow().as_ref() { Some(error) => Err(error.clone()), None => Ok(()) }
+        match self.failure.borrow().as_ref() {
+            Some(error) => Err(error.clone()),
+            None => Ok(()),
+        }
     }
 
     pub(crate) async fn acquire(self: &Arc<Self>) -> Result<ExecutionStream, ThoError> {
@@ -423,9 +399,16 @@ impl ExecutionStream {
         if !completion.confirmed {
             let error = completion.result.as_ref().unwrap_err();
             self.pool.failure.send_if_modified(|failure| {
-                if failure.is_some() { false } else { *failure = Some(error.clone()); true }
+                if failure.is_some() {
+                    false
+                } else {
+                    *failure = Some(error.clone());
+                    true
+                }
             });
-            if let Some(lease) = self.lease.take() { self.pool.quarantined.lock().push(lease); }
+            if let Some(lease) = self.lease.take() {
+                self.pool.quarantined.lock().push(lease);
+            }
         }
         completion.result
     }
@@ -451,7 +434,6 @@ struct LocalHandleCtx {
 impl SyncCtx for ThoStreamGuard {}
 #[async_trait]
 impl HandleCtx for LocalHandleCtx {
-
     fn sync_ctx(&self) -> Result<Box<dyn SyncCtx>, ThoError> {
         self.stream.sync_ctx()
     }
@@ -463,10 +445,8 @@ impl HandleCtx for LocalHandleCtx {
 
 #[async_trait]
 impl CudaActorHandle for CudaLocalActorHandle {
-
-
-    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="CudaLocalActorHandle::copy"))]
-    async fn copy(&self, src:ThoTensor, dst_device:ThoDevice) -> Result<ThoTensor, ThoError> {
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "CudaLocalActorHandle::copy"))]
+    async fn copy(&self, src: ThoTensor, dst_device: ThoDevice) -> Result<ThoTensor, ThoError> {
         trace!("CudaLocalActorHandle::copy: src={src:?} dst_device={dst_device:?} backtrace={}", Backtrace::capture().to_string());
 
         // Register before acquiring copy resources; children share this scope so
@@ -499,16 +479,11 @@ pub struct CudaCopier {
 
 impl Debug for CudaCopier {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("CudaCopier")
-            .field("buffs", &self.buffs)
-            .field("buf_size", &self.buf_size)
-            .field("bufs_pool.remaining_capacity", &self.bufs_pool_h2d.remaining_capacity())
-            .finish()
+        f.debug_struct("CudaCopier").field("buffs", &self.buffs).field("buf_size", &self.buf_size).field("bufs_pool.remaining_capacity", &self.bufs_pool_h2d.remaining_capacity()).finish()
     }
 }
 
 impl CudaCopier {
-
     pub fn make_instance_for_cuda_device(cuda_device: usize, mem_k: f64, buffs: usize) -> Result<CudaCopier, ThoError> {
         // Standalone contexts (including IPC workers) own their admission state.
         // Local actors instead inject the gate shared with their stage runner.
@@ -520,15 +495,12 @@ impl CudaCopier {
 
         debug!("make_instance_for_cuda_device: cuda_device={cuda_device} mem_k={mem_k} buffs={buffs}");
 
-
         let buf_size = Self::clc_buff_size(cuda_device, mem_k, buffs, cuda_mem_for_device(cuda_device).1);
 
         let exec_stream_pool = {
-            let exec_streams = (0..buffs)
-                .map(|_| ThoCudaStream::from_pool(cuda_device as i32, true))
-                .collect::<Result<Vec<_>, _>>()?;
+            let exec_streams = (0..buffs).map(|_| ThoCudaStream::from_pool(cuda_device as i32, true)).collect::<Result<Vec<_>, _>>()?;
 
-                ExecutionStreamPool::new(exec_streams)
+            ExecutionStreamPool::new(exec_streams)
         };
 
         Ok(Self {
@@ -537,24 +509,20 @@ impl CudaCopier {
             buffs,
             buf_size,
             exec_stream_pool,
-            bufs_pool_d2h: Self::build_pool(buffs /2, buf_size, cuda_device, 0)?,
-            bufs_pool_h2d: Self::build_pool(buffs /2, buf_size, cuda_device, CU_MEMHOSTALLOC_WRITECOMBINED)?,
+            bufs_pool_d2h: Self::build_pool(buffs / 2, buf_size, cuda_device, 0)?,
+            bufs_pool_h2d: Self::build_pool(buffs / 2, buf_size, cuda_device, CU_MEMHOSTALLOC_WRITECOMBINED)?,
         })
     }
 
-
-    fn build_pool(
-        num_buffs: usize,
-        buf_size: usize,
-        cuda_device:usize,
-        flags: u32
-    ) -> Result<Arc<CopyBufferPool>, ThoError> {
-        let buffers = (0..num_buffs).map(|_| {
-            Ok((
-                PinnedHostBuffer::new(buf_size, flags)?,
-                Arc::new(ThoCudaStream::from_pool(cuda_device as i32, true)?),//TODO check if streams do not repeat
-            ))
-        }).collect::<Result<Vec<_>, ThoError>>()?;
+    fn build_pool(num_buffs: usize, buf_size: usize, cuda_device: usize, flags: u32) -> Result<Arc<CopyBufferPool>, ThoError> {
+        let buffers = (0..num_buffs)
+            .map(|_| {
+                Ok((
+                    PinnedHostBuffer::new(buf_size, flags)?,
+                    Arc::new(ThoCudaStream::from_pool(cuda_device as i32, true)?), //TODO check if streams do not repeat
+                ))
+            })
+            .collect::<Result<Vec<_>, ThoError>>()?;
         Ok(Arc::new(CopyBufferPool::new(buffers)))
     }
 
@@ -565,10 +533,7 @@ impl CudaCopier {
 
         drop(Arc::into_inner(std::mem::replace(
             &mut self.bufs_pool_h2d,
-            Arc::new(CopyBufferPool::new(vec![(
-                PinnedHostBuffer::new(1, 0).unwrap(),
-                Arc::new(ThoCudaStream::from_pool(self.cuda_device as i32, true)?),
-            )])),
+            Arc::new(CopyBufferPool::new(vec![(PinnedHostBuffer::new(1, 0).unwrap(), Arc::new(ThoCudaStream::from_pool(self.cuda_device as i32, true)?))])),
         )));
 
         self.buffs = buffs;
@@ -588,9 +553,7 @@ impl CudaCopier {
         cuda_context.bind_to_thread()?;
         let h2d = Self::build_pool(self.buffs / 2, self.buf_size, self.cuda_device, CU_MEMHOSTALLOC_WRITECOMBINED)?;
         let d2h = Self::build_pool(self.buffs / 2, self.buf_size, self.cuda_device, 0)?;
-        let exec_streams = (0..32)
-            .map(|_| ThoCudaStream::from_pool(self.cuda_device as i32, false))
-            .collect::<Result<Vec<_>, _>>()?;
+        let exec_streams = (0..32).map(|_| ThoCudaStream::from_pool(self.cuda_device as i32, false)).collect::<Result<Vec<_>, _>>()?;
         self.bufs_pool_h2d = h2d;
         self.bufs_pool_d2h = d2h;
         self.exec_stream_pool = ExecutionStreamPool::new(exec_streams);
@@ -599,7 +562,6 @@ impl CudaCopier {
     }
 
     fn clc_buff_size(_cuda_device: usize, mem_k: f64, buffs: usize, total_mem: usize) -> usize {
-
         let init_type = Int64;
 
         let max_elt_size = init_type.elt_size_in_bytes();
@@ -653,7 +615,6 @@ impl CudaCopier {
         // SAFETY: ownership and range obligations are forwarded to the chunk engine.
         unsafe { copy_d2h_to_ptr(&self.gate, source, self.buf_size, &self.bufs_pool_d2h, destination, destination_owner).await }
     }
-
 }
 
 #[cfg(test)]
@@ -662,7 +623,7 @@ mod mock_stateful_stage {
     use crate::runner::common::MockRunCtx;
     use crate::runner::oom_handler::test_types::{TestInput, TestOutput};
     use futures_util::FutureExt;
-    use thoosa_common::runner::sync_stage::{StageWithState};
+    use thoosa_common::runner::sync_stage::StageWithState;
 
     mockall::mock! {
         #[derive(Debug)]
@@ -678,24 +639,30 @@ mod mock_stateful_stage {
     }
 
     impl StageExecution for MockStatefulStage {
-    fn execute<'a, 'i: 'a, I, IFut>(self: Arc<Self>, input: IFut, execution: &'a ExecutionContext<'_>, ctx: &'a Self::Ctx) -> futures_util::future::BoxFuture<'a, Result<Self::Out, ThoError>>
-    where Self: 'a, Self::In<'i>: Sync, Self::Out: Send, I: Borrow<Self::In<'i>> + Send + 'a, IFut: Future<Output = Result<I, ThoError>> + Send + 'a {
-        Box::pin(execute_stateful(self, input, execution, ctx))
+        fn execute<'a, 'i: 'a, I, IFut>(self: Arc<Self>, input: IFut, execution: &'a ExecutionContext<'_>, ctx: &'a Self::Ctx) -> futures_util::future::BoxFuture<'a, Result<Self::Out, ThoError>>
+        where
+            Self: 'a,
+            Self::In<'i>: Sync,
+            Self::Out: Send,
+            I: Borrow<Self::In<'i>> + Send + 'a,
+            IFut: Future<Output = Result<I, ThoError>> + Send + 'a,
+        {
+            Box::pin(execute_stateful(self, input, execution, ctx))
+        }
     }
-}
 
     impl PrepareStage for MockStatefulStage {
         type S = usize;
         fn pre_run(&self, _: usize) -> BoxFuture<'_, Result<tokio::sync::MappedMutexGuard<'_, usize>, ThoError>> {
             async move { Ok(tokio::sync::MutexGuard::map(self.state().lock().await, |state| state)) }.boxed()
         }
-}
+    }
 
-impl StageWithState for MockStatefulStage {
+    impl StageWithState for MockStatefulStage {
         fn do_run_with_state<'f>(self: Arc<Self>, input: &Self::In<'f>, state: &mut usize, ctx: &MockRunCtx) -> Result<TestOutput, ThoError> {
             MockStatefulStage::execute(&self, input, state, ctx)
         }
-}
+    }
 
     pub struct MockStatefulStageBuilder {
         pub state: Arc<tokio::sync::Mutex<usize>>,
@@ -711,7 +678,9 @@ impl StageWithState for MockStatefulStage {
                 // Mutating before failure models a submission that has already
                 // begun using state when it errors or unwinds.
                 *state += 1;
-                if self.panics { std::panic::panic_any("stateful submission panic"); }
+                if self.panics {
+                    std::panic::panic_any("stateful submission panic");
+                }
                 self.result
             });
             Arc::new(stage)
@@ -729,10 +698,13 @@ mod tests {
         // partially completed host operation safe to replay.
         let mut synchronized = false;
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            run_cuda_stage::<()>(|| std::panic::panic_any("submission panic"), || {
-                synchronized = true;
-                Err(ThoError::oom())
-            })
+            run_cuda_stage::<()>(
+                || std::panic::panic_any("submission panic"),
+                || {
+                    synchronized = true;
+                    Err(ThoError::oom())
+                },
+            )
         }));
         assert!(synchronized);
         assert_eq!(result.unwrap_err().downcast_ref::<&str>(), Some(&"submission panic"));
@@ -765,9 +737,11 @@ mod tests {
                 for sync_fails in [false, true] {
                     let state = Arc::new(tokio::sync::Mutex::new(0));
                     let stage = MockStatefulStageBuilder {
-                        state: Arc::clone(&state), panics: outcome == 2,
+                        state: Arc::clone(&state),
+                        panics: outcome == 2,
                         result: if outcome == 1 { Err(ThoError::oom()) } else { Ok(TestOutput::new(7.)) },
-                    }.build();
+                    }
+                    .build();
                     let mut handle = MockHandleCtx::new();
                     handle.expect_sync_ctx().times(1).return_once(|| Ok(Box::new(())));
                     let during_sync = Arc::clone(&state);
@@ -788,7 +762,9 @@ mod tests {
                         } else {
                             ExecutionContext::Local(actor.as_ref()).run_stage(stage, input, 0, &ctx).await
                         }
-                    }).catch_unwind().await;
+                    })
+                    .catch_unwind()
+                    .await;
                     assert_eq!(*state.try_lock().expect("state must unlock after synchronization"), 1);
                     if sync_fails {
                         assert!(result.unwrap().unwrap_err().needs_cuda_recovery());
@@ -804,16 +780,21 @@ mod tests {
         }
     }
 
-    use crate::runner::oom_handler::{mock_runnable::MockRunnable, test_types::{TestInput, TestOutput}};
+    use crate::runner::oom_handler::{
+        mock_runnable::MockRunnable,
+        test_types::{TestInput, TestOutput},
+    };
 
     // Adapt the existing owned test data through the actual ConsumeData callback
     // contract, including a suspension during materialization.
     impl ConsumeData for TestInput {
-        fn protect(&self, _device: usize) -> thoosa_common::runner::residency::ResidencyLease { thoosa_common::runner::residency::ResidencyLease::default() }
+        fn protect(&self, _device: usize) -> thoosa_common::runner::residency::ResidencyLease {
+            thoosa_common::runner::residency::ResidencyLease::default()
+        }
 
         type O = Self;
 
-        fn consume<R: Send, F, P>(self, _to_device_idx: usize, run_ctx: P, do_run: F) -> impl Future<Output=ConsumeResult<Self::O, R>> + Send
+        fn consume<R: Send, F, P>(self, _to_device_idx: usize, run_ctx: P, do_run: F) -> impl Future<Output = ConsumeResult<Self::O, R>> + Send
         where
             F: FnOnce(Self, P) -> ConsumeResult<Self, R> + Send,
             P: RunCtx,
@@ -836,11 +817,16 @@ mod tests {
     }
     impl SyncCtx for MockStreamScope {}
     impl Drop for MockStreamScope {
-        fn drop(&mut self) { self.release(); }
+        fn drop(&mut self) {
+            self.release();
+        }
     }
 
     #[derive(Clone, Copy)]
-    enum SetupFailure { Handle, Stream }
+    enum SetupFailure {
+        Handle,
+        Stream,
+    }
 
     struct MockConsumeCallBuilder {
         panics: bool,
@@ -870,10 +856,14 @@ mod tests {
                 let alive = Arc::new(std::sync::atomic::AtomicBool::new(true));
                 let dropped = Arc::clone(&alive);
                 let mut guard = MockStreamScope::new();
-                guard.expect_release().times(1).return_once(move || { dropped.store(false, std::sync::atomic::Ordering::SeqCst); });
+                guard.expect_release().times(1).return_once(move || {
+                    dropped.store(false, std::sync::atomic::Ordering::SeqCst);
+                });
                 install.return_once(move || Ok(Box::new(guard)));
                 stage.expect_consume().times(1).in_sequence(&mut sequence).return_once(move |input, _| {
-                    if self.panics { std::panic::panic_any("consume panic"); }
+                    if self.panics {
+                        std::panic::panic_any("consume panic");
+                    }
                     match self.execution {
                         Ok(output) => ConsumeResult::Ok(output),
                         Err(error) => ConsumeResult::Failed { input, error },
@@ -901,13 +891,19 @@ mod tests {
             // Builder expectations require synchronization while the installed
             // stream guard is still alive, including the unwinding callback.
             let (stage, actor) = MockConsumeCallBuilder {
-                panics: true, execution: Ok(TestOutput::new(7.)), setup_failure: None,
+                panics: true,
+                execution: Ok(TestOutput::new(7.)),
+                setup_failure: None,
                 synchronization: if fatal_sync { Err(fatal_consume_error()) } else { Ok(()) },
-            }.build();
+            }
+            .build();
             let ctx = crate::runner::common::mock_run_ctx::build().finish();
             let result = std::panic::AssertUnwindSafe(ExecutionContext::Local(actor.as_ref()).consume_stage(stage, TestInput::new(1), 0, ctx)).catch_unwind().await;
-            if fatal_sync { assert!(result.unwrap().unwrap_err().needs_cuda_recovery()); }
-            else { assert_eq!(result.unwrap_err().downcast_ref::<&str>(), Some(&"consume panic")); }
+            if fatal_sync {
+                assert!(result.unwrap().unwrap_err().needs_cuda_recovery());
+            } else {
+                assert_eq!(result.unwrap_err().downcast_ref::<&str>(), Some(&"consume panic"));
+            }
         }
     }
 
@@ -984,7 +980,13 @@ mod tests {
                 let preserves_input = execution.is_err();
                 let fatal = execution.as_ref().err().is_some_and(ThoError::needs_cuda_recovery) || synchronization.as_ref().err().is_some_and(ThoError::needs_cuda_recovery);
                 let failed = execution.is_err() || synchronization.is_err();
-                let (stage, actor) = MockConsumeCallBuilder { panics: false, execution: execution.clone(), synchronization, setup_failure: None }.build();
+                let (stage, actor) = MockConsumeCallBuilder {
+                    panics: false,
+                    execution: execution.clone(),
+                    synchronization,
+                    setup_failure: None,
+                }
+                .build();
                 let input = TestInput::new(3);
                 let original_allocation = input.data.0.as_ptr();
                 let ctx = crate::runner::common::mock_run_ctx::build().with_device_idx(1).finish();
@@ -1016,7 +1018,13 @@ mod tests {
     #[tokio::test]
     async fn test_consume_setup_failure_preserves_owned_input() {
         for setup_failure in [SetupFailure::Handle, SetupFailure::Stream] {
-            let (stage, actor) = MockConsumeCallBuilder { panics: false, execution: Ok(TestOutput::new(7.)), synchronization: Ok(()), setup_failure: Some(setup_failure) }.build();
+            let (stage, actor) = MockConsumeCallBuilder {
+                panics: false,
+                execution: Ok(TestOutput::new(7.)),
+                synchronization: Ok(()),
+                setup_failure: Some(setup_failure),
+            }
+            .build();
             let input = TestInput::new(3);
             let original_allocation = input.data.0.as_ptr();
             let ctx = crate::runner::common::mock_run_ctx::build().with_device_idx(1).finish();
@@ -1030,7 +1038,10 @@ mod tests {
     #[tokio::test]
     async fn test_stage_entry_points_preserve_fatal_execution_and_sync_errors() {
         use crate::runner::common::cachable::DevicesWrap;
-        use crate::runner::oom_handler::{mock_runnable, test_types::{TestInput, TestOutput}};
+        use crate::runner::oom_handler::{
+            mock_runnable,
+            test_types::{TestInput, TestOutput},
+        };
         use thoosa_shared::traits::RangeSelector;
         let _ctx = crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
         for selected in [false, true] {
@@ -1067,7 +1078,11 @@ mod tests {
         let CudaLocalActorMessage::Copy { activity, .. } = request else { panic!("expected copy") };
         // Actor dispatch must admit this queued operation during draining.
         activity.check_operation(&gate).unwrap();
-        activity.run(async { CudaActivityScope::for_operation(&gate).unwrap(); }).await;
+        activity
+            .run(async {
+                CudaActivityScope::for_operation(&gate).unwrap();
+            })
+            .await;
         timeout(Duration::from_secs(2), idle).await.unwrap();
         gate.finish_pause(pause);
     }
@@ -1099,7 +1114,9 @@ mod tests {
         let healthy = CudaLocalActorHandle { gate: healthy_gate, sender: healthy_tx };
         let pause = failed_gate.request_pause(ThoError::CudaBeingRecovered).unwrap();
         for terminal in [false, true] {
-            if terminal { failed_gate.fail_pause(pause, None); }
+            if terminal {
+                failed_gate.fail_pause(pause, None);
+            }
             let src = || ThoTensor::new((), Tensor::f_from_slice(&[1f32]).unwrap()).unwrap();
             let error = failed.copy(src(), 1usize.into()).await.unwrap_err();
             assert_eq!(error.is_cuda_recovery_failed(), terminal);
@@ -1118,11 +1135,17 @@ impl LocalCudaExecution for CudaLocalActorHandle {
     async fn copy_batch_to_cpu(&self, sources: Vec<Tensor>) -> Result<Vec<Tensor>, ThoError> {
         let activity = CudaActivityScope::for_operation(&self.gate)?;
         let (respond_to, receive) = oneshot::channel();
-        self.sender.send(CudaLocalActorMessage::CopyBatchToCpu { sources: parking_lot::Mutex::new(sources), activity, respond_to }).await.context("batch copy: CUDA actor channel closed")?;
+        self.sender
+            .send(CudaLocalActorMessage::CopyBatchToCpu {
+                sources: parking_lot::Mutex::new(sources),
+                activity,
+                respond_to,
+            })
+            .await
+            .context("batch copy: CUDA actor channel closed")?;
         receive.await.context("batch copy: CUDA actor response channel closed")?
     }
     async fn init_handle_ctx(&self) -> Result<Box<dyn HandleCtx>, ThoError> {
-
         Ok(Box::new(self.acquire_exec_stream().await?))
     }
 }

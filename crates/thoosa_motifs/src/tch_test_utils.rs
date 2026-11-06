@@ -1,9 +1,9 @@
-use tch::Tensor;
-use rand::{Rng, RngExt, SeedableRng};
-use rand::prelude::{SliceRandom, StdRng};
 use log::debug;
-use thoosa_shared::test_utils::{gen_signal, TestSignalKind};
+use rand::prelude::{SliceRandom, StdRng};
+use rand::{Rng, RngExt, SeedableRng};
+use tch::Tensor;
 use thoosa_common::utils::to_vec_f32;
+use thoosa_shared::test_utils::{TestSignalKind, gen_signal};
 
 pub fn deterministic_noise(len: usize, seed: u32, amp: f32) -> Vec<f32> {
     let mut out = Vec::with_capacity(len);
@@ -52,14 +52,7 @@ pub fn resource_tensor_from_patterns(resource_len: usize, channels_patterns: &[V
         channels_signals.push(signal);
         channels_intervals.push(motif_intervals);
     }
-    let t = Tensor::f_stack(
-        channels_signals
-            .into_iter()
-            .map(|data| Tensor::f_from_slice(data.as_slice()))
-            .collect::<Result<Vec<Tensor>, _>>()?
-            .as_slice(),
-        0,
-    )?;
+    let t = Tensor::f_stack(channels_signals.into_iter().map(|data| Tensor::f_from_slice(data.as_slice())).collect::<Result<Vec<Tensor>, _>>()?.as_slice(), 0)?;
     Ok((t, channels_intervals))
 }
 
@@ -74,25 +67,24 @@ pub fn motifs_tensor_fixed(motif_len: usize, num_slices: usize, motif_kind: Test
             todo!()
         }
     };
-    for (v, motif_v) in motif.iter_mut().take(end).skip(start).zip(gen_signal(end-start, &motif_kind)) {
+    for (v, motif_v) in motif.iter_mut().take(end).skip(start).zip(gen_signal(end - start, &motif_kind)) {
         *v = motif_v;
     }
-    let slices = (0..num_slices)
-        .map(|_| Tensor::from_slice(motif.as_slice()))
-        .collect::<Vec<_>>();
+    let slices = (0..num_slices).map(|_| Tensor::from_slice(motif.as_slice())).collect::<Vec<_>>();
     Tensor::stack(slices.as_slice(), 0)
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct Interval { pub start: usize, pub end: usize }
+pub struct Interval {
+    pub start: usize,
+    pub end: usize,
+}
 
 impl From<Interval> for (f32, f32) {
     fn from(value: Interval) -> Self {
         (value.start as f32, value.end as f32)
     }
 }
-
-
 
 fn z_norm(x: &mut [f32]) {
     let n = x.len() as f32;
@@ -133,7 +125,9 @@ pub fn l2(a: &[f32], b: &[f32]) -> f32 {
 
 pub fn avg_pairwise_distance(xs: &[Vec<f32>]) -> f32 {
     let n = xs.len();
-    if n < 2 { return 0.0; }
+    if n < 2 {
+        return 0.0;
+    }
     let mut sum = 0.0;
     let mut cnt = 0usize;
     for i in 0..n {
@@ -147,7 +141,7 @@ pub fn avg_pairwise_distance(xs: &[Vec<f32>]) -> f32 {
 
 /// Generate N z-normalized motifs by adding smoothed noise scaled by `amp`.
 pub fn generate_motifs_with_amp(base: &[f32], n: usize, amp: f32, seed: Option<u64>) -> Vec<Vec<f32>> {
-    let mut rng = seed.map(|seed|StdRng::seed_from_u64(seed)).unwrap_or(rand::make_rng());
+    let mut rng = seed.map(|seed| StdRng::seed_from_u64(seed)).unwrap_or(rand::make_rng());
     let mut out = Vec::with_capacity(n);
     for _ in 0..n {
         let mut y = base.to_vec();
@@ -162,14 +156,7 @@ pub fn generate_motifs_with_amp(base: &[f32], n: usize, amp: f32, seed: Option<u
 }
 
 /// Find an amplitude whose average pairwise distance hits target within [d0, d1].
-pub fn generate_motifs_with_avg_distance(
-    base: &[f32],
-    n: usize,
-    d0: f32,
-    d1: f32,
-    seed: Option<u64>,
-    hight: f32,
-) -> (Vec<Vec<f32>>, f32 /*avg_d*/, f32 /*amp_used*/) {
+pub fn generate_motifs_with_avg_distance(base: &[f32], n: usize, d0: f32, d1: f32, seed: Option<u64>, hight: f32) -> (Vec<Vec<f32>>, f32 /*avg_d*/, f32 /*amp_used*/) {
     assert!(n >= 2 && d0 > 0.0 && d1 >= d0);
 
     // Bisection over distortion amplitude.
@@ -181,7 +168,9 @@ pub fn generate_motifs_with_avg_distance(
     for _ in 0..12 {
         let motifs = generate_motifs_with_amp(base, n, hi, seed);
         let d = avg_pairwise_distance(&motifs);
-        if d >= target { break; }
+        if d >= target {
+            break;
+        }
         hi *= 2.0;
     }
 
@@ -204,15 +193,9 @@ pub fn generate_motifs_with_avg_distance(
 
 ///channels_motif_kinds -  channels x [(how many times motif should appear in the sequence, motif length , MotifKind)]
 ///returns Tensor [channels x resource_len] + channels[ motifs[ intervals[Interval] ] ]
-pub fn resource_tensor(
-    resource_len:usize,
-    channels_motif_kinds:&[Vec<(usize, usize, TestSignalKind)>],
-    gap: usize, motif_ampl: f32,
-    add_to_prev_step: bool,
-    motif_from_zero: bool
-) -> anyhow::Result<(Tensor, Vec<Vec<Vec<Interval>>>)> {
-    use rand::rngs::StdRng;
+pub fn resource_tensor(resource_len: usize, channels_motif_kinds: &[Vec<(usize, usize, TestSignalKind)>], gap: usize, motif_ampl: f32, add_to_prev_step: bool, motif_from_zero: bool) -> anyhow::Result<(Tensor, Vec<Vec<Vec<Interval>>>)> {
     use log::debug;
+    use rand::rngs::StdRng;
     use thoosa_shared::test_utils::gen_signal;
     const STEP_SIGMA: f32 = 0.4;
 
@@ -238,7 +221,6 @@ pub fn resource_tensor(
             } else {
                 signal[idx] = normal_step(&mut rng, STEP_SIGMA);
             }
-
         }
 
         if total_repeats == 0 {
@@ -255,9 +237,7 @@ pub fn resource_tensor(
         let required_space = total_motif_space.checked_add(total_gap_space).ok_or_else(|| anyhow::anyhow!("motif layout exceeds addressable range"))?;
 
         if required_space > resource_len {
-            return Err(anyhow::anyhow!(format!(
-                "cannot place {total_repeats} motifs with min_gap={gap} into series len={resource_len}"
-            )));
+            return Err(anyhow::anyhow!(format!("cannot place {total_repeats} motifs with min_gap={gap} into series len={resource_len}")));
         }
 
         let available_motif_space = resource_len.checked_sub(total_gap_space).ok_or_else(|| anyhow::anyhow!("motif layout exceeds addressable range"))?;
@@ -281,8 +261,10 @@ pub fn resource_tensor(
                     (*repeats).max(2),
                     0.1,
                     0.11, //should be lower than in motif where it's 0.2-0.3, TODO move to params
-                    None, motif_ampl,
-                ).0
+                    None,
+                    motif_ampl,
+                )
+                .0
             };
             let mut motif_intervals = Vec::with_capacity(*repeats);
 
@@ -332,21 +314,12 @@ pub fn resource_tensor(
         channels_intervals.push(channel_motif_intervals);
     }
 
-    let t = Tensor::f_stack(
-        channels_signals
-            .into_iter()
-            .map(|data| Tensor::f_from_slice(data.as_slice()))
-            .collect::<Result<Vec<Tensor>, _>>()?
-            .as_slice(),
-        0,
-    )?;
+    let t = Tensor::f_stack(channels_signals.into_iter().map(|data| Tensor::f_from_slice(data.as_slice())).collect::<Result<Vec<Tensor>, _>>()?.as_slice(), 0)?;
 
     debug!("resource_tensor: t.size={:?} intervals={channels_intervals:?}", t.size());
 
     Ok((t, channels_intervals))
 }
-
-
 
 /// Generates a tensor [channels x resource_len] with 2 distinct motifs on i.i.d. Gaussian background.
 /// Motifs are normalized (zero-mean, unit L2) then scaled by `motif_amp`, and added onto background.
@@ -448,33 +421,21 @@ pub fn resource_tensor_two_easy_motifs(
         return Err(anyhow::anyhow!("need repeats0>0 or repeats1>0"));
     }
 
-    let total_motif_space = motif_len
-        .checked_mul(total_repeats)
-        .ok_or_else(|| anyhow::anyhow!("motif placement overflows usize"))?;
-    let total_gap_space = gap
-        .checked_mul(total_repeats.saturating_sub(1))
-        .ok_or_else(|| anyhow::anyhow!("motif gap sizing overflows usize"))?;
-    let required_space = total_motif_space
-        .checked_add(total_gap_space)
-        .ok_or_else(|| anyhow::anyhow!("motif layout exceeds addressable range"))?;
+    let total_motif_space = motif_len.checked_mul(total_repeats).ok_or_else(|| anyhow::anyhow!("motif placement overflows usize"))?;
+    let total_gap_space = gap.checked_mul(total_repeats.saturating_sub(1)).ok_or_else(|| anyhow::anyhow!("motif gap sizing overflows usize"))?;
+    let required_space = total_motif_space.checked_add(total_gap_space).ok_or_else(|| anyhow::anyhow!("motif layout exceeds addressable range"))?;
 
     if required_space > resource_len {
-        return Err(anyhow::anyhow!(format!(
-            "cannot place {total_repeats} motifs (L={motif_len}, gap={gap}) into len={resource_len}"
-        )));
+        return Err(anyhow::anyhow!(format!("cannot place {total_repeats} motifs (L={motif_len}, gap={gap}) into len={resource_len}")));
     }
 
     // Slotting: ensures non-overlap and min gap, but adds randomness within each slot.
-    let available_motif_space = resource_len
-        .checked_sub(total_gap_space)
-        .ok_or_else(|| anyhow::anyhow!("motif layout exceeds addressable range"))?;
+    let available_motif_space = resource_len.checked_sub(total_gap_space).ok_or_else(|| anyhow::anyhow!("motif layout exceeds addressable range"))?;
     let slot_len_base = available_motif_space / total_repeats;
     let slot_len_rem = available_motif_space % total_repeats;
 
     if motif_len > slot_len_base + usize::from(0 < slot_len_rem) {
-        return Err(anyhow::anyhow!(format!(
-            "motif_len={motif_len} too large for computed slots (slot_len_base={slot_len_base}, remainder={slot_len_rem})"
-        )));
+        return Err(anyhow::anyhow!(format!("motif_len={motif_len} too large for computed slots (slot_len_base={slot_len_base}, remainder={slot_len_rem})")));
     }
 
     // Motif plan: 0..repeats0 => motif 0, then repeats1 => motif 1, shuffle => interleave.
@@ -531,26 +492,22 @@ pub fn resource_tensor_two_easy_motifs(
         channels_intervals.push(vec![motif0_intervals, motif1_intervals]);
     }
 
-    let t = Tensor::f_stack(
-        &channels_signals
-            .into_iter()
-            .map(|data| Tensor::f_from_slice(data.as_slice()))
-            .collect::<Result<Vec<_>, _>>()?,
-        0,
-    )?;
+    let t = Tensor::f_stack(&channels_signals.into_iter().map(|data| Tensor::f_from_slice(data.as_slice())).collect::<Result<Vec<_>, _>>()?, 0)?;
 
     Ok((t, channels_intervals, (t0, t1)))
 }
 
 ///found motif's slices of same kind
 //TODO make slices a bit different
-pub fn motifs_tensor(motif_len:usize, num_slices: usize, motif_kind: TestSignalKind, d0: f32, d1: f32) -> Tensor {
-
-
+pub fn motifs_tensor(motif_len: usize, num_slices: usize, motif_kind: TestSignalKind, d0: f32, d1: f32) -> Tensor {
     let t = Tensor::stack(
-        generate_motifs_with_avg_distance(
-            gen_signal(motif_len, &motif_kind).as_slice(), num_slices, d0, d1, None, 10.0
-        ).0.into_iter().map(|motif| Tensor::from_slice(motif.as_slice())).collect::<Vec<_>>().as_slice(), 0
+        generate_motifs_with_avg_distance(gen_signal(motif_len, &motif_kind).as_slice(), num_slices, d0, d1, None, 10.0)
+            .0
+            .into_iter()
+            .map(|motif| Tensor::from_slice(motif.as_slice()))
+            .collect::<Vec<_>>()
+            .as_slice(),
+        0,
     );
 
     debug!("motifs_tensor: t.size={:?}", t.size());

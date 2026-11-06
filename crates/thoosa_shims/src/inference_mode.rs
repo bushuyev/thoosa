@@ -1,9 +1,4 @@
-use std::{
-    ffi::c_void,
-    marker::PhantomData,
-    ptr::NonNull,
-    rc::Rc,
-};
+use std::{ffi::c_void, marker::PhantomData, ptr::NonNull, rc::Rc};
 
 unsafe extern "C" {
     fn tho_inference_mode_new(enabled: i32) -> *mut c_void;
@@ -26,10 +21,7 @@ impl InferenceModeGuard {
         let ptr = NonNull::new(ptr).ok_or_else(|| crate::cuda_result::cuda_error_from_last_error("tho_inference_mode_new"))?;
 
         // Return native diagnostics instead of panicking at allocation failure.
-        Ok(Self {
-            ptr,
-            _not_send_sync: PhantomData,
-        })
+        Ok(Self { ptr, _not_send_sync: PhantomData })
     }
 
     pub fn enabled() -> Result<Self, thoosa_shared::ThoError> {

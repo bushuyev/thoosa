@@ -40,7 +40,6 @@ impl From<usize> for ThoDevice {
     }
 }
 
-
 impl ThoDevice {
     pub fn tho_device_idx(&self) -> usize {
         match &self.0 {
@@ -54,19 +53,14 @@ impl ThoDevice {
 
     pub fn gpu_ordinal(&self) -> Result<usize, thoosa_shared::ThoError> {
         match &self.0 {
-            Device::Cpu => {
-                Err(thoosa_shared::ThoError::new("CPU has no GPU ordinal"))
-            },
+            Device::Cpu => Err(thoosa_shared::ThoError::new("CPU has no GPU ordinal")),
             Device::Cuda(v) => Ok(*v),
             _ => {
                 unreachable!("device validated at construction")
             }
         }
     }
-
 }
-
-
 
 #[cfg(test)]
 mod tests {

@@ -1,7 +1,7 @@
 use crate::hyperparameter::{FieldName, Hyperparameter};
+use crate::make_combos;
 use crate::traits::Named;
 use crate::val::{GridValueSet, NamedRange, NamedVal};
-use crate::make_combos;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::path::PathBuf;
@@ -24,14 +24,8 @@ pub struct GridRunConfigs<CP, GP> {
 }
 
 impl<T: FieldName + 'static> GridRunConfigs<Vec<NamedVal<T>>, Vec<NamedRange<T>>> {
-    pub fn new(
-        const_config_source: ConstConfigs<Vec<NamedVal<T>>>,
-        grid_params: Vec<NamedRange<T>>,
-    ) -> Self {
-        Self {
-            const_config_source,
-            grid_params,
-        }
+    pub fn new(const_config_source: ConstConfigs<Vec<NamedVal<T>>>, grid_params: Vec<NamedRange<T>>) -> Self {
+        Self { const_config_source, grid_params }
     }
 
     pub fn const_params(&self) -> &Vec<NamedVal<T>> {
@@ -58,7 +52,8 @@ impl<T: FieldName + 'static> GridRunConfigs<Vec<NamedVal<T>>, Vec<NamedRange<T>>
     }
 
     pub fn grid_to_vals(&self) -> anyhow::Result<Vec<Vec<NamedVal<T>>>> {
-        Ok(self.grid_value_sets()?
+        Ok(self
+            .grid_value_sets()?
             .into_iter()
             .map(|value_set| {
                 let (values, opt_params) = value_set.into_parts();
@@ -72,17 +67,10 @@ impl<T: FieldName + 'static> GridRunConfigs<Vec<NamedVal<T>>, Vec<NamedRange<T>>
     where
         R: TryFrom<std::vec::IntoIter<NamedVal<T>>, Error = anyhow::Error>,
     {
-        Ok(self.grid_to_vals()?
+        Ok(self
+            .grid_to_vals()?
             .into_iter()
-            .map(|grid_vals| {
-                [
-                    self.const_config_source.const_params.as_slice(),
-                    grid_vals.as_slice(),
-                ]
-                .concat()
-                .into_iter()
-                .try_into()
-            })
+            .map(|grid_vals| [self.const_config_source.const_params.as_slice(), grid_vals.as_slice()].concat().into_iter().try_into())
             .collect::<anyhow::Result<Vec<_>>>()?)
     }
 }
@@ -98,15 +86,8 @@ pub struct OptRunConfigs<CP, GP, OP, T> {
 }
 
 impl<T: FieldName + 'static> OptRunConfigs<Vec<NamedVal<T>>, Vec<NamedRange<T>>, Vec<Hyperparameter<T>>, T> {
-    pub fn new(
-        grid_run_config_source: GridRunConfigs<Vec<NamedVal<T>>, Vec<NamedRange<T>>>,
-        opt_params: Vec<Hyperparameter<T>>,
-    ) -> Self {
-        Self {
-            grid_run_config_source,
-            opt_params,
-            _pd: PhantomData,
-        }
+    pub fn new(grid_run_config_source: GridRunConfigs<Vec<NamedVal<T>>, Vec<NamedRange<T>>>, opt_params: Vec<Hyperparameter<T>>) -> Self {
+        Self { grid_run_config_source, opt_params, _pd: PhantomData }
     }
 
     pub fn opt_params(&self) -> &Vec<Hyperparameter<T>> {
@@ -118,7 +99,8 @@ impl<T: FieldName + 'static> OptRunConfigs<Vec<NamedVal<T>>, Vec<NamedRange<T>>,
     }
 
     pub fn grid_to_vals_and_opt_params(&self) -> anyhow::Result<Vec<(Vec<NamedVal<T>>, Vec<Hyperparameter<T>>)>> {
-        Ok(self.grid_run_config_source
+        Ok(self
+            .grid_run_config_source
             .grid_value_sets()?
             .into_iter()
             .map(|value_set| {
@@ -138,21 +120,11 @@ impl<T: FieldName + 'static> OptRunConfigs<Vec<NamedVal<T>>, Vec<NamedRange<T>>,
     where
         R: TryFrom<std::vec::IntoIter<NamedVal<T>>, Error = anyhow::Error>,
     {
-        Ok(self.grid_run_config_source
+        Ok(self
+            .grid_run_config_source
             .grid_to_vals()?
             .into_iter()
-            .map(|grid_vals| {
-                [
-                    self.grid_run_config_source
-                        .const_config_source
-                        .const_params
-                        .as_slice(),
-                    grid_vals.as_slice(),
-                ]
-                .concat()
-                .into_iter()
-                .try_into()
-            })
+            .map(|grid_vals| [self.grid_run_config_source.const_config_source.const_params.as_slice(), grid_vals.as_slice()].concat().into_iter().try_into())
             .collect::<anyhow::Result<Vec<_>>>()?)
     }
 }
@@ -161,11 +133,11 @@ pub type RunConfigId = u32;
 pub type RunId = u32;
 
 impl Named for RunConfigId {}
-impl Named for PathBuf {}//TODO it's for LoadNet - add type for NetId
+impl Named for PathBuf {} //TODO it's for LoadNet - add type for NetId
 
 pub trait RunConfig: Debug {
     fn set_id(&mut self, id: RunConfigId);
-    fn get_id(&self) ->RunConfigId;
+    fn get_id(&self) -> RunConfigId;
 
-    fn type_name() -> &'static str;//TODO rename
+    fn type_name() -> &'static str; //TODO rename
 }

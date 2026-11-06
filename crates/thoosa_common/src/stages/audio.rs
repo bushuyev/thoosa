@@ -1,32 +1,18 @@
-use thoosa_common::tch_error::tch_result;
 use log::debug;
 use std::cmp::Ordering;
 use tch::{Device, Kind, TchError, Tensor};
+use thoosa_common::tch_error::tch_result;
 
 use thoosa_shared::{ThoError, panic_to_err};
 
-pub const LOG_EPS:f64 = 1e-6;
+pub const LOG_EPS: f64 = 1e-6;
 
-
-pub fn build_mel_filterbank(
-    sample_rate: f64,
-    n_fft: i64,
-    n_mels: i64,
-    f_min: f64,
-    f_max: f64,
-    device: Device,
-) -> Result<Tensor, ThoError> {
+pub fn build_mel_filterbank(sample_rate: f64, n_fft: i64, n_mels: i64, f_min: f64, f_max: f64, device: Device) -> Result<Tensor, ThoError> {
     let freq_bins = n_fft / 2 + 1;
-    let f_max = if f_max > 0.0 {
-        f_max
-    } else {
-        sample_rate / 2.0
-    };
+    let f_max = if f_max > 0.0 { f_max } else { sample_rate / 2.0 };
 
     if f_min < 0.0 || f_max <= f_min || f_max > sample_rate / 2.0 {
-        return Err(ThoError::new(format!(
-            "invalid mel frequency range: f_min={f_min}, f_max={f_max}, sample_rate={sample_rate}"
-        )));
+        return Err(ThoError::new(format!("invalid mel frequency range: f_min={f_min}, f_max={f_max}, sample_rate={sample_rate}")));
     }
 
     let mel_min = hz_to_mel(f_min);
@@ -67,9 +53,7 @@ pub fn build_mel_filterbank(
         }
     }
 
-    Ok(tch_result(Tensor::from_slice(&fb)
-        .f_view([n_mels, freq_bins]))?
-        .to_device(device))
+    Ok(tch_result(Tensor::from_slice(&fb).f_view([n_mels, freq_bins]))?.to_device(device))
 }
 
 fn hz_to_mel(hz: f64) -> f64 {
@@ -104,21 +88,14 @@ fn mel_to_hz(mel: f64) -> f64 {
 ///
 /// do not necessarily mean the same bucket semantically. They are both
 /// bucket 5 inside their own channel namespace.
-pub fn assign_lsh_buckets_per_channel(
-    patches: &Tensor,
-    n_buckets: i64,
-) -> Result<Vec<Vec<usize>>, ThoError> {
+pub fn assign_lsh_buckets_per_channel(patches: &Tensor, n_buckets: i64) -> Result<Vec<Vec<usize>>, ThoError> {
     if n_buckets <= 0 {
-        return Err(ThoError::new(format!(
-            "n_buckets must be positive, got {n_buckets}"
-        )));
+        return Err(ThoError::new(format!("n_buckets must be positive, got {n_buckets}")));
     }
 
     let size = patches.size();
     if size.len() != 4 {
-        return Err(ThoError::new(format!(
-            "expected [channels, patches, n_mels, patch_frames], got {size:?}"
-        )));
+        return Err(ThoError::new(format!("expected [channels, patches, n_mels, patch_frames], got {size:?}")));
     }
 
     let channels = size[0];
@@ -126,7 +103,6 @@ pub fn assign_lsh_buckets_per_channel(
 
     assert!(channels > 0, "unexpected channels={channels}");
     assert!(n_patches > 0, "unexpected n_patches={n_patches}");
-
 
     let n_bits = hash_bits_for_bucket_count(n_buckets);
 
@@ -136,29 +112,19 @@ pub fn assign_lsh_buckets_per_channel(
 /// Same as `assign_lsh_buckets_per_channel`, but lets you control the hash size.
 ///
 /// Reasonable values: 12..32.
-pub fn assign_lsh_buckets_per_channel_with_bits(
-    patches: &Tensor,
-    n_buckets: i64,
-    n_bits: i64,
-) -> Result<Vec<Vec<usize>>, ThoError> {
+pub fn assign_lsh_buckets_per_channel_with_bits(patches: &Tensor, n_buckets: i64, n_bits: i64) -> Result<Vec<Vec<usize>>, ThoError> {
     debug!("assign_lsh_buckets_per_channel_with_bits: patches={patches:?} n_buckets={n_buckets} n_bits={n_bits}");
     if n_buckets <= 0 {
-        return Err(ThoError::new(format!(
-            "n_buckets must be positive, got {n_buckets}"
-        )));
+        return Err(ThoError::new(format!("n_buckets must be positive, got {n_buckets}")));
     }
 
     if n_bits <= 0 || n_bits > 63 {
-        return Err(ThoError::new(format!(
-            "n_bits must be in 1..=63, got {n_bits}"
-        )));
+        return Err(ThoError::new(format!("n_bits must be in 1..=63, got {n_bits}")));
     }
 
     let size = patches.size();
     if size.len() != 4 {
-        return Err(ThoError::new(format!(
-            "expected [channels, patches, n_mels, patch_frames], got {size:?}"
-        )));
+        return Err(ThoError::new(format!("expected [channels, patches, n_mels, patch_frames], got {size:?}")));
     }
 
     let channels = size[0];
@@ -178,9 +144,7 @@ pub fn assign_lsh_buckets_per_channel_with_bits(
     // [C, P, M, T] -> [C, P, M * T]
     // ---------------------------------------------------------------------
     debug!("patches.size={:?} channels={channels}, n_patches={n_patches}, input_dim={input_dim}", patches.size());
-    let x = tch_result(tch_result(patches
-        .f_to_kind(Kind::Float))?
-        .f_reshape([channels, n_patches, input_dim]))?;
+    let x = tch_result(tch_result(patches.f_to_kind(Kind::Float))?.f_reshape([channels, n_patches, input_dim]))?;
 
     // ---------------------------------------------------------------------
     // Per-patch normalization.
@@ -192,9 +156,7 @@ pub fn assign_lsh_buckets_per_channel_with_bits(
     let mean = tch_result(x.f_mean_dim(&[2i64][..], true, Kind::Float))?;
     let centered = tch_result(x.f_sub(&mean))?;
 
-    let var = panic_to_err!(centered
-        .f_pow_tensor_scalar(2.0)?
-        .f_mean_dim(&[2i64][..], true, Kind::Float))?;
+    let var = panic_to_err!(centered.f_pow_tensor_scalar(2.0)?.f_mean_dim(&[2i64][..], true, Kind::Float))?;
 
     let std = tch_result(tch_result(var.f_add_scalar(1e-6))?.f_sqrt())?;
     let x_norm = tch_result(centered.f_div(&std))?;
@@ -216,11 +178,7 @@ pub fn assign_lsh_buckets_per_channel_with_bits(
     // ---------------------------------------------------------------------
     let scores = tch_result(x_norm.f_matmul(&proj))?;
 
-    let bits = tch_result(tch_result(tch_result(scores
-        .f_gt(0.0))?
-        .f_to_kind(Kind::Int64))?
-        .to_device(Device::Cpu)
-        .f_contiguous())?;
+    let bits = tch_result(tch_result(tch_result(scores.f_gt(0.0))?.f_to_kind(Kind::Int64))?.to_device(Device::Cpu).f_contiguous())?;
 
     debug!("assign_lsh_buckets_per_channel_with_bits: bits={bits:?}");
     let bits_vec = tch_result(Vec::<i64>::try_from(&tch_result(tch_result(bits.f_reshape([-1]))?.f_contiguous())?))?;
@@ -245,7 +203,6 @@ pub fn assign_lsh_buckets_per_channel_with_bits(
     }
     debug!("assign_lsh_buckets_per_channel_with_bits: bucket_ids={channels_bucket_ids:?}, channels={channels}, n_patches={n_patches}");
 
-
     Ok(channels_bucket_ids)
 }
 
@@ -262,28 +219,17 @@ fn hash_bits_for_bucket_count(n_buckets: i64) -> i64 {
     (bits + 4).clamp(8, 32)
 }
 
-fn deterministic_projection(
-    input_dim: i64,
-    n_bits: i64,
-    device: Device,
-) -> Result<Tensor, TchError> {
-    let i = Tensor::arange(input_dim, (Kind::Float, device))
-        .f_view([input_dim, 1])?;
+fn deterministic_projection(input_dim: i64, n_bits: i64, device: Device) -> Result<Tensor, TchError> {
+    let i = Tensor::arange(input_dim, (Kind::Float, device)).f_view([input_dim, 1])?;
 
-    let j = Tensor::arange(n_bits, (Kind::Float, device))
-        .f_view([1, n_bits])?;
+    let j = Tensor::arange(n_bits, (Kind::Float, device)).f_view([1, n_bits])?;
 
     // Cheap deterministic pseudo-random-ish values in [-1, 1].
     //
     // Shape:
     //
     //     [input_dim, n_bits]
-    let proj = i
-        .f_mul_scalar(12.9898)?
-        .f_add(&j.f_mul_scalar(78.233)?)?
-        .f_sin()?
-        .f_mul_scalar(43_758.5453)?
-        .f_sin()?;
+    let proj = i.f_mul_scalar(12.9898)?.f_add(&j.f_mul_scalar(78.233)?)?.f_sin()?.f_mul_scalar(43_758.5453)?.f_sin()?;
 
     Ok(proj)
 }
@@ -309,7 +255,6 @@ fn hash_bit_row_with_channel_salt(bits: &[i64], channel: u64) -> u64 {
     h
 }
 
-
 #[derive(Debug, Clone)]
 pub struct FreqPeak {
     pub hz: f32,
@@ -320,11 +265,7 @@ pub struct FreqPeak {
 /// `audio`: Tensor of shape [channels, audio_data]
 /// `sample_rate`: e.g. 48_000.0
 /// `n_peaks`: number of strongest frequencies per channel
-pub fn strongest_freqs_per_channel(
-    audio: &Tensor,
-    sample_rate: f32,
-    n_peaks: i64,
-) -> Result<Vec<Vec<FreqPeak>>, TchError> {
+pub fn strongest_freqs_per_channel(audio: &Tensor, sample_rate: f32, n_peaks: i64) -> Result<Vec<Vec<FreqPeak>>, TchError> {
     let size = audio.size();
     assert_eq!(size.len(), 2, "expected [channels, audio_data]");
 
@@ -379,11 +320,7 @@ pub fn strongest_freqs_per_channel(
 
             let hz = fft_bin as f32 * sample_rate / audio_len as f32;
 
-            ch_peaks.push(FreqPeak {
-                hz,
-                magnitude,
-                bin: fft_bin,
-            });
+            ch_peaks.push(FreqPeak { hz, magnitude, bin: fft_bin });
         }
 
         result.push(ch_peaks);
@@ -392,11 +329,7 @@ pub fn strongest_freqs_per_channel(
     Ok(result)
 }
 
-pub fn strongest_freqs_per_channel_windowed(
-    audio: &Tensor,
-    sample_rate: f32,
-    n_peaks: i64,
-) -> Result<Vec<Vec<FreqPeak>>, TchError> {
+pub fn strongest_freqs_per_channel_windowed(audio: &Tensor, sample_rate: f32, n_peaks: i64) -> Result<Vec<Vec<FreqPeak>>, TchError> {
     let size = audio.size();
     assert_eq!(size.len(), 2);
 
@@ -471,22 +404,10 @@ pub fn strongest_freqs_per_channel_windowed_nms(
     let window = Tensor::hann_window(audio_len, (Kind::Float, audio.device()));
     let audio = audio.f_mul(&window)?;
 
-    strongest_freqs_per_channel_nms(
-        &audio,
-        sample_rate,
-        n_peaks,
-        min_separation_hz,
-        min_relative_magnitude,
-    )
+    strongest_freqs_per_channel_nms(&audio, sample_rate, n_peaks, min_separation_hz, min_relative_magnitude)
 }
 
-pub fn strongest_freqs_per_channel_nms(
-    audio: &Tensor,
-    sample_rate: f32,
-    n_peaks: usize,
-    min_separation_hz: f32,
-    min_relative_magnitude: f32,
-) -> Result<Vec<Vec<FreqPeak>>, TchError> {
+pub fn strongest_freqs_per_channel_nms(audio: &Tensor, sample_rate: f32, n_peaks: usize, min_separation_hz: f32, min_relative_magnitude: f32) -> Result<Vec<Vec<FreqPeak>>, TchError> {
     let size = audio.size();
     assert_eq!(size.len(), 2, "expected [channels, audio_data]");
 
@@ -497,14 +418,9 @@ pub fn strongest_freqs_per_channel_nms(
 
     let suppression_radius_bins = ((min_separation_hz / bin_hz).ceil() as usize).max(1);
 
-    let spectrum = audio
-        .to_kind(Kind::Float)
-        .f_fft_rfft(None, -1, "backward")?;
+    let spectrum = audio.to_kind(Kind::Float).f_fft_rfft(None, -1, "backward")?;
 
-    let magnitude = spectrum
-        .f_abs()?
-        .to_device(Device::Cpu)
-        .to_kind(Kind::Float);
+    let magnitude = spectrum.f_abs()?.to_device(Device::Cpu).to_kind(Kind::Float);
 
     let bins = magnitude.size()[1] as usize;
 
@@ -517,20 +433,13 @@ pub fn strongest_freqs_per_channel_nms(
         let m = &flat[offset..offset + bins];
 
         // Ignore DC bin 0.
-        let strongest = m
-            .iter()
-            .skip(1)
-            .copied()
-            .filter(|x| x.is_finite())
-            .fold(0.0_f32, f32::max);
+        let strongest = m.iter().skip(1).copied().filter(|x| x.is_finite()).fold(0.0_f32, f32::max);
 
         let min_abs_magnitude = strongest * min_relative_magnitude;
 
         let mut candidates: Vec<usize> = (1..bins).collect();
 
-        candidates.sort_unstable_by(|&a, &b| {
-            m[b].partial_cmp(&m[a]).unwrap_or(Ordering::Equal)
-        });
+        candidates.sort_unstable_by(|&a, &b| m[b].partial_cmp(&m[a]).unwrap_or(Ordering::Equal));
 
         let mut chosen_bins: Vec<usize> = Vec::with_capacity(n_peaks);
 
@@ -548,11 +457,7 @@ pub fn strongest_freqs_per_channel_nms(
             // Keep only local maxima.
             //
             // This removes ordinary shoulders of a peak.
-            let is_local_max = if bin + 1 < bins {
-                m[bin] >= m[bin - 1] && m[bin] >= m[bin + 1]
-            } else {
-                m[bin] >= m[bin - 1]
-            };
+            let is_local_max = if bin + 1 < bins { m[bin] >= m[bin - 1] && m[bin] >= m[bin + 1] } else { m[bin] >= m[bin - 1] };
 
             if !is_local_max {
                 continue;
@@ -580,25 +485,16 @@ pub fn strongest_freqs_per_channel_nms(
             let interpolated_bin = parabolic_interpolated_bin(m, bin);
             let hz = interpolated_bin * bin_hz;
 
-            peaks.push(FreqPeak {
-                hz,
-                magnitude: m[bin],
-                bin: bin as i64,
-            });
+            peaks.push(FreqPeak { hz, magnitude: m[bin], bin: bin as i64 });
         }
 
-        peaks.sort_by(|a, b| {
-            b.magnitude
-                .partial_cmp(&a.magnitude)
-                .unwrap_or(Ordering::Equal)
-        });
+        peaks.sort_by(|a, b| b.magnitude.partial_cmp(&a.magnitude).unwrap_or(Ordering::Equal));
 
         result.push(peaks);
     }
 
     Ok(result)
 }
-
 
 #[derive(Debug, Clone, Copy)]
 pub enum BandAggregation {
@@ -629,14 +525,7 @@ pub enum BandAggregation {
 /// ...
 /// band 15 = 15000..16000 Hz
 /// ```
-pub fn fft_band_amplitudes(
-    audio: &Tensor,
-    sample_rate: f64,
-    step_hz: f64,
-    aggregation: BandAggregation,
-    apply_hann_window: bool,
-    remove_dc_offset: bool,
-) -> Result<Tensor, TchError> {
+pub fn fft_band_amplitudes(audio: &Tensor, sample_rate: f64, step_hz: f64, aggregation: BandAggregation, apply_hann_window: bool, remove_dc_offset: bool) -> Result<Tensor, TchError> {
     let size = audio.size();
     assert_eq!(size.len(), 2, "expected [channels, audio_data]");
 
@@ -683,8 +572,7 @@ pub fn fft_band_amplitudes(
     // bin_hz = bin_index * sample_rate / audio_len
     //
     // Shape: [rfft_bins]
-    let bin_freqs = Tensor::arange(rfft_bins, (Kind::Float, device))
-        * (sample_rate / audio_len as f64);
+    let bin_freqs = Tensor::arange(rfft_bins, (Kind::Float, device)) * (sample_rate / audio_len as f64);
 
     // Map frequency -> band index.
     //
@@ -695,14 +583,10 @@ pub fn fft_band_amplitudes(
     // 15000 Hz  -> band 15, if step_hz = 1000
     //
     // Shape: [rfft_bins]
-    let band_idx_1d = (bin_freqs / step_hz)
-        .to_kind(Kind::Int64)
-        .f_clamp_max(band_count - 1)?;
+    let band_idx_1d = (bin_freqs / step_hz).to_kind(Kind::Int64).f_clamp_max(band_count - 1)?;
 
     // Expand to [channels, rfft_bins], because scatter_add needs same shape as src.
-    let band_idx_2d = band_idx_1d
-        .f_unsqueeze(0)?
-        .f_expand([channels, rfft_bins], true)?;
+    let band_idx_2d = band_idx_1d.f_unsqueeze(0)?.f_expand([channels, rfft_bins], true)?;
 
     // Aggregate magnitudes into fixed frequency bands.
     //
@@ -718,19 +602,12 @@ pub fn fft_band_amplitudes(
             // Count how many FFT bins landed in each frequency band.
             //
             // Shape: [band_count]
-            let counts = Tensor::zeros([band_count], (Kind::Float, device))
-                .f_scatter_add(
-                    0,
-                    &band_idx_1d,
-                    &Tensor::ones([rfft_bins], (Kind::Float, device)),
-                )?
-                .f_clamp_min(1.0)?;
+            let counts = Tensor::zeros([band_count], (Kind::Float, device)).f_scatter_add(0, &band_idx_1d, &Tensor::ones([rfft_bins], (Kind::Float, device)))?.f_clamp_min(1.0)?;
 
             Ok(summed / counts.f_unsqueeze(0)?)
         }
     }
 }
-
 
 /// Input:
 ///   audio: [channels, slices, audio_data]
@@ -740,14 +617,7 @@ pub fn fft_band_amplitudes(
 ///
 /// This is equivalent to applying the old `[channels, audio_data] -> [channels, bands]`
 /// function independently to every slice.
-pub fn fft_band_amplitudes_sliced(
-    audio: &Tensor,
-    sample_rate: f64,
-    step_hz: f64,
-    aggregation: BandAggregation,
-    apply_hann_window: bool,
-    remove_dc_offset: bool,
-) -> Result<Tensor, ThoError> {
+pub fn fft_band_amplitudes_sliced(audio: &Tensor, sample_rate: f64, step_hz: f64, aggregation: BandAggregation, apply_hann_window: bool, remove_dc_offset: bool) -> Result<Tensor, ThoError> {
     let size = audio.size();
     assert_eq!(size.len(), 3, "expected [channels, slices, audio_data]");
 
@@ -814,25 +684,19 @@ pub fn fft_band_amplitudes_sliced(
     // bin_freq = bin_index * sample_rate / audio_len
     //
     // Shape: [rfft_bins]
-    let bin_freqs = tch_result(tch_result(Tensor::f_arange(rfft_bins, (Kind::Float, device)))?
-        .f_mul_scalar(sample_rate / audio_len as f64))?;
+    let bin_freqs = tch_result(tch_result(Tensor::f_arange(rfft_bins, (Kind::Float, device)))?.f_mul_scalar(sample_rate / audio_len as f64))?;
 
     // Map each FFT bin to a fixed frequency band.
     //
     // Shape: [rfft_bins]
-    let band_idx_1d = tch_result(tch_result(tch_result(bin_freqs
-        .f_div_scalar(step_hz))?
-        .f_to_kind(Kind::Int64))?
-        .f_clamp_max(band_count - 1))?; //Drop for Scalar->tch::error::TchError::unwrap
+    let band_idx_1d = tch_result(tch_result(tch_result(bin_freqs.f_div_scalar(step_hz))?.f_to_kind(Kind::Int64))?.f_clamp_max(band_count - 1))?; //Drop for Scalar->tch::error::TchError::unwrap
 
     // Expand band indices to match magnitude shape.
     //
     // [rfft_bins]
     //   -> [1, 1, rfft_bins]
     //   -> [channels, slices, rfft_bins]
-    let band_idx_3d = tch_result(tch_result(band_idx_1d
-        .f_view([1, 1, rfft_bins]))?
-        .f_expand([channels, slices, rfft_bins], true))?;
+    let band_idx_3d = tch_result(tch_result(band_idx_1d.f_view([1, 1, rfft_bins]))?.f_expand([channels, slices, rfft_bins], true))?;
 
     // Aggregate into bands along dim=2.
     //
@@ -852,9 +716,7 @@ pub fn fft_band_amplitudes_sliced(
             // counts: [band_count]
             let ones = tch_result(Tensor::f_ones([rfft_bins], (Kind::Float, device)))?;
 
-            let counts = tch_result(tch_result(tch_result(Tensor::f_zeros([band_count], (Kind::Float, device)))?
-                .f_scatter_add(0, &band_idx_1d, &ones))?
-                .f_clamp_min(1.0))?;
+            let counts = tch_result(tch_result(tch_result(Tensor::f_zeros([band_count], (Kind::Float, device)))?.f_scatter_add(0, &band_idx_1d, &ones))?.f_clamp_min(1.0))?;
 
             // [band_count] -> [1, 1, band_count]
             let counts = tch_result(counts.f_view([1, 1, band_count]))?;
@@ -871,12 +733,7 @@ pub fn fft_band_amplitudes_sliced(
 /// Number of buckets will be `2^num_bits`.
 ///
 /// planes shape: [data_dim, num_bits]
-pub fn make_lsh_planes(
-    data_dim: i64,
-    num_bits: i64,
-    kind: Kind,
-    device: Device,
-) -> Result<Tensor, ThoError> {
+pub fn make_lsh_planes(data_dim: i64, num_bits: i64, kind: Kind, device: Device) -> Result<Tensor, ThoError> {
     if data_dim <= 0 {
         return Err(ThoError::new("data_dim must be > 0"));
     }
@@ -887,12 +744,9 @@ pub fn make_lsh_planes(
     Ok(tch_result(Tensor::f_randn(&[data_dim, num_bits], (kind, device)))?)
 }
 
-
 fn ceil_log2_i64(x: i64) -> Result<i64, TchError> {
     if x <= 1 {
-        return Err(TchError::Kind(
-            "number of buckets must be > 1".into(),
-        ));
+        return Err(TchError::Kind("number of buckets must be > 1".into()));
     }
 
     let mut bits = 0_i64;
@@ -902,9 +756,7 @@ fn ceil_log2_i64(x: i64) -> Result<i64, TchError> {
         bits += 1;
 
         if bits > 30 {
-            return Err(TchError::Kind(
-                "too many buckets requested; refusing num_bits > 30".into(),
-            ));
+            return Err(TchError::Kind("too many buckets requested; refusing num_bits > 30".into()));
         }
 
         value <<= 1;
@@ -930,20 +782,13 @@ pub struct LshPlanes {
 /// wanted_buckets = 1000
 /// num_bits = 10
 /// raw_buckets = 1024
-pub fn make_lsh_planes_for_buckets(
-    data_dim: i64,
-    wanted_buckets: i64,
-    kind: Kind,
-    device: Device,
-) -> Result<LshPlanes, TchError> {
+pub fn make_lsh_planes_for_buckets(data_dim: i64, wanted_buckets: i64, kind: Kind, device: Device) -> Result<LshPlanes, TchError> {
     if data_dim <= 0 {
         return Err(TchError::Kind("data_dim must be > 0".into()));
     }
 
     if wanted_buckets <= 1 {
-        return Err(TchError::Kind(
-            "wanted_buckets must be > 1".into(),
-        ));
+        return Err(TchError::Kind("wanted_buckets must be > 1".into()));
     }
 
     let num_bits = ceil_log2_i64(wanted_buckets)?;
@@ -951,12 +796,7 @@ pub fn make_lsh_planes_for_buckets(
 
     let planes = Tensor::f_randn(&[data_dim, num_bits], (kind, device))?;
 
-    Ok(LshPlanes {
-        planes,
-        num_bits,
-        raw_buckets,
-        wanted_buckets,
-    })
+    Ok(LshPlanes { planes, num_bits, raw_buckets, wanted_buckets })
 }
 
 /// Convert input `[M, N, data]` into `[M, N, buckets]` using LSH.
@@ -967,25 +807,15 @@ pub fn make_lsh_planes_for_buckets(
 /// `x` shape:      [M, N, data]
 /// `planes` shape: [data, num_bits]
 /// output shape:   [M, N, 2^num_bits]
-pub fn lsh_bucket_one_hot_3d(
-    x: &Tensor,
-    planes: &Tensor,
-    normalize: bool,
-) -> Result<Tensor, ThoError> {
+pub fn lsh_bucket_one_hot_3d(x: &Tensor, planes: &Tensor, normalize: bool) -> Result<Tensor, ThoError> {
     let x_size = x.size();
     if x_size.len() != 3 {
-        return Err(ThoError::new(format!(
-            "expected x shape [M, N, data], got {:?}",
-            x_size
-        )));
+        return Err(ThoError::new(format!("expected x shape [M, N, data], got {:?}", x_size)));
     }
 
     let p_size = planes.size();
     if p_size.len() != 2 {
-        return Err(ThoError::new(format!(
-            "expected planes shape [data, num_bits], got {:?}",
-            p_size
-        )));
+        return Err(ThoError::new(format!("expected planes shape [data, num_bits], got {:?}", p_size)));
     }
 
     let m = x_size[0];
@@ -1013,11 +843,7 @@ pub fn lsh_bucket_one_hot_3d(
         let eps = 1e-12;
 
         // norm = sqrt(sum(x^2, dim=-1, keepdim=true))
-        let norm = tch_result(tch_result(tch_result(tch_result(x_flat
-            .f_pow_tensor_scalar(2.0))?
-            .f_sum_dim_intlist(&[-1i64][..], true, x.kind()))?
-            .f_clamp_min(eps))?
-            .f_sqrt())?;
+        let norm = tch_result(tch_result(tch_result(tch_result(x_flat.f_pow_tensor_scalar(2.0))?.f_sum_dim_intlist(&[-1i64][..], true, x.kind()))?.f_clamp_min(eps))?.f_sqrt())?;
 
         tch_result(x_flat.f_div(&norm))?
     } else {
@@ -1028,9 +854,7 @@ pub fn lsh_bucket_one_hot_3d(
     let projections = tch_result(x_flat.f_matmul(planes))?;
 
     // Sign bits: [M * N, num_bits], values 0/1.
-    let bits = tch_result(tch_result(projections
-        .f_ge(0.0))?
-        .f_to_kind(Kind::Int64))?;
+    let bits = tch_result(tch_result(projections.f_ge(0.0))?.f_to_kind(Kind::Int64))?;
 
     // Convert bit-vector to integer bucket id.
     //
@@ -1039,44 +863,27 @@ pub fn lsh_bucket_one_hot_3d(
     // id = b0*1 + b1*2 + b2*4 + b3*8
     let weights_vec: Vec<i64> = (0..num_bits).map(|i| 1_i64 << i).collect();
 
-    let weights = tch_result(tch_result(tch_result(Tensor::f_from_slice(&weights_vec))?
-        .f_to_device(x.device()))?
-        .f_view([1, num_bits]))?;
+    let weights = tch_result(tch_result(tch_result(Tensor::f_from_slice(&weights_vec))?.f_to_device(x.device()))?.f_view([1, num_bits]))?;
 
     // [M * N]
-    let bucket_ids = tch_result(tch_result(bits
-        .f_mul(&weights))?
-        .f_sum_dim_intlist(&[-1i64][..], false, Kind::Int64))?;
+    let bucket_ids = tch_result(tch_result(bits.f_mul(&weights))?.f_sum_dim_intlist(&[-1i64][..], false, Kind::Int64))?;
 
     // [M * N, buckets]
-    let one_hot = tch_result(tch_result(bucket_ids
-        .f_one_hot(num_buckets))?
-        .f_to_kind(x.kind()))?;
+    let one_hot = tch_result(tch_result(bucket_ids.f_one_hot(num_buckets))?.f_to_kind(x.kind()))?;
 
     // [M, N, buckets]
     Ok(tch_result(one_hot.f_view([m, n, num_buckets]))?)
 }
 
-
-pub fn lsh_bucket_one_hot_3d_exact_buckets(
-    x: &Tensor,
-    lsh: &LshPlanes,
-    normalize: bool,
-) -> Result<Tensor, TchError> {
+pub fn lsh_bucket_one_hot_3d_exact_buckets(x: &Tensor, lsh: &LshPlanes, normalize: bool) -> Result<Tensor, TchError> {
     let x_size = x.size();
     if x_size.len() != 3 {
-        return Err(TchError::Kind(format!(
-            "expected x shape [M, N, data], got {:?}",
-            x_size
-        )));
+        return Err(TchError::Kind(format!("expected x shape [M, N, data], got {:?}", x_size)));
     }
 
     let p_size = lsh.planes.size();
     if p_size.len() != 2 {
-        return Err(TchError::Kind(format!(
-            "expected planes shape [data, num_bits], got {:?}",
-            p_size
-        )));
+        return Err(TchError::Kind(format!("expected planes shape [data, num_bits], got {:?}", p_size)));
     }
 
     let m = x_size[0];
@@ -1087,17 +894,11 @@ pub fn lsh_bucket_one_hot_3d_exact_buckets(
     let num_bits = p_size[1];
 
     if data_dim != planes_data_dim {
-        return Err(TchError::Kind(format!(
-            "x data dim {} does not match planes data dim {}",
-            data_dim, planes_data_dim
-        )));
+        return Err(TchError::Kind(format!("x data dim {} does not match planes data dim {}", data_dim, planes_data_dim)));
     }
 
     if num_bits != lsh.num_bits {
-        return Err(TchError::Kind(format!(
-            "planes num_bits {} does not match lsh.num_bits {}",
-            num_bits, lsh.num_bits
-        )));
+        return Err(TchError::Kind(format!("planes num_bits {} does not match lsh.num_bits {}", num_bits, lsh.num_bits)));
     }
 
     let x_flat = x.f_view([m * n, data_dim])?;
@@ -1105,11 +906,7 @@ pub fn lsh_bucket_one_hot_3d_exact_buckets(
     let x_flat = if normalize {
         let eps = 1e-12;
 
-        let norm = x_flat
-            .f_pow_tensor_scalar(2.0)?
-            .f_sum_dim_intlist(&[-1i64][..], true, x.kind())?
-            .f_clamp_min(eps)?
-            .f_sqrt()?;
+        let norm = x_flat.f_pow_tensor_scalar(2.0)?.f_sum_dim_intlist(&[-1i64][..], true, x.kind())?.f_clamp_min(eps)?.f_sqrt()?;
 
         x_flat.f_div(&norm)?
     } else {
@@ -1120,20 +917,14 @@ pub fn lsh_bucket_one_hot_3d_exact_buckets(
     let projections = x_flat.f_matmul(&lsh.planes)?;
 
     // [M * N, num_bits], values 0/1
-    let bits = projections
-        .f_ge(0.0)?
-        .f_to_kind(Kind::Int64)?;
+    let bits = projections.f_ge(0.0)?.f_to_kind(Kind::Int64)?;
 
     let weights_vec: Vec<i64> = (0..num_bits).map(|i| 1_i64 << i).collect();
 
-    let weights = Tensor::f_from_slice(&weights_vec)?
-        .f_to_device(x.device())?
-        .f_view([1, num_bits])?;
+    let weights = Tensor::f_from_slice(&weights_vec)?.f_to_device(x.device())?.f_view([1, num_bits])?;
 
     // Raw bucket ids in range [0, raw_buckets).
-    let raw_bucket_ids = bits
-        .f_mul(&weights)?
-        .f_sum_dim_intlist(&[-1i64][..], false, Kind::Int64)?;
+    let raw_bucket_ids = bits.f_mul(&weights)?.f_sum_dim_intlist(&[-1i64][..], false, Kind::Int64)?;
 
     // Compress raw 2^bits buckets into exactly wanted_buckets.
     //
@@ -1141,9 +932,7 @@ pub fn lsh_bucket_one_hot_3d_exact_buckets(
     let bucket_ids = raw_bucket_ids.f_fmod(lsh.wanted_buckets)?;
 
     // [M * N, wanted_buckets]
-    let one_hot = bucket_ids
-        .f_one_hot(lsh.wanted_buckets)?
-        .f_to_kind(x.kind())?;
+    let one_hot = bucket_ids.f_one_hot(lsh.wanted_buckets)?.f_to_kind(x.kind())?;
 
     // [M, N, wanted_buckets]
     one_hot.f_view([m, n, lsh.wanted_buckets])
@@ -1151,41 +940,43 @@ pub fn lsh_bucket_one_hot_3d_exact_buckets(
 
 #[cfg(test)]
 mod tests {
-use crate::tch_error::tch_result;
     use crate::stages::audio::{BandAggregation, fft_band_amplitudes_sliced, lsh_bucket_one_hot_3d_exact_buckets, make_lsh_planes_for_buckets};
+    use crate::tch_error::tch_result;
     use crate::utils::reset_print_options;
     use log::debug;
     use tch::kind::FLOAT_CPU;
     use tch::{Device, Kind, Tensor};
-    use thoosa_shared::audio_utils::compose_freqs;
     use thoosa_shared::ThoError;
+    use thoosa_shared::audio_utils::compose_freqs;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_audio() -> Result<(), ThoError>{
+    async fn test_audio() -> Result<(), ThoError> {
         reset_print_options();
         let sample_rate = 32000.;
         // plot_t(&resource_t, &format!("resource_{i}"))?;
         // debug_plot_impl(&Tensor::rand([1, 1000], FLOAT_CPU), "test", 0)?;
         // let tensor = Tensor::load("/home/bu/tmp/ws_clef/tensors/1_hyamac1_XC497685.ogg.pt")?;
 
-        let tensor = Tensor::cat(&[
-            Tensor::from_slice(compose_freqs(4000, sample_rate as usize, vec![2500.0]).as_slice()), //300.0,
-            Tensor::from_slice(compose_freqs(4000, sample_rate as usize, vec![5500.0]).as_slice()), //600.0,
-            Tensor::from_slice(compose_freqs(4000, sample_rate as usize, vec![10500.0]).as_slice()) //1000.0,
-        ], 0).view((1, -1));
-
+        let tensor = Tensor::cat(
+            &[
+                Tensor::from_slice(compose_freqs(4000, sample_rate as usize, vec![2500.0]).as_slice()),  //300.0,
+                Tensor::from_slice(compose_freqs(4000, sample_rate as usize, vec![5500.0]).as_slice()),  //600.0,
+                Tensor::from_slice(compose_freqs(4000, sample_rate as usize, vec![10500.0]).as_slice()), //1000.0,
+            ],
+            0,
+        )
+        .view((1, -1));
 
         let channels_slices_freqamp = fft_band_amplitudes_sliced(
             &tensor.unfold(
-                1,
-                3000, //should be taken from RunConfig
-                3000
+                1, 3000, //should be taken from RunConfig
+                3000,
             ), // [channels, audio_data]
             32_000.0,             // sample rate - from workspace
             1_000.0,              // frequency band width - from RunConfig
             BandAggregation::Sum, // or Mean - from RunConfig
-            false,    // Hann window
-            true,      // remove DC offset - from RunConfig
+            false,                // Hann window
+            true,                 // remove DC offset - from RunConfig
         )?;
 
         debug!("bands size = {:?} channels_slices_freqamp=\n{channels_slices_freqamp}", channels_slices_freqamp.size());
@@ -1201,7 +992,5 @@ use crate::tch_error::tch_result;
         assert_eq!(bucket_counts, Tensor::ones([1, 4], FLOAT_CPU));
 
         Ok(())
-
     }
-
 }

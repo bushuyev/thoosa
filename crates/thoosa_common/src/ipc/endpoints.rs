@@ -1,15 +1,15 @@
-use std::collections::HashMap;
-use std::sync::{Arc, Weak};
-use std::sync::atomic::{AtomicU64, Ordering};
-use tokio::sync::{Mutex, mpsc};
-use thoosa_shared::ThoError;
-use super::worker_msg::{CudaWorkerId, WorkerInput};
 use super::serialization::{PostcardToFromBytes, ToFromBytes};
+use super::worker_msg::{CudaWorkerId, WorkerInput};
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Weak};
+use thoosa_shared::ThoError;
+use tokio::sync::{Mutex, mpsc};
 
 /// Reconstruction is opt-in: mutable training progress belongs to its async owner.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StageRecovery {
-    OwnerManaged,//Async stage which instantiated the sync stage is responsible for re-creating it after restart
+    OwnerManaged, //Async stage which instantiated the sync stage is responsible for re-creating it after restart
     RecreateFromInit,
 }
 
@@ -47,7 +47,10 @@ impl EndpointRegistration {
 
     pub fn installed_worker(&self) -> Option<CudaWorkerId> {
         let generation = self.installed_generation.load(Ordering::Acquire);
-        (generation != u64::MAX).then_some(CudaWorkerId { device_idx: self.device, generation: thoosa_shared::CudaDeviceGeneration(generation) })
+        (generation != u64::MAX).then_some(CudaWorkerId {
+            device_idx: self.device,
+            generation: thoosa_shared::CudaDeviceGeneration(generation),
+        })
     }
 
     pub fn installed(&self, worker: CudaWorkerId) {
@@ -58,7 +61,11 @@ impl EndpointRegistration {
 impl Drop for EndpointRegistration {
     fn drop(&mut self) {
         // Logical removal must reach the actor even while CUDA admission is paused.
-        let _ = self.events.send(EndpointEvent::Release { key: self.key.clone(), token: self.token, slot: Arc::clone(&self.slot) });
+        let _ = self.events.send(EndpointEvent::Release {
+            key: self.key.clone(),
+            token: self.token,
+            slot: Arc::clone(&self.slot),
+        });
     }
 }
 
@@ -89,7 +96,15 @@ impl EndpointRegistry {
         let slot = self.entries.get(&key).map(|entry| Arc::clone(&entry.slot)).unwrap_or_default();
         let token = self.next_token;
         self.next_token = token.checked_add(1).ok_or_else(|| ThoError::new("endpoint registration token overflow"))?;
-        let owner = Arc::new(EndpointRegistration { key: key.clone(), token, slot: Arc::clone(&slot), device, init, installed_generation: AtomicU64::new(u64::MAX), events: self.events.clone() });
+        let owner = Arc::new(EndpointRegistration {
+            key: key.clone(),
+            token,
+            slot: Arc::clone(&slot),
+            device,
+            init,
+            installed_generation: AtomicU64::new(u64::MAX),
+            events: self.events.clone(),
+        });
         self.entries.insert(key, Entry { token, owner: Arc::downgrade(&owner), slot });
         Ok(owner)
     }
@@ -114,7 +129,10 @@ mod tests {
     async fn test_release_does_not_forget_replacement_owner() -> Result<(), ThoError> {
         let (events, mut receiver) = mpsc::unbounded_channel();
         let mut registry = EndpointRegistry::new(events);
-        let key = EndpointKey { endpoint_name: "stage".into(), stage_id: Some("1".into()) };
+        let key = EndpointKey {
+            endpoint_name: "stage".into(),
+            stage_id: Some("1".into()),
+        };
         let old = registry.register(1, key.clone(), Box::new(()))?;
         // Snapshot decoding must work repeatedly without consuming the recipe.
         old.init_data()?;

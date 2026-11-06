@@ -1,6 +1,11 @@
 use std::{
-    collections::{BTreeMap, HashMap, VecDeque}, fmt::{Debug, Formatter}, future::Future, pin::Pin, sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering}, Arc,
+    collections::{BTreeMap, HashMap, VecDeque},
+    fmt::{Debug, Formatter},
+    future::Future,
+    pin::Pin,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
 
@@ -10,14 +15,15 @@ use futures::FutureExt;
 use log::error;
 use parking_lot::{Mutex, RwLock};
 use tokio::{
-    sync::{mpsc, oneshot, watch}, task::{JoinHandle, JoinSet},
+    sync::{mpsc, oneshot, watch},
+    task::{JoinHandle, JoinSet},
 };
-use tracing::{debug, warn, Instrument};
+use tracing::{Instrument, debug, warn};
 
-use thoosa_shared::{CudaActivityGate, CudaActivityPauseTicket, CudaActivityScope, CudaDeviceGeneration, CudaRecoveryState, SyncStageRunnerError, ThoError, LOCK_TIMEOUT};
 use super::cuda_recovery::{CudaRecoveryCoordinator, RestartFn};
 use thoosa_shared::futures_limits::{FuturesLimits, SyncExecutionPermit, SyncExecutionWaiter, futures_limits};
 use thoosa_shared::tracked_await::t;
+use thoosa_shared::{CudaActivityGate, CudaActivityPauseTicket, CudaActivityScope, CudaDeviceGeneration, CudaRecoveryState, LOCK_TIMEOUT, SyncStageRunnerError, ThoError};
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 enum JobFeedback {
@@ -98,7 +104,9 @@ impl RetryToken {
     }
 
     fn check_generation(&self) -> Result<(), ThoError> {
-        if let Some(gate) = &self.inner.gate && let Some(generation) = *self.inner.generation.lock() {
+        if let Some(gate) = &self.inner.gate
+            && let Some(generation) = *self.inner.generation.lock()
+        {
             gate.check_generation(generation)?;
         }
         Ok(())
@@ -109,7 +117,9 @@ impl RetryToken {
         let generation = loop {
             let notified = {
                 let generation = self.inner.generation.lock();
-                if let Some(generation) = *generation { break generation; }
+                if let Some(generation) = *generation {
+                    break generation;
+                }
                 self.inner.generation_bound.notified()
             };
             notified.await;
@@ -215,8 +225,7 @@ impl Job {
     }
 
     fn cancelled(&self) -> Option<ThoError> {
-        self.cancellation.as_ref().and_then(|cancel| cancel.reason.lock().clone())
-            .or_else(|| self.inherited.as_ref().and_then(|scope| scope.check_dependencies().err()))
+        self.cancellation.as_ref().and_then(|cancel| cancel.reason.lock().clone()).or_else(|| self.inherited.as_ref().and_then(|scope| scope.check_dependencies().err()))
     }
 
     async fn run(self) -> JobFeedback {
@@ -256,10 +265,7 @@ impl<T> JobResultSender<T> {
 
 impl Debug for Job {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Job")
-            .field("id", &self.id)
-            .field("max_other_parallel", &self.max_other_parallel)
-            .finish()
+        f.debug_struct("Job").field("id", &self.id).field("max_other_parallel", &self.max_other_parallel).finish()
     }
 }
 
@@ -280,18 +286,9 @@ struct LiveJob {
 
 #[derive(Debug)]
 enum ManagerCmd {
-    Suspend {
-        job_id: JobId,
-        reply: oneshot::Sender<()>,
-    },
-    Resume {
-        job_id: JobId,
-        reply: oneshot::Sender<()>,
-        for_unwind: bool,
-    },
-    DrainForRecovery {
-        reply: oneshot::Sender<()>,
-    },
+    Suspend { job_id: JobId, reply: oneshot::Sender<()> },
+    Resume { job_id: JobId, reply: oneshot::Sender<()>, for_unwind: bool },
+    DrainForRecovery { reply: oneshot::Sender<()> },
     Recheck,
 }
 
@@ -335,10 +332,7 @@ fn executor_closed_error(msg: impl Into<String>) -> ThoError {
 
 impl ParentSuspendGuard {
     fn new(parent: Option<CurrentJob>) -> Self {
-        Self {
-            parent,
-            suspended: false,
-        }
+        Self { parent, suspended: false }
     }
 
     async fn maybe_suspend(&mut self) -> Result<(), ThoError> {
@@ -347,14 +341,7 @@ impl ParentSuspendGuard {
         };
 
         let (ack_tx, ack_rx) = oneshot::channel();
-        if parent
-            .cmd_tx
-            .send(ManagerCmd::Suspend {
-                job_id: parent.job_id,
-                reply: ack_tx,
-            })
-            .is_err()
-        {
+        if parent.cmd_tx.send(ManagerCmd::Suspend { job_id: parent.job_id, reply: ack_tx }).is_err() {
             return Err(executor_closed_error("executor is closed"));
         }
 
@@ -414,7 +401,11 @@ impl Drop for ParentSuspendGuard {
         // Unbounded sends do not await or need a runtime. FIFO ordering pairs this
         // command with our queued Suspend even when its acknowledgement was dropped.
         let (reply, _) = oneshot::channel();
-        let _ = parent.cmd_tx.send(ManagerCmd::Resume { job_id: parent.job_id, reply, for_unwind: CudaActivityScope::current().is_some_and(|scope| scope.check_dependencies().is_err()) });
+        let _ = parent.cmd_tx.send(ManagerCmd::Resume {
+            job_id: parent.job_id,
+            reply,
+            for_unwind: CudaActivityScope::current().is_some_and(|scope| scope.check_dependencies().is_err()),
+        });
     }
 }
 
@@ -428,7 +419,7 @@ pub struct SyncStageRunner {
     worker: JoinHandle<()>,
     exclusive_job_id: Arc<RwLock<Option<JobId>>>,
     tho_device_idx: usize,
-    recovery: Option<Arc<CudaRecoveryCoordinator>>,//None for CPU
+    recovery: Option<Arc<CudaRecoveryCoordinator>>, //None for CPU
 }
 
 impl Debug for SyncStageRunner {
@@ -444,7 +435,6 @@ impl Debug for SyncStageRunner {
 }
 
 impl SyncStageRunner {
-
     pub fn retry_scope(&self) -> RetryScope {
         RetryScope {
             token: RetryToken {
@@ -471,29 +461,15 @@ impl SyncStageRunner {
     }
 
     #[cfg(any(test, feature = "mock_global_ctx"))]
-    pub fn new_with_reset_hook(
-        queue_capacity: usize,
-        tho_device_idx: usize,
-        reset_fn: RestartFn,
-    ) -> Self {
+    pub fn new_with_reset_hook(queue_capacity: usize, tho_device_idx: usize, reset_fn: RestartFn) -> Self {
         Self::new_with_recovery(queue_capacity, CudaRecoveryCoordinator::new(Arc::new(CudaActivityGate::new(tho_device_idx)), reset_fn))
     }
 
-    pub(crate) fn new_with_recovery(
-        queue_capacity: usize,
-        recovery: Arc<CudaRecoveryCoordinator>,
-    ) -> Self {
-        Self::new_inner_with_buffer_limits(
-            queue_capacity, recovery.gate().device_idx(), Some(recovery), Arc::clone(futures_limits())
-        )
+    pub(crate) fn new_with_recovery(queue_capacity: usize, recovery: Arc<CudaRecoveryCoordinator>) -> Self {
+        Self::new_inner_with_buffer_limits(queue_capacity, recovery.gate().device_idx(), Some(recovery), Arc::clone(futures_limits()))
     }
 
-    fn new_inner_with_buffer_limits(
-        queue_capacity: usize,
-        tho_device_idx: usize,
-        recovery: Option<Arc<CudaRecoveryCoordinator>>,
-        buffer_limits: Arc<FuturesLimits>,
-    ) -> Self {
+    fn new_inner_with_buffer_limits(queue_capacity: usize, tho_device_idx: usize, recovery: Option<Arc<CudaRecoveryCoordinator>>, buffer_limits: Arc<FuturesLimits>) -> Self {
         debug!("SyncStageRunner::new_inner: queue_capacity={queue_capacity} tho_device_idx={tho_device_idx}");
 
         let (tx, rx) = mpsc::channel(queue_capacity);
@@ -505,23 +481,12 @@ impl SyncStageRunner {
         let exclusive_job_id_for_manager = Arc::clone(&exclusive_job_id);
 
         let gate = recovery.as_ref().map(|recovery| Arc::clone(recovery.gate()));
-        let worker = tokio::spawn(async move {
-            t!(Self::run_manager(
-                rx,
-                sync_capacity_rx,
-                cmd_rx,
-                cmd_tx_for_tasks,
-                exclusive_job_id_for_manager,
-                buffer_limits,
-                gate,
-            )).await;
-        }.instrument(tracing::info_span!(
-            "dyn_mpsc::manager",
-            kind = "spawn",
-            file = file!(),
-            line = line!(),
-            task = format!("run manager for tho_device_idx={tho_device_idx}"),
-        )));
+        let worker = tokio::spawn(
+            async move {
+                t!(Self::run_manager(rx, sync_capacity_rx, cmd_rx, cmd_tx_for_tasks, exclusive_job_id_for_manager, buffer_limits, gate,)).await;
+            }
+            .instrument(tracing::info_span!("dyn_mpsc::manager", kind = "spawn", file = file!(), line = line!(), task = format!("run manager for tho_device_idx={tho_device_idx}"),)),
+        );
 
         Self {
             tx,
@@ -574,18 +539,19 @@ impl SyncStageRunner {
         self.submit_observed(max_other_parallel, fut, retry, |result| match result {
             thoosa_common::runner::sync_stage::ConsumeResult::Failed { error, .. } => Some(error),
             thoosa_common::runner::sync_stage::ConsumeResult::Ok(_) => None,
-        }).await
+        })
+        .await
     }
 
     async fn submit_observed<F, T>(
         &self,
-        max_other_parallel: usize,//how many other jobs SyncStageRunner can run in parallel with the job being submitted. 0 means job wants exclusive access to GPU.
+        max_other_parallel: usize, //how many other jobs SyncStageRunner can run in parallel with the job being submitted. 0 means job wants exclusive access to GPU.
         fut: F,
         retry: Option<RetryToken>,
         nested_error: fn(&mut T) -> Option<&mut ThoError>,
     ) -> Result<T, ThoError>
     where
-        F: Future<Output = Result<T, ThoError>> + Send + 'static,//TODO change to closure taking ticket to let function a way to ensure they're running in Executor
+        F: Future<Output = Result<T, ThoError>> + Send + 'static, //TODO change to closure taking ticket to let function a way to ensure they're running in Executor
         T: Send + Debug + 'static,
     {
         let parent = CURRENT_JOB.try_with(|job| job.clone()).ok();
@@ -597,13 +563,12 @@ impl SyncStageRunner {
         let owned_scope = retry.is_none().then(|| self.retry_scope());
         let retry = retry.unwrap_or_else(|| owned_scope.as_ref().expect("local retry scope").token());
 
-        debug_assert!(Arc::ptr_eq(&retry.inner.exclusive_job_id, &self.exclusive_job_id), "retry scope belongs to another executor");//it compares locks' addresses, not job ids - if it fails it's a bug in the app and we can't handle it
+        debug_assert!(Arc::ptr_eq(&retry.inner.exclusive_job_id, &self.exclusive_job_id), "retry scope belongs to another executor"); //it compares locks' addresses, not job ids - if it fails it's a bug in the app and we can't handle it
 
         let job_id = retry.inner.job_id;
         if max_other_parallel != 0 {
             retry.clear_exclusive();
         }
-
 
         debug!("SyncStageRunner::submit: job_id={job_id} max_other_parallel={max_other_parallel:?} parent={parent:?}");
 
@@ -631,21 +596,21 @@ impl SyncStageRunner {
                 result_sender.send(Err(error));
                 return JobFeedback::Neutral;
             }
-            let generation = recovery.as_ref().map(|recovery| {
-                CudaActivityScope::current().and_then(|scope| scope.generation(recovery.gate())).expect("admitted CUDA generation")
-            });
-            let mut result = t!(fut).await;//<--- wrapped
+            let generation = recovery.as_ref().map(|recovery| CudaActivityScope::current().and_then(|scope| scope.generation(recovery.gate())).expect("admitted CUDA generation"));
+            let mut result = t!(fut).await; //<--- wrapped
             debug!("SyncStageRunner::submit: result={result:?}");
             let error = match &mut result {
                 Err(error) => Some(error),
-                Ok(value) => nested_error(value)
+                Ok(value) => nested_error(value),
             };
             let is_oom = error.as_ref().is_some_and(|error| error.is_oom());
             let is_ok = error.is_none();
             if let Some(error) = error {
                 debug!("SyncStageRunner::submit: needs_cuda_ctx_reset={} is_cuda_recovery_failed={} recovery={recovery:?}", error.needs_cuda_recovery(), error.is_cuda_recovery_failed());
 
-                if (error.needs_cuda_recovery() || error.is_cuda_recovery_failed()) && let Some(recovery) = &recovery {
+                if (error.needs_cuda_recovery() || error.is_cuda_recovery_failed())
+                    && let Some(recovery) = &recovery
+                {
                     retry.clear_exclusive();
                     *error = Self::report_failure(recovery, &cmd_tx, generation.expect("CUDA generation"), error.clone()).err().unwrap_or_else(Self::context_reset_error);
                     // Preserve a consume failure's owned input for the adapter.
@@ -677,7 +642,6 @@ impl SyncStageRunner {
         let mut job = Job::new(job_id, max_other_parallel, wrapped, pending_failure);
         job.inherited = inherited.clone();
         job.cancellation = Some(Arc::clone(&cancellation));
-
 
         loop {
             await_dependency(&inherited, t!(self.wait_until_accepting(parent.as_ref()))).await??;
@@ -711,7 +675,9 @@ impl SyncStageRunner {
 
             // Reset may have started while reserve() was awaiting channel capacity. The
             // permit alone does not authorize enqueueing, so recheck before suspension.
-            if let Some(gate) = self.cuda_gate() && let Err(error) = gate.check_admission() {
+            if let Some(gate) = self.cuda_gate()
+                && let Err(error) = gate.check_admission()
+            {
                 drop(send_permit);
                 retry.clear_exclusive();
                 if error.is_cuda_recovery_failed() || parent.is_some() || CudaActivityScope::current().is_some() {
@@ -735,7 +701,10 @@ impl SyncStageRunner {
             // before reset closes admission is visible to the manager's purge.
             let enqueue = match self.cuda_gate() {
                 Some(gate) => gate.try_enqueue(send_permit, job),
-                None => { send_permit.send(job); Ok(()) }
+                None => {
+                    send_permit.send(job);
+                    Ok(())
+                }
             };
             if let Err((rejected, error)) = enqueue {
                 job = rejected;
@@ -787,16 +756,10 @@ impl SyncStageRunner {
         Self::report_failure(recovery, &self.cmd_tx, generation, cause)
     }
 
-    fn report_failure(
-        recovery: &Arc<CudaRecoveryCoordinator>,
-        sender: &mpsc::UnboundedSender<ManagerCmd>,
-        generation: CudaDeviceGeneration,
-        cause: ThoError,
-    ) -> Result<Option<CudaActivityPauseTicket>, ThoError> {
+    fn report_failure(recovery: &Arc<CudaRecoveryCoordinator>, sender: &mpsc::UnboundedSender<ManagerCmd>, generation: CudaDeviceGeneration, cause: ThoError) -> Result<Option<CudaActivityPauseTicket>, ThoError> {
         recovery.request(generation, cause, || {
             let (reply, drained) = oneshot::channel();
-            sender.send(ManagerCmd::DrainForRecovery { reply })
-                .map_err(|_| Self::closed_error("CUDA recovery reporting executor is closed"))?;
+            sender.send(ManagerCmd::DrainForRecovery { reply }).map_err(|_| Self::closed_error("CUDA recovery reporting executor is closed"))?;
             Ok(drained)
         })
     }
@@ -834,30 +797,19 @@ impl SyncStageRunner {
         loop {
             execution_waiter.begin_turn();
             let max_parallel_jobs = *sync_capacity_rx.borrow_and_update();
-            debug!("SyncStageRunner::run_manager, loop: active_caps={active_caps:?} active_count={active_count} running.len={} pending.len={} max_parallel_jobs={max_parallel_jobs} jobs.len={}",running.len(),pending.len(),jobs.len());
-
-            Self::drain_finished(
-                &mut running,
-                &mut done_rx,
-                &mut jobs,
-                &mut active_caps,
-                &mut active_count,
+            debug!(
+                "SyncStageRunner::run_manager, loop: active_caps={active_caps:?} active_count={active_count} running.len={} pending.len={} max_parallel_jobs={max_parallel_jobs} jobs.len={}",
+                running.len(),
+                pending.len(),
+                jobs.len()
             );
+
+            Self::drain_finished(&mut running, &mut done_rx, &mut jobs, &mut active_caps, &mut active_count);
 
             // Critical: drain already queued commands before spawning pending jobs.
             // Otherwise a job sent immediately before DrainForRecovery could be spawned
             // before the manager observes the reset request.
-            Self::drain_commands(
-                &mut cmd_rx,
-                &mut cmd_closed,
-                &mut jobs,
-                &mut active_caps,
-                &mut active_count,
-                max_parallel_jobs,
-                &mut execution_waiter,
-                &mut pending_drains,
-                gate.as_ref(),
-            );
+            Self::drain_commands(&mut cmd_rx, &mut cmd_closed, &mut jobs, &mut active_caps, &mut active_count, max_parallel_jobs, &mut execution_waiter, &mut pending_drains, gate.as_ref());
 
             for job in jobs.values_mut() {
                 if job.interrupted.load(Ordering::Acquire) {
@@ -892,18 +844,11 @@ impl SyncStageRunner {
             // continue to completion, and suspended parents are allowed to resume so they
             // can observe a child's ContextReset and unwind before reset_fn runs.
             let cuda_activity_gate_is_paused = !matches!(recovery_state, CudaRecoveryState::Running);
-            debug!("SyncStageRunner::run_manager: cuda_activity_gate_is_paused={cuda_activity_gate_is_paused}" );
+            debug!("SyncStageRunner::run_manager: cuda_activity_gate_is_paused={cuda_activity_gate_is_paused}");
 
             if !cuda_activity_gate_is_paused {
                 let current_exclusive_job_id = *exclusive_job_id.read();
-                Self::try_resume_waiters(
-                    &mut jobs,
-                    &mut active_caps,
-                    &mut active_count,
-                    max_parallel_jobs,
-                    None,
-                    &mut execution_waiter,
-                );
+                Self::try_resume_waiters(&mut jobs, &mut active_caps, &mut active_count, max_parallel_jobs, None, &mut execution_waiter);
                 Self::try_spawn_ready_jobs(
                     &mut pending,
                     &mut running,
@@ -920,11 +865,7 @@ impl SyncStageRunner {
                 );
             } else {
                 execution_waiter.cancel();
-                Self::force_resume_waiters_for_unwind(
-                    &mut jobs,
-                    &mut active_caps,
-                    &mut active_count,
-                );
+                Self::force_resume_waiters_for_unwind(&mut jobs, &mut active_caps, &mut active_count);
             }
 
             execution_waiter.end_turn();
@@ -946,7 +887,12 @@ impl SyncStageRunner {
             if !gate.as_ref().is_some_and(|gate| gate.is_paused()) && !pending.is_empty() && jobs.is_empty() {
                 let exclusive = *exclusive_job_id.read();
 
-                warn!("SyncStageRunner::run_manager: idle with pending jobs: pending_len={}, pending_front={:?}, exclusive_job_id={exclusive:?}, active_count={}, active_caps={active_caps:?}",pending.len(),pending.front().map(|j| (j.id, j.total_parallel_cap())),active_count,);
+                warn!(
+                    "SyncStageRunner::run_manager: idle with pending jobs: pending_len={}, pending_front={:?}, exclusive_job_id={exclusive:?}, active_count={}, active_caps={active_caps:?}",
+                    pending.len(),
+                    pending.front().map(|j| (j.id, j.total_parallel_cap())),
+                    active_count,
+                );
             }
 
             // Subscribe to both closing and reopening admission. A failed gate is
@@ -1019,16 +965,7 @@ impl SyncStageRunner {
         }
     }
 
-    fn process_command(
-        cmd: ManagerCmd,
-        jobs: &mut HashMap<JobId, LiveJob>,
-        active_caps: &mut BTreeMap<usize, usize>,
-        active_count: &mut usize,
-        max_parallel_jobs: usize,
-        execution_waiter: &mut SyncExecutionWaiter,
-        pending_drains: &mut Vec<oneshot::Sender<()>>,
-        gate: Option<&Arc<CudaActivityGate>>,
-    ) {
+    fn process_command(cmd: ManagerCmd, jobs: &mut HashMap<JobId, LiveJob>, active_caps: &mut BTreeMap<usize, usize>, active_count: &mut usize, max_parallel_jobs: usize, execution_waiter: &mut SyncExecutionWaiter, pending_drains: &mut Vec<oneshot::Sender<()>>, gate: Option<&Arc<CudaActivityGate>>) {
         debug!("SyncStageRunner::run_manager: manager cmd={cmd:?}");
 
         match cmd {
@@ -1037,17 +974,7 @@ impl SyncStageRunner {
                 let _ = reply.send(());
             }
             ManagerCmd::Resume { job_id, reply, for_unwind } => {
-                Self::handle_resume(
-                    jobs,
-                    active_caps,
-                    active_count,
-                    max_parallel_jobs,
-                    None,
-                    job_id,
-                    reply,
-                    for_unwind || gate.is_some_and(|gate| gate.is_paused()),
-                    execution_waiter,
-                );
+                Self::handle_resume(jobs, active_caps, active_count, max_parallel_jobs, None, job_id, reply, for_unwind || gate.is_some_and(|gate| gate.is_paused()), execution_waiter);
             }
             ManagerCmd::DrainForRecovery { reply } => pending_drains.push(reply),
             ManagerCmd::Recheck => {}
@@ -1073,18 +1000,10 @@ impl SyncStageRunner {
 
         // A continuous stream of submissions/cancellations must not starve
         // completions, admission changes, or other executors on this runtime.
-        for _ in 0..256 {//TODO 256?
+        for _ in 0..256 {
+            //TODO 256?
             match cmd_rx.try_recv() {
-                Ok(cmd) => Self::process_command(
-                    cmd,
-                    jobs,
-                    active_caps,
-                    active_count,
-                    max_parallel_jobs,
-                    execution_waiter,
-                    pending_drains,
-                    gate,
-                ),
+                Ok(cmd) => Self::process_command(cmd, jobs, active_caps, active_count, max_parallel_jobs, execution_waiter, pending_drains, gate),
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
                     *cmd_closed = true;
@@ -1094,12 +1013,7 @@ impl SyncStageRunner {
         }
     }
 
-    fn purge_pending_jobs(
-        pending: &mut VecDeque<Job>,
-        rx: &mut mpsc::Receiver<Job>,
-        input_closed: &mut bool,
-        error: ThoError,
-    ) {
+    fn purge_pending_jobs(pending: &mut VecDeque<Job>, rx: &mut mpsc::Receiver<Job>, input_closed: &mut bool, error: ThoError) {
         use tokio::sync::mpsc::error::TryRecvError;
 
         let mut purged = 0usize;
@@ -1160,15 +1074,7 @@ impl SyncStageRunner {
                 }
                 let sync_execution_permit = {
                     let job = &pending[idx];
-                    Self::try_activate_now(
-                        job.id,
-                        *active_count,
-                        max_parallel_jobs,
-                        active_caps,
-                        job.total_parallel_cap(),
-                        exclusive_job_id,
-                        execution_waiter,
-                    )
+                    Self::try_activate_now(job.id, *active_count, max_parallel_jobs, active_caps, job.total_parallel_cap(), exclusive_job_id, execution_waiter)
                 };
 
                 if let Some(sync_execution_permit) = sync_execution_permit {
@@ -1212,80 +1118,71 @@ impl SyncStageRunner {
 
                     debug!("SyncStageRunner::try_spawn_ready_jobs: spawning job_id={job_id}");
 
-                    running.spawn(async move {
-                        debug!("SyncStageRunner::try_spawn_ready_jobs: spawned job_id={job_id}");
+                    running.spawn(
+                        async move {
+                            debug!("SyncStageRunner::try_spawn_ready_jobs: spawned job_id={job_id}");
 
-                        struct DoneGuard {
-                            job_id: JobId,
-                            done_tx: mpsc::UnboundedSender<JobId>,
-                        }
-
-                        impl Drop for DoneGuard {
-                            fn drop(&mut self) {
-                                let _ = self.done_tx.send(self.job_id);
+                            struct DoneGuard {
+                                job_id: JobId,
+                                done_tx: mpsc::UnboundedSender<JobId>,
                             }
-                        }
 
-                        let _guard = DoneGuard { job_id, done_tx };
+                            impl Drop for DoneGuard {
+                                fn drop(&mut self) {
+                                    let _ = self.done_tx.send(self.job_id);
+                                }
+                            }
 
-                        let unwind_tx = cmd_tx_for_tasks.clone();
-                        let future = CURRENT_JOB
-                            .scope(
-                                CurrentJob {
-                                    job_id,
-                                    cmd_tx: cmd_tx_for_tasks,
-                                },
-                                async move {
-                                    debug!("SyncStageRunner::try_spawn_ready_jobs: running job job_id={job_id}");
+                            let _guard = DoneGuard { job_id, done_tx };
 
-                                    t!(job.run()).await
-                                },
-                            );
-                        let feedback = match activity {
-                            Some(activity) => {
-                                let dependencies = activity.clone();
-                                t!(activity.run(async move {
-                                    tokio::pin!(future);
-                                    tokio::select! {
-                                        biased;
-                                        _ = dependencies.wait_for_interruption() => {
-                                            // This may be a healthy device with a recovering
-                                            // ancestor. Release its scheduling slot even when
-                                            // its parent is already waiting for a Resume ack.
-                                            // Retry attempts reuse job IDs. Store this on the
-                                            // physical attempt so a delayed wakeup cannot
-                                            // release a successor attempt's capacity.
-                                            interrupted.store(true, Ordering::Release);
-                                            let _ = unwind_tx.send(ManagerCmd::Recheck);
-                                            future.await
+                            let unwind_tx = cmd_tx_for_tasks.clone();
+                            let future = CURRENT_JOB.scope(CurrentJob { job_id, cmd_tx: cmd_tx_for_tasks }, async move {
+                                debug!("SyncStageRunner::try_spawn_ready_jobs: running job job_id={job_id}");
+
+                                t!(job.run()).await
+                            });
+                            let feedback = match activity {
+                                Some(activity) => {
+                                    let dependencies = activity.clone();
+                                    t!(activity.run(async move {
+                                        tokio::pin!(future);
+                                        tokio::select! {
+                                            biased;
+                                            _ = dependencies.wait_for_interruption() => {
+                                                // This may be a healthy device with a recovering
+                                                // ancestor. Release its scheduling slot even when
+                                                // its parent is already waiting for a Resume ack.
+                                                // Retry attempts reuse job IDs. Store this on the
+                                                // physical attempt so a delayed wakeup cannot
+                                                // release a successor attempt's capacity.
+                                                interrupted.store(true, Ordering::Release);
+                                                let _ = unwind_tx.send(ManagerCmd::Recheck);
+                                                future.await
+                                            }
+                                            feedback = &mut future => feedback,
                                         }
-                                        feedback = &mut future => feedback,
-                                    }
-                                })).await
-                            }
-                            None => t!(future).await,
-                        };
+                                    }))
+                                    .await
+                                }
+                                None => t!(future).await,
+                            };
 
-                        match feedback {
-                            JobFeedback::Oom => {
-                                debug!("SyncStageRunner::try_spawn_ready_jobs: OOM job job_id={job_id}, max_parallel_jobs={}",buffer_limits.max_parallel_jobs());
-                                buffer_limits.on_oom();
-                            }
-                            JobFeedback::Success => {
-                                debug!("SyncStageRunner::try_spawn_ready_jobs: success job job_id={job_id}, max_parallel_jobs={}",buffer_limits.max_parallel_jobs());
-                                buffer_limits.on_ok();
-                            }
-                            JobFeedback::Neutral => {
-                                debug!("SyncStageRunner::try_spawn_ready_jobs: neutral job job_id={job_id}, max_parallel_jobs={}",buffer_limits.max_parallel_jobs());
+                            match feedback {
+                                JobFeedback::Oom => {
+                                    debug!("SyncStageRunner::try_spawn_ready_jobs: OOM job job_id={job_id}, max_parallel_jobs={}", buffer_limits.max_parallel_jobs());
+                                    buffer_limits.on_oom();
+                                }
+                                JobFeedback::Success => {
+                                    debug!("SyncStageRunner::try_spawn_ready_jobs: success job job_id={job_id}, max_parallel_jobs={}", buffer_limits.max_parallel_jobs());
+                                    buffer_limits.on_ok();
+                                }
+                                JobFeedback::Neutral => {
+                                    debug!("SyncStageRunner::try_spawn_ready_jobs: neutral job job_id={job_id}, max_parallel_jobs={}", buffer_limits.max_parallel_jobs());
+                                }
                             }
                         }
-                    }.instrument(tracing::info_span!(
-                        "dyn_mpsc::job",
-                        kind = "spawn",
-                        file = file!(),
-                        line = line!(),
-                        task = format!("run dynamic executor job_id={job_id}"),
-                    )));
+                        .instrument(tracing::info_span!("dyn_mpsc::job", kind = "spawn", file = file!(), line = line!(), task = format!("run dynamic executor job_id={job_id}"),)),
+                    );
 
                     spawned_any = true;
                     break;
@@ -1315,14 +1212,7 @@ impl SyncStageRunner {
         }
     }
 
-    fn can_activate_now(
-        job_id: JobId,
-        active_count: usize,
-        max_parallel_jobs: usize,
-        active_caps: &BTreeMap<usize, usize>,
-        new_cap: usize,
-        exclusive_job_id: Option<JobId>,
-    ) -> bool {
+    fn can_activate_now(job_id: JobId, active_count: usize, max_parallel_jobs: usize, active_caps: &BTreeMap<usize, usize>, new_cap: usize, exclusive_job_id: Option<JobId>) -> bool {
         if exclusive_job_id.is_some_and(|exclusive_job_id| exclusive_job_id != job_id) {
             debug!("SyncStageRunner::can_activate_now: blocked by exclusive job current_job_id={job_id} exclusive_job_id={exclusive_job_id:?}");
             return false;
@@ -1338,15 +1228,7 @@ impl SyncStageRunner {
         r
     }
 
-    fn try_activate_now(
-        job_id: JobId,
-        active_count: usize,
-        max_parallel_jobs: usize,
-        active_caps: &BTreeMap<usize, usize>,
-        new_cap: usize,
-        exclusive_job_id: Option<JobId>,
-        execution_waiter: &mut SyncExecutionWaiter,
-    ) -> Option<SyncExecutionPermit> {
+    fn try_activate_now(job_id: JobId, active_count: usize, max_parallel_jobs: usize, active_caps: &BTreeMap<usize, usize>, new_cap: usize, exclusive_job_id: Option<JobId>, execution_waiter: &mut SyncExecutionWaiter) -> Option<SyncExecutionPermit> {
         if !Self::can_activate_now(job_id, active_count, max_parallel_jobs, active_caps, new_cap, exclusive_job_id) {
             return None;
         }
@@ -1360,20 +1242,12 @@ impl SyncStageRunner {
         }
     }
 
-    fn add_active(
-        active_caps: &mut BTreeMap<usize, usize>,
-        active_count: &mut usize,
-        cap: usize,
-    ) {
+    fn add_active(active_caps: &mut BTreeMap<usize, usize>, active_count: &mut usize, cap: usize) {
         *active_caps.entry(cap).or_insert(0) += 1;
         *active_count += 1;
     }
 
-    fn remove_active(
-        active_caps: &mut BTreeMap<usize, usize>,
-        active_count: &mut usize,
-        cap: usize,
-    ) {
+    fn remove_active(active_caps: &mut BTreeMap<usize, usize>, active_count: &mut usize, cap: usize) {
         if let Some(count) = active_caps.get_mut(&cap) {
             *count -= 1;
             if *count == 0 {
@@ -1389,12 +1263,7 @@ impl SyncStageRunner {
         }
     }
 
-    fn handle_suspend(
-        jobs: &mut HashMap<JobId, LiveJob>,
-        active_caps: &mut BTreeMap<usize, usize>,
-        active_count: &mut usize,
-        job_id: JobId,
-    ) {
+    fn handle_suspend(jobs: &mut HashMap<JobId, LiveJob>, active_caps: &mut BTreeMap<usize, usize>, active_count: &mut usize, job_id: JobId) {
         let Some(job) = jobs.get_mut(&job_id) else {
             return;
         };
@@ -1408,17 +1277,7 @@ impl SyncStageRunner {
         }
     }
 
-    fn handle_resume(
-        jobs: &mut HashMap<JobId, LiveJob>,
-        active_caps: &mut BTreeMap<usize, usize>,
-        active_count: &mut usize,
-        max_parallel_jobs: usize,
-        exclusive_job_id: Option<JobId>,
-        job_id: JobId,
-        reply: oneshot::Sender<()>,
-        activity_paused: bool,
-        execution_waiter: &mut SyncExecutionWaiter,
-    ) {
+    fn handle_resume(jobs: &mut HashMap<JobId, LiveJob>, active_caps: &mut BTreeMap<usize, usize>, active_count: &mut usize, max_parallel_jobs: usize, exclusive_job_id: Option<JobId>, job_id: JobId, reply: oneshot::Sender<()>, activity_paused: bool, execution_waiter: &mut SyncExecutionWaiter) {
         let Some(job) = jobs.get_mut(&job_id) else {
             let _ = reply.send(());
             return;
@@ -1440,15 +1299,7 @@ impl SyncStageRunner {
         if job.suspend_depth == 0 {
             if job.active {
                 Self::flush_waiting_resumes(job);
-            } else if let Some(sync_execution_permit) = Self::try_activate_now(
-                job_id,
-                *active_count,
-                max_parallel_jobs,
-                active_caps,
-                job.cap,
-                exclusive_job_id,
-                execution_waiter,
-            ) {
+            } else if let Some(sync_execution_permit) = Self::try_activate_now(job_id, *active_count, max_parallel_jobs, active_caps, job.cap, exclusive_job_id, execution_waiter) {
                 job.active = true;
                 job.sync_execution_permit = Some(sync_execution_permit);
                 Self::add_active(active_caps, active_count, job.cap);
@@ -1460,15 +1311,7 @@ impl SyncStageRunner {
         job.suspend_depth -= 1;
 
         if job.suspend_depth == 0
-            && let Some(sync_execution_permit) = Self::try_activate_now(
-                job_id,
-                *active_count,
-                max_parallel_jobs,
-                active_caps,
-                job.cap,
-                exclusive_job_id,
-                execution_waiter,
-            )
+            && let Some(sync_execution_permit) = Self::try_activate_now(job_id, *active_count, max_parallel_jobs, active_caps, job.cap, exclusive_job_id, execution_waiter)
         {
             job.active = true;
             job.sync_execution_permit = Some(sync_execution_permit);
@@ -1477,11 +1320,7 @@ impl SyncStageRunner {
         }
     }
 
-    fn force_resume_waiters_for_unwind(
-        jobs: &mut HashMap<JobId, LiveJob>,
-        active_caps: &mut BTreeMap<usize, usize>,
-        active_count: &mut usize,
-    ) {
+    fn force_resume_waiters_for_unwind(jobs: &mut HashMap<JobId, LiveJob>, active_caps: &mut BTreeMap<usize, usize>, active_count: &mut usize) {
         // Resumes queued before the pause may not receive a fresh Resume command. Flush
         // only fully-unsuspended jobs so parent stages that are already eligible to run
         // are not stranded behind a reset that may be waiting for them to drop state.
@@ -1504,14 +1343,7 @@ impl SyncStageRunner {
         }
     }
 
-    fn try_resume_waiters(
-        jobs: &mut HashMap<JobId, LiveJob>,
-        active_caps: &mut BTreeMap<usize, usize>,
-        active_count: &mut usize,
-        max_parallel_jobs: usize,
-        exclusive_job_id: Option<JobId>,
-        execution_waiter: &mut SyncExecutionWaiter,
-    ) {
+    fn try_resume_waiters(jobs: &mut HashMap<JobId, LiveJob>, active_caps: &mut BTreeMap<usize, usize>, active_count: &mut usize, max_parallel_jobs: usize, exclusive_job_id: Option<JobId>, execution_waiter: &mut SyncExecutionWaiter) {
         for job in jobs.values_mut() {
             if job.active && !job.waiting_resumes.is_empty() {
                 Self::flush_waiting_resumes(job);
@@ -1519,16 +1351,7 @@ impl SyncStageRunner {
         }
 
         loop {
-            let waiting_ids: Vec<JobId> = jobs
-                .iter()
-                .filter_map(|(&id, job)| {
-                    if !job.active && !job.unwinding && job.suspend_depth == 0 && !job.waiting_resumes.is_empty() {
-                        Some(id)
-                    } else {
-                        None
-                    }
-                })
-                .collect();
+            let waiting_ids: Vec<JobId> = jobs.iter().filter_map(|(&id, job)| if !job.active && !job.unwinding && job.suspend_depth == 0 && !job.waiting_resumes.is_empty() { Some(id) } else { None }).collect();
 
             debug!("SyncStageRunner::try_resume_waiters: waiting_ids={waiting_ids:?}");
 
@@ -1536,25 +1359,11 @@ impl SyncStageRunner {
 
             for job_id in waiting_ids {
                 let cap = match jobs.get(&job_id) {
-                    Some(job)
-                    if !job.active
-                        && job.suspend_depth == 0
-                        && !job.waiting_resumes.is_empty() =>
-                        {
-                            job.cap
-                        }
+                    Some(job) if !job.active && job.suspend_depth == 0 && !job.waiting_resumes.is_empty() => job.cap,
                     _ => continue,
                 };
 
-                if let Some(sync_execution_permit) = Self::try_activate_now(
-                    job_id,
-                    *active_count,
-                    max_parallel_jobs,
-                    active_caps,
-                    cap,
-                    exclusive_job_id,
-                    execution_waiter,
-                ) {
+                if let Some(sync_execution_permit) = Self::try_activate_now(job_id, *active_count, max_parallel_jobs, active_caps, cap, exclusive_job_id, execution_waiter) {
                     let job = jobs.get_mut(&job_id).expect("job must exist");
                     job.active = true;
                     job.sync_execution_permit = Some(sync_execution_permit);
@@ -1570,12 +1379,7 @@ impl SyncStageRunner {
         }
     }
 
-    fn note_job_finished(
-        jobs: &mut HashMap<JobId, LiveJob>,
-        active_caps: &mut BTreeMap<usize, usize>,
-        active_count: &mut usize,
-        job_id: JobId,
-    ) {
+    fn note_job_finished(jobs: &mut HashMap<JobId, LiveJob>, active_caps: &mut BTreeMap<usize, usize>, active_count: &mut usize, job_id: JobId) {
         if let Some(job) = jobs.remove(&job_id) {
             debug!("SyncStageRunner::note_job_finished: job={job:?}");
 
@@ -1587,13 +1391,7 @@ impl SyncStageRunner {
         }
     }
 
-    fn drain_finished(
-        running: &mut JoinSet<()>,
-        done_rx: &mut mpsc::UnboundedReceiver<JobId>,
-        jobs: &mut HashMap<JobId, LiveJob>,
-        active_caps: &mut BTreeMap<usize, usize>,
-        active_count: &mut usize,
-    ) {
+    fn drain_finished(running: &mut JoinSet<()>, done_rx: &mut mpsc::UnboundedReceiver<JobId>, jobs: &mut HashMap<JobId, LiveJob>, active_caps: &mut BTreeMap<usize, usize>, active_count: &mut usize) {
         while let Ok(job_id) = done_rx.try_recv() {
             Self::note_job_finished(jobs, active_caps, active_count, job_id);
         }
@@ -1604,7 +1402,6 @@ impl SyncStageRunner {
             }
         }
     }
-
 }
 
 #[cfg(test)]
@@ -1613,8 +1410,10 @@ mod tests {
     use futures_util::{StreamExt, TryStreamExt};
     use std::{
         sync::{
-            atomic::{AtomicBool, AtomicUsize, Ordering}, Arc,
-        }, time::Duration,
+            Arc,
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+        },
+        time::Duration,
     };
     use thoosa_shared::CudaAction;
 
@@ -1667,7 +1466,18 @@ mod tests {
                 let (release, released) = oneshot::channel();
                 let blocker = tokio::spawn({
                     let exec = Arc::clone(&child_exec);
-                    async move { exec.submit(0, async move { started.send(()).unwrap(); released.await.unwrap(); Ok(()) }, None).await }
+                    async move {
+                        exec.submit(
+                            0,
+                            async move {
+                                started.send(()).unwrap();
+                                released.await.unwrap();
+                                Ok(())
+                            },
+                            None,
+                        )
+                        .await
+                    }
                 });
                 ready.await.unwrap();
                 let (queued, queue_ready) = oneshot::channel();
@@ -1678,14 +1488,26 @@ mod tests {
                     let parent_manager = Arc::clone(&parent_exec);
                     let child_ran = Arc::clone(&child_ran);
                     async move {
-                        exec.submit(0, async move {
-                            let mut child = Box::pin(child_exec.submit(0, async move { child_ran.store(true, Ordering::SeqCst); Ok(()) }, None));
-                            assert!(futures::poll!(child.as_mut()).is_pending());
-                            manager_barrier(&parent_manager).await;
-                            assert!(futures::poll!(child.as_mut()).is_pending());
-                            queued.send(()).unwrap();
-                            child.await
-                        }, None).await
+                        exec.submit(
+                            0,
+                            async move {
+                                let mut child = Box::pin(child_exec.submit(
+                                    0,
+                                    async move {
+                                        child_ran.store(true, Ordering::SeqCst);
+                                        Ok(())
+                                    },
+                                    None,
+                                ));
+                                assert!(futures::poll!(child.as_mut()).is_pending());
+                                manager_barrier(&parent_manager).await;
+                                assert!(futures::poll!(child.as_mut()).is_pending());
+                                queued.send(()).unwrap();
+                                child.await
+                            },
+                            None,
+                        )
+                        .await
                     }
                 });
                 queue_ready.await.unwrap();
@@ -1696,13 +1518,17 @@ mod tests {
                 // Only its queued dependent child should be discarded.
                 parent_exec.cuda_gate().unwrap().wait_for_pause_to_finish(ticket).await.unwrap();
                 assert!(!child_ran.load(Ordering::SeqCst));
-                if let Some(gate) = child_exec.cuda_gate() { assert_eq!(gate.device_generation(), CudaDeviceGeneration(0)); }
+                if let Some(gate) = child_exec.cuda_gate() {
+                    assert_eq!(gate.device_generation(), CudaDeviceGeneration(0));
+                }
                 release.send(()).unwrap();
                 blocker.await.unwrap().unwrap();
                 Arc::try_unwrap(parent_exec).unwrap().shutdown().await;
                 Arc::try_unwrap(child_exec).unwrap().shutdown().await;
             }
-        }).await.expect("queued dependencies must not pin a recovering ancestor");
+        })
+        .await
+        .expect("queued dependencies must not pin a recovering ancestor");
     }
 
     #[tokio::test]
@@ -1718,17 +1544,28 @@ mod tests {
                 let child_exec = Arc::clone(&child_exec);
                 let ancestor = Arc::clone(parent_exec.cuda_gate().unwrap());
                 async move {
-                    exec.submit(0, async move {
-                        child_exec.submit(0, async move {
-                            assert_eq!(CudaActivityScope::current().unwrap().generation(&ancestor), Some(CudaDeviceGeneration(0)));
-                            started.send(()).unwrap();
-                            released.await.unwrap();
-                            // The caller has already unwound; the actual child still
-                            // owns the ancestor lease and can finish admitted work.
-                            CudaActivityScope::for_operation(&ancestor)?;
-                            Ok(())
-                        }, None).await
-                    }, None).await
+                    exec.submit(
+                        0,
+                        async move {
+                            child_exec
+                                .submit(
+                                    0,
+                                    async move {
+                                        assert_eq!(CudaActivityScope::current().unwrap().generation(&ancestor), Some(CudaDeviceGeneration(0)));
+                                        started.send(()).unwrap();
+                                        released.await.unwrap();
+                                        // The caller has already unwound; the actual child still
+                                        // owns the ancestor lease and can finish admitted work.
+                                        CudaActivityScope::for_operation(&ancestor)?;
+                                        Ok(())
+                                    },
+                                    None,
+                                )
+                                .await
+                        },
+                        None,
+                    )
+                    .await
                 }
             });
             ready.await.unwrap();
@@ -1744,7 +1581,9 @@ mod tests {
             assert_eq!(child_exec.cuda_gate().unwrap().device_generation(), CudaDeviceGeneration(0));
             Arc::try_unwrap(parent_exec).unwrap().shutdown().await;
             Arc::try_unwrap(child_exec).unwrap().shutdown().await;
-        }).await.expect("running descendants must drain physically without aborting");
+        })
+        .await
+        .expect("running descendants must drain physically without aborting");
     }
 
     #[tokio::test]
@@ -1761,18 +1600,24 @@ mod tests {
                 let healthy = Arc::clone(&healthy);
                 let manager = Arc::clone(&healthy);
                 activity.run(async move {
-                    healthy.submit(0, async move {
-                        let mut guard = ParentSuspendGuard::new(CURRENT_JOB.try_with(Clone::clone).ok());
-                        guard.maybe_suspend().await?;
-                        suspended.send(()).unwrap();
-                        resume_ready.await.unwrap();
-                        let mut resuming = Box::pin(guard.resume());
-                        assert!(futures::poll!(resuming.as_mut()).is_pending());
-                        manager_barrier(&manager).await;
-                        assert!(futures::poll!(resuming.as_mut()).is_pending());
-                        queued.send(()).unwrap();
-                        resuming.await
-                    }, None).await
+                    healthy
+                        .submit(
+                            0,
+                            async move {
+                                let mut guard = ParentSuspendGuard::new(CURRENT_JOB.try_with(Clone::clone).ok());
+                                guard.maybe_suspend().await?;
+                                suspended.send(()).unwrap();
+                                resume_ready.await.unwrap();
+                                let mut resuming = Box::pin(guard.resume());
+                                assert!(futures::poll!(resuming.as_mut()).is_pending());
+                                manager_barrier(&manager).await;
+                                assert!(futures::poll!(resuming.as_mut()).is_pending());
+                                queued.send(()).unwrap();
+                                resuming.await
+                            },
+                            None,
+                        )
+                        .await
                 })
             });
             suspend_ready.await.unwrap();
@@ -1780,7 +1625,19 @@ mod tests {
             let (release, released) = oneshot::channel();
             let blocker = tokio::spawn({
                 let healthy = Arc::clone(&healthy);
-                async move { healthy.submit(0, async move { started.send(()).unwrap(); released.await.unwrap(); Ok(()) }, None).await }
+                async move {
+                    healthy
+                        .submit(
+                            0,
+                            async move {
+                                started.send(()).unwrap();
+                                released.await.unwrap();
+                                Ok(())
+                            },
+                            None,
+                        )
+                        .await
+                }
             });
             ready.await.unwrap();
             resume.send(()).unwrap();
@@ -1794,7 +1651,9 @@ mod tests {
             release.send(()).unwrap();
             blocker.await.unwrap().unwrap();
             Arc::try_unwrap(healthy).unwrap().shutdown().await;
-        }).await.expect("ancestor recovery must wake already-queued resumes on a healthy device");
+        })
+        .await
+        .expect("ancestor recovery must wake already-queued resumes on a healthy device");
     }
 
     #[tokio::test]
@@ -1813,7 +1672,16 @@ mod tests {
                 let started = started.clone();
                 let exec = Arc::clone(&recovering);
                 callers.push(tokio::spawn(async move {
-                    exec.submit(usize::MAX, async move { started.send(()).unwrap(); released.await.unwrap(); Ok(()) }, None).await
+                    exec.submit(
+                        usize::MAX,
+                        async move {
+                            started.send(()).unwrap();
+                            released.await.unwrap();
+                            Ok(())
+                        },
+                        None,
+                    )
+                    .await
                 }));
             }
             ready.recv().await.unwrap();
@@ -1823,13 +1691,19 @@ mod tests {
             healthy.submit(0, async { Ok(()) }, None).await.unwrap();
             cpu.submit(0, async { Ok(()) }, None).await.unwrap();
             assert!(recovering.cuda_gate().unwrap().is_recovering());
-            for release in releases { release.send(()).unwrap(); }
-            for caller in callers { caller.await.unwrap().unwrap(); }
+            for release in releases {
+                release.send(()).unwrap();
+            }
+            for caller in callers {
+                caller.await.unwrap().unwrap();
+            }
             recovering.cuda_gate().unwrap().wait_for_pause_to_finish(ticket).await.unwrap();
             Arc::try_unwrap(recovering).unwrap().shutdown().await;
             Arc::try_unwrap(healthy).unwrap().shutdown().await;
             Arc::try_unwrap(cpu).unwrap().shutdown().await;
-        }).await.expect("recovery must not consume healthy devices' execution budget");
+        })
+        .await
+        .expect("recovery must not consume healthy devices' execution budget");
     }
 
     #[tokio::test]
@@ -1843,23 +1717,37 @@ mod tests {
                 let (release, released) = oneshot::channel();
                 releases.push(release);
                 let started = started.clone();
-                exec.tx.send(Job::new(id, cap, async move {
-                    started.send(id).unwrap();
-                    released.await.unwrap();
-                    JobFeedback::Neutral
-                }, Box::new(|error| panic!("unexpected purge: {error}")))).await.unwrap();
+                exec.tx
+                    .send(Job::new(
+                        id,
+                        cap,
+                        async move {
+                            started.send(id).unwrap();
+                            released.await.unwrap();
+                            JobFeedback::Neutral
+                        },
+                        Box::new(|error| panic!("unexpected purge: {error}")),
+                    ))
+                    .await
+                    .unwrap();
                 // Capacity one makes this a deterministic acknowledgement that the
                 // manager received each job while the original group remains active.
                 drop(exec.tx.reserve().await.unwrap());
-                if id <= 3 { assert_eq!(starts.recv().await, Some(id)); }
+                if id <= 3 {
+                    assert_eq!(starts.recv().await, Some(id));
+                }
             }
             releases.remove(0).send(()).unwrap();
             releases.remove(0).send(()).unwrap();
             assert_eq!(starts.recv().await, Some(4), "a cap of two needs the same fairness barrier as an exclusive head");
-            for release in releases { release.send(()).unwrap(); }
+            for release in releases {
+                release.send(()).unwrap();
+            }
             assert_eq!(starts.recv().await, Some(5));
             Arc::try_unwrap(exec).unwrap().shutdown().await;
-        }).await.expect("restrictive jobs must eventually obtain their requested concurrency");
+        })
+        .await
+        .expect("restrictive jobs must eventually obtain their requested concurrency");
     }
 
     #[tokio::test]
@@ -1880,7 +1768,21 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(2), exec.cuda_gate().unwrap().wait_if_paused()).await.unwrap().unwrap();
         assert_eq!(exec.cuda_gate().unwrap().device_generation().0, generation.0 + 1);
         // An old retry chain must not run even after admission has reopened.
-        assert!(matches!(exec.submit(0, async { panic!("stale retry ran"); #[allow(unreachable_code)] Ok(()) }, Some(scope.token())).await.unwrap_err().what(), ThoError::CudaBeingRecovered));
+        assert!(matches!(
+            exec.submit(
+                0,
+                async {
+                    panic!("stale retry ran");
+                    #[allow(unreachable_code)]
+                    Ok(())
+                },
+                Some(scope.token())
+            )
+            .await
+            .unwrap_err()
+            .what(),
+            ThoError::CudaBeingRecovered
+        ));
         assert_eq!(*exec.exclusive_job_id.read(), None);
         drop(scope);
         exec.shutdown().await;
@@ -1901,11 +1803,16 @@ mod tests {
                 let exec = Arc::clone(&exec);
                 async move {
                     let scope = scope;
-                    exec.submit(0, async move {
-                        started_tx.send(()).unwrap();
-                        release_rx.await.unwrap();
-                        Err::<(), _>(ThoError::oom())
-                    }, Some(scope.token())).await
+                    exec.submit(
+                        0,
+                        async move {
+                            started_tx.send(()).unwrap();
+                            release_rx.await.unwrap();
+                            Err::<(), _>(ThoError::oom())
+                        },
+                        Some(scope.token()),
+                    )
+                    .await
                 }
             });
             started_rx.await.unwrap();
@@ -1925,10 +1832,15 @@ mod tests {
         let (finished_tx, finished_rx) = oneshot::channel();
         let mut caller = Box::pin(async {
             let scope = exec.retry_scope();
-            exec.submit(0, async move {
-                finished_tx.send(()).unwrap();
-                Err::<(), _>(ThoError::oom())
-            }, Some(scope.token())).await
+            exec.submit(
+                0,
+                async move {
+                    finished_tx.send(()).unwrap();
+                    Err::<(), _>(ThoError::oom())
+                },
+                Some(scope.token()),
+            )
+            .await
         });
         assert!(futures::poll!(caller.as_mut()).is_pending());
         // On the current-thread runtime the job sends its OOM result before this
@@ -1967,15 +1879,19 @@ mod tests {
     #[tokio::test]
     async fn test_cancel_before_suspend_ack_allows_next_nested_submit() {
         let exec = Arc::new(SyncStageRunner::new(8));
-        let parent = exec.submit(0, {
-            let exec = Arc::clone(&exec);
-            async move {
-                let mut cancelled = Box::pin(exec.submit(0, async { Ok(()) }, None));
-                assert!(futures::poll!(cancelled.as_mut()).is_pending());
-                drop(cancelled);
-                exec.submit(0, async { Ok(42) }, None).await
-            }
-        }, None);
+        let parent = exec.submit(
+            0,
+            {
+                let exec = Arc::clone(&exec);
+                async move {
+                    let mut cancelled = Box::pin(exec.submit(0, async { Ok(()) }, None));
+                    assert!(futures::poll!(cancelled.as_mut()).is_pending());
+                    drop(cancelled);
+                    exec.submit(0, async { Ok(42) }, None).await
+                }
+            },
+            None,
+        );
         assert_eq!(tokio::time::timeout(Duration::from_secs(2), parent).await.unwrap().unwrap(), 42);
         Arc::try_unwrap(exec).unwrap().shutdown().await;
     }
@@ -2011,15 +1927,19 @@ mod tests {
         for ordering in [thoosa_shared::FuturesOrdering::Ordered, thoosa_shared::FuturesOrdering::Unordered] {
             let completed = Arc::new(AtomicBool::new(false));
             let reset_ran = Arc::new(AtomicBool::new(false));
-            let exec = Arc::new(SyncStageRunner::new_with_reset_hook(8, 1, Arc::new({
-                let completed = Arc::clone(&completed);
-                let reset_ran = Arc::clone(&reset_ran);
-                move |_| {
-                    assert!(completed.load(Ordering::SeqCst), "reset must wait for all copy children");
-                    reset_ran.store(true, Ordering::SeqCst);
-                    Box::pin(async { Ok(()) })
-                }
-            })));
+            let exec = Arc::new(SyncStageRunner::new_with_reset_hook(
+                8,
+                1,
+                Arc::new({
+                    let completed = Arc::clone(&completed);
+                    let reset_ran = Arc::clone(&reset_ran);
+                    move |_| {
+                        assert!(completed.load(Ordering::SeqCst), "reset must wait for all copy children");
+                        reset_ran.store(true, Ordering::SeqCst);
+                        Box::pin(async { Ok(()) })
+                    }
+                }),
+            ));
             let (started_tx, started_rx) = oneshot::channel();
             let (collect_tx, collect_rx) = oneshot::channel();
             let caller = tokio::spawn({
@@ -2027,33 +1947,47 @@ mod tests {
                 let nested_exec = Arc::clone(&exec);
                 let gate = Arc::clone(exec.cuda_gate().unwrap());
                 async move {
-                    exec.submit(0, async move {
-                        started_tx.send(()).unwrap();
-                        collect_rx.await.unwrap();
-                        let results = thoosa_shared::collect_futures_with_progress(
-                            std::iter::once(async move {
-                                assert!(gate.is_paused());
-                                // This child has no CURRENT_JOB task local. It must still
-                                // reject a nested submission rather than wait for reset.
-                                assert!(nested_exec.submit(0, async { Ok(()) }, None).await.is_err());
-                                let values = thoosa_shared::collect_futures_with_progress(
-                                    (0..3).map(|i| {
-                                        let gate = Arc::clone(&gate);
-                                        async move {
-                                            let _copy = CudaActivityScope::for_operation(&gate)?;
-                                            Ok::<_, ThoError>(i)
-                                        }
-                                    }), 3, ordering, thoosa_shared::CollectionErrorPolicy::Propagate, "nested copy chunks",
-                                ).await?;
-                                assert_eq!(values.len(), 3);
-                                Ok::<_, ThoError>(values)
-                            }), 1, ordering,
-                            thoosa_shared::CollectionErrorPolicy::Propagate, "copy chunks",
-                        ).await?;
-                        assert_eq!(results.len(), 1);
-                        completed.store(true, Ordering::SeqCst);
-                        Ok(())
-                    }, None).await
+                    exec.submit(
+                        0,
+                        async move {
+                            started_tx.send(()).unwrap();
+                            collect_rx.await.unwrap();
+                            let results = thoosa_shared::collect_futures_with_progress(
+                                std::iter::once(async move {
+                                    assert!(gate.is_paused());
+                                    // This child has no CURRENT_JOB task local. It must still
+                                    // reject a nested submission rather than wait for reset.
+                                    assert!(nested_exec.submit(0, async { Ok(()) }, None).await.is_err());
+                                    let values = thoosa_shared::collect_futures_with_progress(
+                                        (0..3).map(|i| {
+                                            let gate = Arc::clone(&gate);
+                                            async move {
+                                                let _copy = CudaActivityScope::for_operation(&gate)?;
+                                                Ok::<_, ThoError>(i)
+                                            }
+                                        }),
+                                        3,
+                                        ordering,
+                                        thoosa_shared::CollectionErrorPolicy::Propagate,
+                                        "nested copy chunks",
+                                    )
+                                    .await?;
+                                    assert_eq!(values.len(), 3);
+                                    Ok::<_, ThoError>(values)
+                                }),
+                                1,
+                                ordering,
+                                thoosa_shared::CollectionErrorPolicy::Propagate,
+                                "copy chunks",
+                            )
+                            .await?;
+                            assert_eq!(results.len(), 1);
+                            completed.store(true, Ordering::SeqCst);
+                            Ok(())
+                        },
+                        None,
+                    )
+                    .await
                 }
             });
             started_rx.await.unwrap();
@@ -2071,19 +2005,22 @@ mod tests {
     async fn test_reset_waits_for_activity_outside_executor() {
         let reset_ran = Arc::new(AtomicBool::new(false));
         let gate = Arc::new(CudaActivityGate::new(1));
-        let recovery = CudaRecoveryCoordinator::new(Arc::clone(&gate), Arc::new({
-            let reset_ran = Arc::clone(&reset_ran);
-            let gate = Arc::clone(&gate);
-            move |_| {
+        let recovery = CudaRecoveryCoordinator::new(
+            Arc::clone(&gate),
+            Arc::new({
+                let reset_ran = Arc::clone(&reset_ran);
                 let gate = Arc::clone(&gate);
-                reset_ran.store(true, Ordering::SeqCst);
-                Box::pin(async move {
-                    // Cleanup uses only the gate owned by this reset.
-                    let _cleanup = CudaActivityScope::for_operation(&gate)?;
-                    Ok(())
-                })
-            }
-        }));
+                move |_| {
+                    let gate = Arc::clone(&gate);
+                    reset_ran.store(true, Ordering::SeqCst);
+                    Box::pin(async move {
+                        // Cleanup uses only the gate owned by this reset.
+                        let _cleanup = CudaActivityScope::for_operation(&gate)?;
+                        Ok(())
+                    })
+                }
+            }),
+        );
         let exec = SyncStageRunner::new_with_recovery(8, recovery);
         let activity = CudaActivityScope::for_operation(&gate).unwrap();
         let descendant = activity.clone();
@@ -2131,11 +2068,16 @@ mod tests {
         let running = {
             let exec = Arc::clone(&exec);
             tokio::spawn(async move {
-                exec.submit(0, async move {
-                    let _ = running_started_tx.send(());
-                    let _ = release_running_rx.await;
-                    Ok::<_, ThoError>(())
-                }, None).await
+                exec.submit(
+                    0,
+                    async move {
+                        let _ = running_started_tx.send(());
+                        let _ = release_running_rx.await;
+                        Ok::<_, ThoError>(())
+                    },
+                    None,
+                )
+                .await
             })
         };
         running_started_rx.await.expect("exclusive job must start");
@@ -2144,10 +2086,15 @@ mod tests {
             let exec = Arc::clone(&exec);
             let pending_ran = Arc::clone(&pending_ran);
             tokio::spawn(async move {
-                exec.submit(usize::MAX, async move {
-                    pending_ran.store(true, Ordering::SeqCst);
-                    Ok::<_, ThoError>(())
-                }, None).await
+                exec.submit(
+                    usize::MAX,
+                    async move {
+                        pending_ran.store(true, Ordering::SeqCst);
+                        Ok::<_, ThoError>(())
+                    },
+                    None,
+                )
+                .await
             })
         };
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -2170,21 +2117,17 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_reset_waits_for_running_jobs() -> Result<(), ThoError> {
         let reset_calls = Arc::new(AtomicUsize::new(0));
-        let exec = Arc::new(SyncStageRunner::new_with_reset_hook(
-            64,
-            1,
-            {
+        let exec = Arc::new(SyncStageRunner::new_with_reset_hook(64, 1, {
+            let reset_calls = Arc::clone(&reset_calls);
+            Arc::new(move |_device_idx| {
                 let reset_calls = Arc::clone(&reset_calls);
-                Arc::new(move |_device_idx| {
-                    let reset_calls = Arc::clone(&reset_calls);
-                    async move {
-                        reset_calls.fetch_add(1, Ordering::SeqCst);
-                        Ok(())
-                    }
-                        .boxed()
-                })
-            },
-        ));
+                async move {
+                    reset_calls.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                }
+                .boxed()
+            })
+        }));
 
         let (long_started_tx1, long_started_rx1) = oneshot::channel();
         let (long_started_tx2, long_started_rx2) = oneshot::channel();
@@ -2194,31 +2137,39 @@ mod tests {
         let long1 = {
             let exec = Arc::clone(&exec);
             tokio::spawn(async move {
-                exec.submit(usize::MAX, async move {
-                    let _ = long_started_tx1.send(());
-                    let _ = release_rx1.await;
-                    Ok::<_, ThoError>(())
-                }, None).await
+                exec.submit(
+                    usize::MAX,
+                    async move {
+                        let _ = long_started_tx1.send(());
+                        let _ = release_rx1.await;
+                        Ok::<_, ThoError>(())
+                    },
+                    None,
+                )
+                .await
             })
         };
 
         let long2 = {
             let exec = Arc::clone(&exec);
             tokio::spawn(async move {
-                exec.submit(usize::MAX, async move {
-                    let _ = long_started_tx2.send(());
-                    let _ = release_rx2.await;
-                    Ok::<_, ThoError>(())
-                }, None).await
+                exec.submit(
+                    usize::MAX,
+                    async move {
+                        let _ = long_started_tx2.send(());
+                        let _ = release_rx2.await;
+                        Ok::<_, ThoError>(())
+                    },
+                    None,
+                )
+                .await
             })
         };
 
         let _ = long_started_rx1.await;
         let _ = long_started_rx2.await;
 
-        let reset_err: Result<(), ThoError> = exec
-            .submit(usize::MAX, async move { Err(needs_restart_error()) }, None)
-            .await;
+        let reset_err: Result<(), ThoError> = exec.submit(usize::MAX, async move { Err(needs_restart_error()) }, None).await;
 
         assert!(matches!(reset_err.as_ref().err().map(ThoError::what), Some(ThoError::CudaBeingRecovered)), "unexpected reset result: {reset_err:?}");
 
@@ -2237,7 +2188,9 @@ mod tests {
             while reset_calls.load(Ordering::SeqCst) == 0 {
                 tokio::task::yield_now().await;
             }
-        }).await.expect("reset hook should start after all running jobs finish");
+        })
+        .await
+        .expect("reset hook should start after all running jobs finish");
         assert_eq!(reset_calls.load(Ordering::SeqCst), 1);
 
         let exec = Arc::try_unwrap(exec).expect("all Arc clones must be dropped");
@@ -2249,24 +2202,20 @@ mod tests {
     async fn test_running_reset_failures_are_coalesced() -> Result<(), ThoError> {
         let reset_calls = Arc::new(AtomicUsize::new(0));
         let finished_jobs = Arc::new(AtomicUsize::new(0));
-        let exec = Arc::new(SyncStageRunner::new_with_reset_hook(
-            64,
-            1,
-            {
+        let exec = Arc::new(SyncStageRunner::new_with_reset_hook(64, 1, {
+            let reset_calls = Arc::clone(&reset_calls);
+            let finished_jobs = Arc::clone(&finished_jobs);
+            Arc::new(move |_device_idx| {
                 let reset_calls = Arc::clone(&reset_calls);
                 let finished_jobs = Arc::clone(&finished_jobs);
-                Arc::new(move |_device_idx| {
-                    let reset_calls = Arc::clone(&reset_calls);
-                    let finished_jobs = Arc::clone(&finished_jobs);
-                    async move {
-                        assert_eq!(finished_jobs.load(Ordering::SeqCst), 2);
-                        reset_calls.fetch_add(1, Ordering::SeqCst);
-                        Ok(())
-                    }
-                        .boxed()
-                })
-            },
-        ));
+                async move {
+                    assert_eq!(finished_jobs.load(Ordering::SeqCst), 2);
+                    reset_calls.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                }
+                .boxed()
+            })
+        }));
 
         let (started_tx1, started_rx1) = oneshot::channel();
         let (started_tx2, started_rx2) = oneshot::channel();
@@ -2277,12 +2226,17 @@ mod tests {
             let exec = Arc::clone(&exec);
             let finished_jobs = Arc::clone(&finished_jobs);
             tokio::spawn(async move {
-                exec.submit(usize::MAX, async move {
-                    let _ = started_tx1.send(());
-                    let _ = release_rx1.await;
-                    finished_jobs.fetch_add(1, Ordering::SeqCst);
-                    Err::<(), _>(needs_restart_error())
-                }, None).await
+                exec.submit(
+                    usize::MAX,
+                    async move {
+                        let _ = started_tx1.send(());
+                        let _ = release_rx1.await;
+                        finished_jobs.fetch_add(1, Ordering::SeqCst);
+                        Err::<(), _>(needs_restart_error())
+                    },
+                    None,
+                )
+                .await
             })
         };
 
@@ -2290,12 +2244,17 @@ mod tests {
             let exec = Arc::clone(&exec);
             let finished_jobs = Arc::clone(&finished_jobs);
             tokio::spawn(async move {
-                exec.submit(usize::MAX, async move {
-                    let _ = started_tx2.send(());
-                    let _ = release_rx2.await;
-                    finished_jobs.fetch_add(1, Ordering::SeqCst);
-                    Err::<(), _>(needs_restart_error())
-                }, None).await
+                exec.submit(
+                    usize::MAX,
+                    async move {
+                        let _ = started_tx2.send(());
+                        let _ = release_rx2.await;
+                        finished_jobs.fetch_add(1, Ordering::SeqCst);
+                        Err::<(), _>(needs_restart_error())
+                    },
+                    None,
+                )
+                .await
             })
         };
 
@@ -2312,7 +2271,9 @@ mod tests {
             while reset_calls.load(Ordering::SeqCst) == 0 {
                 tokio::task::yield_now().await;
             }
-        }).await.expect("one reset should run after both failing jobs finish");
+        })
+        .await
+        .expect("one reset should run after both failing jobs finish");
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert_eq!(reset_calls.load(Ordering::SeqCst), 1);
 
@@ -2326,57 +2287,62 @@ mod tests {
         let reset_calls = Arc::new(AtomicUsize::new(0));
         let parent_exited = Arc::new(AtomicBool::new(false));
 
-        let exec = Arc::new(SyncStageRunner::new_with_reset_hook(
-            64,
-            1,
-            {
+        let exec = Arc::new(SyncStageRunner::new_with_reset_hook(64, 1, {
+            let reset_calls = Arc::clone(&reset_calls);
+            let parent_exited = Arc::clone(&parent_exited);
+            Arc::new(move |_device_idx| {
                 let reset_calls = Arc::clone(&reset_calls);
                 let parent_exited = Arc::clone(&parent_exited);
-                Arc::new(move |_device_idx| {
-                    let reset_calls = Arc::clone(&reset_calls);
-                    let parent_exited = Arc::clone(&parent_exited);
-                    async move {
-                        debug!("test_nested_needs_reset_unwinds_parent_before_reset: reset invoked");
-                        assert!(parent_exited.load(Ordering::SeqCst), "parent must unwind before reset starts");
-                        reset_calls.fetch_add(1, Ordering::SeqCst);
-                        Ok(())
-                    }
-                    .boxed()
-                })
-            },
-        ));
+                async move {
+                    debug!("test_nested_needs_reset_unwinds_parent_before_reset: reset invoked");
+                    assert!(parent_exited.load(Ordering::SeqCst), "parent must unwind before reset starts");
+                    reset_calls.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                }
+                .boxed()
+            })
+        }));
 
         let result: Result<(), ThoError> = {
             let exec_for_child = Arc::clone(&exec);
             let parent_exited = Arc::clone(&parent_exited);
             let reset_calls = Arc::clone(&reset_calls);
-            tokio::time::timeout(Duration::from_secs(2), exec.submit(0, async move {
-                debug!("test_nested_needs_reset_unwinds_parent_before_reset: Parent job running");
-                let child_result: Result<(), ThoError> = exec_for_child.submit(
-                    usize::MAX,
+            tokio::time::timeout(
+                Duration::from_secs(2),
+                exec.submit(
+                    0,
                     async move {
-                        debug!("test_nested_needs_reset_unwinds_parent_before_reset: Child job running");
+                        debug!("test_nested_needs_reset_unwinds_parent_before_reset: Parent job running");
+                        let child_result: Result<(), ThoError> = exec_for_child
+                            .submit(
+                                usize::MAX,
+                                async move {
+                                    debug!("test_nested_needs_reset_unwinds_parent_before_reset: Child job running");
 
-                        if reset_calls.load(Ordering::Relaxed) == 0 {
-                            debug!("test_nested_needs_reset_unwinds_parent_before_reset: Child job failed");
-                            Err(needs_restart_error())
-                        } else {
-                            debug!(":test_nested_needs_reset_unwinds_parent_before_reset: Child job done");
-                            Ok(())
-                        }
+                                    if reset_calls.load(Ordering::Relaxed) == 0 {
+                                        debug!("test_nested_needs_reset_unwinds_parent_before_reset: Child job failed");
+                                        Err(needs_restart_error())
+                                    } else {
+                                        debug!(":test_nested_needs_reset_unwinds_parent_before_reset: Child job done");
+                                        Ok(())
+                                    }
+                                },
+                                None,
+                            )
+                            .await;
+
+                        parent_exited.store(true, Ordering::SeqCst);
+
+                        debug!("test_nested_needs_reset_unwinds_parent_before_reset: Parent job done");
+
+                        child_result
                     },
-                    None
-                ).await;
-
-                parent_exited.store(true, Ordering::SeqCst);
-
-                debug!("test_nested_needs_reset_unwinds_parent_before_reset: Parent job done");
-
-                child_result
-
-            }, None)).await.expect("parent should resume and return reset error")
+                    None,
+                ),
+            )
+            .await
+            .expect("parent should resume and return reset error")
         };
-
 
         assert!(matches!(result.as_ref().err().map(ThoError::what), Some(ThoError::CudaBeingRecovered)), "unexpected reset result: {result:?}");
 
@@ -2385,8 +2351,8 @@ mod tests {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
         })
-            .await
-            .expect("reset should eventually run");
+        .await
+        .expect("reset should eventually run");
 
         assert_eq!(1, reset_calls.load(Ordering::Relaxed));
         assert!(parent_exited.load(Ordering::SeqCst), "parent exited");
@@ -2401,26 +2367,22 @@ mod tests {
         let reset_calls = Arc::new(AtomicUsize::new(0));
         let parent_exited = Arc::new(AtomicBool::new(false));
 
-        let exec = Arc::new(SyncStageRunner::new_with_reset_hook(
-            64,
-            1,
-            {
+        let exec = Arc::new(SyncStageRunner::new_with_reset_hook(64, 1, {
+            let reset_calls = Arc::clone(&reset_calls);
+            let parent_exited = Arc::clone(&parent_exited);
+            Arc::new(move |_device_idx| {
                 let reset_calls = Arc::clone(&reset_calls);
                 let parent_exited = Arc::clone(&parent_exited);
-                Arc::new(move |_device_idx| {
-                    let reset_calls = Arc::clone(&reset_calls);
-                    let parent_exited = Arc::clone(&parent_exited);
-                    async move {
-                        while !parent_exited.load(Ordering::SeqCst) {
-                            tokio::time::sleep(Duration::from_millis(10)).await;
-                        }
-                        reset_calls.fetch_add(1, Ordering::SeqCst);
-                        Ok(())
+                async move {
+                    while !parent_exited.load(Ordering::SeqCst) {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
                     }
-                    .boxed()
-                })
-            },
-        ));
+                    reset_calls.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                }
+                .boxed()
+            })
+        }));
 
         let (child_started_tx, child_started_rx) = oneshot::channel();
         let (release_child_tx, release_child_rx) = oneshot::channel();
@@ -2429,19 +2391,27 @@ mod tests {
             let parent_exited = Arc::clone(&parent_exited);
             tokio::spawn(async move {
                 let exec_for_child = Arc::clone(&exec_for_parent);
-                exec_for_parent.submit(0, async move {
-                    let child_result: Result<(), ThoError> = exec_for_child.submit(
-                        usize::MAX,
+                exec_for_parent
+                    .submit(
+                        0,
                         async move {
-                            let _ = child_started_tx.send(());
-                            let _ = release_child_rx.await;
-                            Ok(())
+                            let child_result: Result<(), ThoError> = exec_for_child
+                                .submit(
+                                    usize::MAX,
+                                    async move {
+                                        let _ = child_started_tx.send(());
+                                        let _ = release_child_rx.await;
+                                        Ok(())
+                                    },
+                                    None,
+                                )
+                                .await;
+                            parent_exited.store(true, Ordering::SeqCst);
+                            child_result
                         },
                         None,
-                    ).await;
-                    parent_exited.store(true, Ordering::SeqCst);
-                    child_result
-                }, None).await
+                    )
+                    .await
             })
         };
 
@@ -2449,9 +2419,7 @@ mod tests {
         exec.request_cuda_reset(ThoError::CudaBeingRecovered).unwrap();
         let _ = release_child_tx.send(());
 
-        let result = tokio::time::timeout(Duration::from_secs(2), parent)
-            .await
-            .expect("parent task should not deadlock")?;
+        let result = tokio::time::timeout(Duration::from_secs(2), parent).await.expect("parent task should not deadlock")?;
         assert!(matches!(result.unwrap_err().what(), ThoError::CudaBeingRecovered));
 
         tokio::time::timeout(Duration::from_secs(2), async {
@@ -2459,8 +2427,8 @@ mod tests {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
         })
-            .await
-            .expect("reset should finish after parent unwinds");
+        .await
+        .expect("reset should finish after parent unwinds");
 
         assert_eq!(1, reset_calls.load(Ordering::Relaxed));
 
@@ -2486,26 +2454,28 @@ mod tests {
 
         let result = tokio::time::timeout(Duration::from_secs(2), {
             let exec_for_parent = Arc::clone(&exec);
-            exec.submit(0, async move {
-                let child_result: Result<(), ThoError> = exec_for_parent
-                    .submit(0, async move { Err(ThoError::oom()) }, None)
-                    .await;
+            exec.submit(
+                0,
+                async move {
+                    let child_result: Result<(), ThoError> = exec_for_parent.submit(0, async move { Err(ThoError::oom()) }, None).await;
 
-                match child_result {
-                    Err(e) => match e.what() {
-                        ThoError::SyncStageRunner(SyncStageRunnerError::JobError { job_id, inner }) => {
-                            assert!(inner.is_oom());
-                            assert!(*job_id > 0);
-                            Ok::<_, ThoError>(())
-                        }
-                        other => panic!("unexpected error cause: {other:?}"),
-                    },
-                    Ok(_) => panic!("child should fail"),
-                }
-            }, None)
+                    match child_result {
+                        Err(e) => match e.what() {
+                            ThoError::SyncStageRunner(SyncStageRunnerError::JobError { job_id, inner }) => {
+                                assert!(inner.is_oom());
+                                assert!(*job_id > 0);
+                                Ok::<_, ThoError>(())
+                            }
+                            other => panic!("unexpected error cause: {other:?}"),
+                        },
+                        Ok(_) => panic!("child should fail"),
+                    }
+                },
+                None,
+            )
         })
-            .await
-            .expect("parent resume must not deadlock")?;
+        .await
+        .expect("parent resume must not deadlock")?;
 
         assert_eq!(result, ());
 
@@ -2513,7 +2483,6 @@ mod tests {
         exec.shutdown().await;
         Ok(())
     }
-
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_max_other_parallel_is_observed() -> Result<(), ThoError> {
@@ -2527,13 +2496,18 @@ mod tests {
                 let active = Arc::clone(&active);
                 let max_seen = Arc::clone(&max_seen);
                 async move {
-                    exec.submit(0, async move {
-                        let now = active.fetch_add(1, Ordering::SeqCst) + 1;
-                        max_seen.fetch_max(now, Ordering::SeqCst);
-                        tokio::time::sleep(Duration::from_millis(30)).await;
-                        active.fetch_sub(1, Ordering::SeqCst);
-                        Ok::<_, ThoError>(())
-                    }, None).await
+                    exec.submit(
+                        0,
+                        async move {
+                            let now = active.fetch_add(1, Ordering::SeqCst) + 1;
+                            max_seen.fetch_max(now, Ordering::SeqCst);
+                            tokio::time::sleep(Duration::from_millis(30)).await;
+                            active.fetch_sub(1, Ordering::SeqCst);
+                            Ok::<_, ThoError>(())
+                        },
+                        None,
+                    )
+                    .await
                 }
             })
             .buffer_unordered(8)
@@ -2552,19 +2526,22 @@ mod tests {
     async fn test_reset_without_waiters_reopens_admission() {
         let reset_invoked = Arc::new(AtomicBool::new(false));
         let gate = Arc::new(CudaActivityGate::new(1));
-        let recovery = CudaRecoveryCoordinator::new(Arc::clone(&gate), Arc::new({
-            let gate = Arc::clone(&gate);
-            let reset_invoked = Arc::clone(&reset_invoked);
-            move |_| {
-                let reset_invoked = Arc::clone(&reset_invoked);
+        let recovery = CudaRecoveryCoordinator::new(
+            Arc::clone(&gate),
+            Arc::new({
                 let gate = Arc::clone(&gate);
-                Box::pin(async move {
-                    assert!(gate.is_paused(), "admission must remain closed throughout reset");
-                    reset_invoked.store(true, Ordering::SeqCst);
-                    Ok(())
-                })
-            }
-        }));
+                let reset_invoked = Arc::clone(&reset_invoked);
+                move |_| {
+                    let reset_invoked = Arc::clone(&reset_invoked);
+                    let gate = Arc::clone(&gate);
+                    Box::pin(async move {
+                        assert!(gate.is_paused(), "admission must remain closed throughout reset");
+                        reset_invoked.store(true, Ordering::SeqCst);
+                        Ok(())
+                    })
+                }
+            }),
+        );
         let exec = SyncStageRunner::new_with_recovery(8, recovery);
         exec.request_cuda_reset(ThoError::CudaBeingRecovered).unwrap();
         // No subscriber owns admission state; completion persists in the device gate.
@@ -2580,19 +2557,23 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(2), async {
             let started = Arc::new(tokio::sync::Notify::new());
             let release = Arc::new(tokio::sync::Notify::new());
-            let owner = SyncStageRunner::new_with_reset_hook(8, 1, Arc::new({
-                let started = Arc::clone(&started);
-                let release = Arc::clone(&release);
-                move |_| {
+            let owner = SyncStageRunner::new_with_reset_hook(
+                8,
+                1,
+                Arc::new({
                     let started = Arc::clone(&started);
                     let release = Arc::clone(&release);
-                    Box::pin(async move {
-                        started.notify_one();
-                        release.notified().await;
-                        Err(ThoError::oom().context("restart failed"))
-                    })
-                }
-            }));
+                    move |_| {
+                        let started = Arc::clone(&started);
+                        let release = Arc::clone(&release);
+                        Box::pin(async move {
+                            started.notify_one();
+                            release.notified().await;
+                            Err(ThoError::oom().context("restart failed"))
+                        })
+                    }
+                }),
+            );
             let other = SyncStageRunner::new_with_reset_hook(8, 2, Arc::new(|_| Box::pin(async { Ok(()) })));
             let cpu = SyncStageRunner::new_cpu(8);
             assert!(cpu.cuda_gate().is_none());
@@ -2618,7 +2599,9 @@ mod tests {
             owner.shutdown().await;
             other.shutdown().await;
             cpu.shutdown().await;
-        }).await.expect("one failed device must not close other executors");
+        })
+        .await
+        .expect("one failed device must not close other executors");
     }
 
     #[tokio::test]
@@ -2646,10 +2629,15 @@ mod tests {
                 let exec = Arc::clone(exec);
                 let start = Arc::clone(&start);
                 callers.push(tokio::spawn(async move {
-                    exec.submit(usize::MAX, async move {
-                        start.wait().await;
-                        Err::<(), _>(needs_restart_error())
-                    }, None).await
+                    exec.submit(
+                        usize::MAX,
+                        async move {
+                            start.wait().await;
+                            Err::<(), _>(needs_restart_error())
+                        },
+                        None,
+                    )
+                    .await
                 }));
             }
             start.wait().await;
@@ -2668,7 +2656,9 @@ mod tests {
             assert_eq!(second.submit(0, async { Ok(2) }, None).await.unwrap(), 2);
             Arc::try_unwrap(first).unwrap().shutdown().await;
             Arc::try_unwrap(second).unwrap().shutdown().await;
-        }).await.expect("devices must recover without a shared completion barrier");
+        })
+        .await
+        .expect("devices must recover without a shared completion barrier");
     }
 
     #[tokio::test]
@@ -2678,15 +2668,22 @@ mod tests {
             let started = Arc::new(tokio::sync::Notify::new());
             let release = Arc::new(tokio::sync::Notify::new());
             let gate = Arc::new(CudaActivityGate::new(1));
-            let recovery = CudaRecoveryCoordinator::new(Arc::clone(&gate), Arc::new({
-                let started = Arc::clone(&started);
-                let release = Arc::clone(&release);
-                move |_| {
+            let recovery = CudaRecoveryCoordinator::new(
+                Arc::clone(&gate),
+                Arc::new({
                     let started = Arc::clone(&started);
                     let release = Arc::clone(&release);
-                    Box::pin(async move { started.notify_one(); release.notified().await; Ok(()) })
-                }
-            }));
+                    move |_| {
+                        let started = Arc::clone(&started);
+                        let release = Arc::clone(&release);
+                        Box::pin(async move {
+                            started.notify_one();
+                            release.notified().await;
+                            Ok(())
+                        })
+                    }
+                }),
+            );
             let owner = SyncStageRunner::new_inner_with_buffer_limits(1, 1, Some(recovery), Arc::clone(&limits));
             let healthy = runner_with_limits(2, &limits);
             let cpu = runner_with_limits(0, &limits);
@@ -2711,7 +2708,9 @@ mod tests {
             owner.shutdown().await;
             Arc::try_unwrap(healthy).unwrap().shutdown().await;
             Arc::try_unwrap(cpu).unwrap().shutdown().await;
-        }).await.expect("healthy devices must complete independent work throughout another device's recovery");
+        })
+        .await
+        .expect("healthy devices must complete independent work throughout another device's recovery");
     }
 
     #[tokio::test]
@@ -2728,13 +2727,18 @@ mod tests {
                 let started = started.clone();
                 let release = Arc::clone(&release);
                 callers.push(tokio::spawn(async move {
-                    exec.submit(usize::MAX, async move {
-                        // Register before notifying the test so release cannot be lost.
-                        let released = release.notified();
-                        started.send(()).unwrap();
-                        released.await;
-                        Ok(())
-                    }, None).await
+                    exec.submit(
+                        usize::MAX,
+                        async move {
+                            // Register before notifying the test so release cannot be lost.
+                            let released = release.notified();
+                            started.send(()).unwrap();
+                            released.await;
+                            Ok(())
+                        },
+                        None,
+                    )
+                    .await
                 }));
             }
             starts.recv().await.unwrap();
@@ -2743,41 +2747,57 @@ mod tests {
             owner.cuda_gate().unwrap().wait_for_pause_to_finish(ticket).await.unwrap();
             assert_eq!(other.cuda_gate().unwrap().device_generation(), CudaDeviceGeneration(0));
             release.notify_waiters();
-            for caller in callers { caller.await.unwrap().unwrap(); }
+            for caller in callers {
+                caller.await.unwrap().unwrap();
+            }
             owner.shutdown().await;
             Arc::try_unwrap(other).unwrap().shutdown().await;
             Arc::try_unwrap(cpu).unwrap().shutdown().await;
-        }).await.expect("recovery must drain only its own device");
+        })
+        .await
+        .expect("recovery must drain only its own device");
     }
 
     #[tokio::test]
     async fn test_reset_between_suspend_and_enqueue_rejects_child_and_unwinds_parent() {
         let parent_finished = Arc::new(AtomicBool::new(false));
-        let exec = Arc::new(SyncStageRunner::new_with_reset_hook(8, 1, Arc::new({
-            let parent_finished = Arc::clone(&parent_finished);
-            move |_| {
-                assert!(parent_finished.load(Ordering::SeqCst), "parent must unwind before reset");
-                Box::pin(async { Ok(()) })
-            }
-        })));
+        let exec = Arc::new(SyncStageRunner::new_with_reset_hook(
+            8,
+            1,
+            Arc::new({
+                let parent_finished = Arc::clone(&parent_finished);
+                move |_| {
+                    assert!(parent_finished.load(Ordering::SeqCst), "parent must unwind before reset");
+                    Box::pin(async { Ok(()) })
+                }
+            }),
+        ));
         let child_ran = Arc::new(AtomicBool::new(false));
-        let parent = exec.submit(0, {
-            let exec = Arc::clone(&exec);
-            let child_ran = Arc::clone(&child_ran);
-            async move {
-                let mut child = Box::pin(exec.submit(0, async move {
-                    child_ran.store(true, Ordering::SeqCst);
+        let parent = exec.submit(
+            0,
+            {
+                let exec = Arc::clone(&exec);
+                let child_ran = Arc::clone(&child_ran);
+                async move {
+                    let mut child = Box::pin(exec.submit(
+                        0,
+                        async move {
+                            child_ran.store(true, Ordering::SeqCst);
+                            Ok(())
+                        },
+                        None,
+                    ));
+                    // Poll through capacity reservation and Suspend, but stop before
+                    // its acknowledgement. Pause must then win the final enqueue check.
+                    assert!(futures::poll!(child.as_mut()).is_pending());
+                    exec.request_cuda_reset(ThoError::CudaBeingRecovered).unwrap();
+                    assert!(child.await.is_err());
+                    parent_finished.store(true, Ordering::SeqCst);
                     Ok(())
-                }, None));
-                // Poll through capacity reservation and Suspend, but stop before
-                // its acknowledgement. Pause must then win the final enqueue check.
-                assert!(futures::poll!(child.as_mut()).is_pending());
-                exec.request_cuda_reset(ThoError::CudaBeingRecovered).unwrap();
-                assert!(child.await.is_err());
-                parent_finished.store(true, Ordering::SeqCst);
-                Ok(())
-            }
-        }, None);
+                }
+            },
+            None,
+        );
         tokio::time::timeout(Duration::from_secs(2), parent).await.unwrap().unwrap();
         tokio::time::timeout(Duration::from_secs(2), exec.cuda_gate().unwrap().wait_if_paused()).await.unwrap().unwrap();
         assert!(!child_ran.load(Ordering::SeqCst));

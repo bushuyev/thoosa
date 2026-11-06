@@ -1,7 +1,7 @@
-use thoosa_common::tch_error::tch_result;
 use super::*;
 use crate::ipc::worker_msg::WorkerError;
 use std::cell::Cell;
+use thoosa_common::tch_error::tch_result;
 
 fn module(optimizer: u8) -> Result<ThoTrainModule<AnyDims, AnyDims>, ThoError> {
     let optimizer: ThoOptimizers = match optimizer {
@@ -9,29 +9,38 @@ fn module(optimizer: u8) -> Result<ThoTrainModule<AnyDims, AnyDims>, ThoError> {
         1 => nn::AdamW::default().into(),
         _ => nn::Sgd { momentum: 0.9, ..Default::default() }.into(),
     };
-    Ok(ThoTrainModule::new_on_device(ModConfig::new(optimizer, |vs| {
-        let initialize = vs.variables().is_empty();
-        let mut builder = SeqBuilder::new(1, None)?;
-        let module = builder.linear_s(1, "output")?.end_seq()?.build_tch_module(&vs.root())?;
-        // Frozen parameters still belong to the optimizer registration and must
-        // not become per-batch rollback copies merely because requires_grad is false.
-        if initialize {
-            let frozen = vs.root().f_var("frozen", &[1024], nn::Init::Const(0.5))?;
-            let _ = frozen.f_set_requires_grad(false)?;
-            let _ = vs.root().add("running_stat", Tensor::f_from_slice(&[0.25f32])?, false);
-            tch::no_grad(|| -> Result<(), ThoError> {
-                for var in &vs.variables_.lock().or_else(|_| Err(ThoError::new("test VarStore lock poisoned")))?.trainable_variables {
-                    let _ = tch_result(tch_result(var.tensor.f_alias())?.f_fill_(0.5))?;
+    Ok(ThoTrainModule::new_on_device(
+        ModConfig::new(
+            optimizer,
+            |vs| {
+                let initialize = vs.variables().is_empty();
+                let mut builder = SeqBuilder::new(1, None)?;
+                let module = builder.linear_s(1, "output")?.end_seq()?.build_tch_module(&vs.root())?;
+                // Frozen parameters still belong to the optimizer registration and must
+                // not become per-batch rollback copies merely because requires_grad is false.
+                if initialize {
+                    let frozen = vs.root().f_var("frozen", &[1024], nn::Init::Const(0.5))?;
+                    let _ = frozen.f_set_requires_grad(false)?;
+                    let _ = vs.root().add("running_stat", Tensor::f_from_slice(&[0.25f32])?, false);
+                    tch::no_grad(|| -> Result<(), ThoError> {
+                        for var in &vs.variables_.lock().or_else(|_| Err(ThoError::new("test VarStore lock poisoned")))?.trainable_variables {
+                            let _ = tch_result(tch_result(var.tensor.f_alias())?.f_fill_(0.5))?;
+                        }
+                        Ok(())
+                    })?;
                 }
-                Ok(())
-            })?;
-        }
-        Ok(module)
-    }, 0.01), thoosa_common::tho_device::ThoDevice::from(0usize))?)
+                Ok(module)
+            },
+            0.01,
+        ),
+        thoosa_common::tho_device::ThoDevice::from(0usize),
+    )?)
 }
 
 fn variable(module: &ThoTrainModule<AnyDims, AnyDims>, name: &str) -> Result<Tensor, ThoError> {
-    let OptSnapshot::Opt { vs, .. } = &module.opt_state else { return Err(ThoError::new("test module not loaded")); };
+    let OptSnapshot::Opt { vs, .. } = &module.opt_state else {
+        return Err(ThoError::new("test module not loaded"));
+    };
     let variables = vs.variables();
     let tensor = variables.get(name).ok_or_else(|| ThoError::NotFound(Some(name.into())))?;
     Ok(tch_result(tensor.f_alias())?)
@@ -48,7 +57,9 @@ fn accumulate(module: &mut ThoTrainModule<AnyDims, AnyDims>) -> Result<(), ThoEr
 fn assert_terminal_over_ipc(error: ThoError) -> Result<(), ThoError> {
     assert!(!error.is_retryable_oom(), "invalidated training must not be retried locally");
     let caused_by_oom = error.is_oom();
-    if caused_by_oom { assert!(format!("{error:#}").contains("out of memory"), "terminal failures must retain their OOM diagnostics"); }
+    if caused_by_oom {
+        assert!(format!("{error:#}").contains("out of memory"), "terminal failures must retain their OOM diagnostics");
+    }
     let wire = serde_json::to_vec(&WorkerError::from(error))?;
     let decoded: WorkerError = serde_json::from_slice(&wire)?;
     let decoded = ThoError::from(decoded);
@@ -71,7 +82,9 @@ fn checkpoint(module: &mut ThoTrainModule<AnyDims, AnyDims>) -> Result<(Vec<u8>,
 
 fn restore(module: &mut ThoTrainModule<AnyDims, AnyDims>, checkpoint: &(Vec<u8>, Vec<(String, Tensor)>)) -> Result<(), ThoError> {
     module.reset_state(serde_json::from_slice(&checkpoint.0)?)?;
-    for (key, tensor) in &checkpoint.1 { module.set_state_tensor(key, tch_result(tensor.f_to_device_(Cpu, tensor.kind(), false, true))?, 0)?; }
+    for (key, tensor) in &checkpoint.1 {
+        module.set_state_tensor(key, tch_result(tensor.f_to_device_(Cpu, tensor.kind(), false, true))?, 0)?;
+    }
     module.prepare_state(0)?;
     module.ensure_training_usable()
 }
@@ -85,14 +98,18 @@ fn test_import_defers_reconstruction_and_preserves_state_after_oom() -> Result<(
     let build_count = builds.clone();
     let build = module.config.optimizer_builder;
     module.config.optimizer_builder = Box::new(move |vs| {
-        if build_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 { return Err(ThoError::oom().into()); }
+        if build_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+            return Err(ThoError::oom().into());
+        }
         build(vs)
     });
     module.reset_state(serde_json::from_slice(&saved.0)?)?;
     let (key, tensor) = &saved.1[0];
     module.set_state_tensor(key, tch_result(tensor.f_to_device_(Cpu, tensor.kind(), false, true))?, 0)?;
     assert!(module.prepare_state(0).is_err(), "partial imports must not construct a module");
-    for (key, tensor) in &saved.1[1..] { module.set_state_tensor(key, tch_result(tensor.f_to_device_(Cpu, tensor.kind(), false, true))?, 0)?; }
+    for (key, tensor) in &saved.1[1..] {
+        module.set_state_tensor(key, tch_result(tensor.f_to_device_(Cpu, tensor.kind(), false, true))?, 0)?;
+    }
     assert_eq!(builds.load(std::sync::atomic::Ordering::SeqCst), 0, "the last tensor import must not reconstruct the optimizer");
     assert!(module.prepare_state(0).unwrap_err().is_retryable_oom());
     assert!(module.ensure_training_usable().is_err());
@@ -122,13 +139,19 @@ fn test_epoch_checkpoint_restores_complete_optimizer_and_buffers() -> Result<(),
             }
             let saved = checkpoint(&mut restored)?;
             for fail_commit in [false, true] {
-                let error = restored.training_transaction_with(|module| {
-                    accumulate(module)?;
-                    if fail_commit { Ok(()) } else { Err(ThoError::oom()) }
-                }, |module| {
-                    module.opt().step();
-                    Err(ThoError::oom())
-                }, || Ok(())).unwrap_err();
+                let error = restored
+                    .training_transaction_with(
+                        |module| {
+                            accumulate(module)?;
+                            if fail_commit { Ok(()) } else { Err(ThoError::oom()) }
+                        },
+                        |module| {
+                            module.opt().step();
+                            Err(ThoError::oom())
+                        },
+                        || Ok(()),
+                    )
+                    .unwrap_err();
                 assert!(error.is_oom());
                 assert_terminal_over_ipc(error)?;
                 assert!(restored.ensure_training_usable().is_err());
@@ -156,10 +179,16 @@ fn test_epoch_checkpoint_restores_complete_optimizer_and_buffers() -> Result<(),
 fn test_training_accumulation_completion_oom_invalidates_epoch() -> Result<(), ThoError> {
     let mut module = module(0)?;
     let completions = Cell::new(0);
-    let error = module.training_transaction_with(accumulate, |_| panic!("commit must not run"), || {
-        completions.set(completions.get() + 1);
-        Err(ThoError::oom())
-    }).unwrap_err();
+    let error = module
+        .training_transaction_with(
+            accumulate,
+            |_| panic!("commit must not run"),
+            || {
+                completions.set(completions.get() + 1);
+                Err(ThoError::oom())
+            },
+        )
+        .unwrap_err();
     assert!(error.is_oom());
     assert!(!error.is_retryable_oom());
     assert_eq!(completions.get(), 1, "failed epochs do not attempt buffer rollback");
@@ -174,14 +203,20 @@ fn test_training_commit_and_completion_failures_are_terminal() -> Result<(), Tho
             let mut module = module(optimizer)?;
             let before = tch_result(variable(&module, "seq_0.output.weight")?.f_double_value(&[0, 0]))?;
             let completions = Cell::new(0);
-            let error = module.training_transaction_with(accumulate, |module| {
-                // Simulate an optimizer that modified some state before reporting OOM.
-                module.opt().step();
-                if fail_completion { Ok(()) } else { Err(ThoError::oom()) }
-            }, || {
-                completions.set(completions.get() + 1);
-                if fail_completion && completions.get() == 2 { Err(ThoError::oom()) } else { Ok(()) }
-            }).unwrap_err();
+            let error = module
+                .training_transaction_with(
+                    accumulate,
+                    |module| {
+                        // Simulate an optimizer that modified some state before reporting OOM.
+                        module.opt().step();
+                        if fail_completion { Ok(()) } else { Err(ThoError::oom()) }
+                    },
+                    || {
+                        completions.set(completions.get() + 1);
+                        if fail_completion && completions.get() == 2 { Err(ThoError::oom()) } else { Ok(()) }
+                    },
+                )
+                .unwrap_err();
             assert_eq!(completions.get(), 2, "a failed commit must still synchronize");
             assert!(error.is_oom(), "commit failure must retain its typed OOM cause");
             assert_terminal_over_ipc(error)?;

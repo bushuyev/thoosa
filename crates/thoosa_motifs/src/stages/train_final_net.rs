@@ -99,17 +99,13 @@ where
     L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,
     R: RunCtx + MaxParallelCtx + Adjustable + 'static,
-
 {
     // Final training consumes the complete ordered label-feature schema; limiting
     // motif models belongs to label training rather than this constructor.
     //Build a final-net application stage that wraps the raw loader with motif+label inference.
     let apply_label_nets = Arc::new(t!(ApplyLabelNets::new_with_apply_motif_nets(ws, store, train_label_nets_run_config_ids.clone(), stage_ctx, slices_step)).await?);
 
-    let label_loader = Arc::new(PairStage::new(
-        Arc::clone(&loader),
-        Arc::clone(&apply_label_nets),
-    ));
+    let label_loader = Arc::new(PairStage::new(Arc::clone(&loader), Arc::clone(&apply_label_nets)));
 
     t!(TrainFinalNet::new(train_label_nets_run_config_ids, label_loader, apply_label_nets.num_nets() as u32, run_configs, ws, store, opt_config)).await
 }
@@ -158,7 +154,6 @@ impl TrainFinalNetOutput {
 
 impl Output for TrainFinalNetOutput {}
 
-
 #[async_trait]
 impl SavableResult for TrainFinalNetOutput {
     type Store = dyn MotifsStore;
@@ -191,7 +186,6 @@ where
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "TrainFinalNet::run"))]
     fn run(self: Arc<Self>, input: Self::In<'static>, mut ctx: Self::Ctx) -> impl Future<Output = Result<Self::Out, ThoError>> + Send {
-
         let train_final_run_configs = Arc::clone(&self.run_configs);
         let label_loader = Arc::clone(&self.label_loader);
         let train_label_nets_run_config_ids = self.train_label_nets_run_config_ids.clone();
@@ -202,8 +196,7 @@ where
         async move {
             //Load train/valid logits resources and validate label vector sizes.
             let resources_config = input.resources_config().clone();
-            let (train_resources, valid_resources): (Vec<(Resource, Vec<f32>)>, Vec<(Resource, Vec<f32>)>) =
-                t!(resources_config.to_resources(&store)).await?;
+            let (train_resources, valid_resources): (Vec<(Resource, Vec<f32>)>, Vec<(Resource, Vec<f32>)>) = t!(resources_config.to_resources(&store)).await?;
 
             let labels_len = train_resources.first().ok_or_else(|| ThoError::new("TrainFinalNet::run: no train resources"))?.1.len();
             if labels_len == 0 {
@@ -234,9 +227,7 @@ where
                 "final".to_string(),
             ));
 
-            let result = t!(train_net.run(
-                Arc::new(TrainNetInput::new()),
-                ctx.branch(false))).await?;
+            let result = t!(train_net.run(Arc::new(TrainNetInput::new()), ctx.branch(false))).await?;
 
             let final_result = TrainFinalNetsRunConfigResult::new(Some(&train_label_nets_run_config_ids), result.min_loss, result.var_store_path, result.node_params, result.run_config);
             info!("TrainFinalNet::run, done: min_loss={:?}", final_result.loss);
@@ -258,12 +249,22 @@ impl WorkerStageInput for SyncLogitsBatchInput<'_> {
     fn clone_refs(&self) -> Result<Box<dyn WorkerInput>, ThoError> {
         // Own cloned worker references so the borrowed batch cannot escape into typetag.
         let outputs = self.outputs.iter().map(|output| Ok(ThoDataRef::Owned(output.as_ref().clone_ref()?))).collect::<Result<Vec<_>, ThoError>>()?;
-        Ok(Box::new(SyncLogitsBatchInput { id: self.id.clone(), outputs, labels: self.labels.clone(), labels_len: self.labels_len }))
+        Ok(Box::new(SyncLogitsBatchInput {
+            id: self.id.clone(),
+            outputs,
+            labels: self.labels.clone(),
+            labels_len: self.labels_len,
+        }))
     }
 
     fn ref_to_tensor(&self, all_cuda_tensors: &AllTensors, remove: bool) -> Result<Self, ThoError> {
         let outputs = self.outputs.iter().map(|output| Ok(ThoDataRef::Owned(WorkerStageInput::ref_to_tensor(output.as_ref(), all_cuda_tensors, remove)?))).collect::<Result<Vec<_>, ThoError>>()?;
-        Ok(Self { id: self.id.clone(), outputs, labels: self.labels.clone(), labels_len: self.labels_len })
+        Ok(Self {
+            id: self.id.clone(),
+            outputs,
+            labels: self.labels.clone(),
+            labels_len: self.labels_len,
+        })
     }
 }
 
@@ -272,7 +273,6 @@ impl WorkerInput for SyncLogitsBatchInput<'static> {}
 
 impl Data for SyncLogitsBatchInput<'_> {
     type Metrics = i64;
-
 
     fn size(&self) -> Self::Metrics {
         self.outputs.len() as i64
@@ -307,23 +307,37 @@ struct SyncLogitsBatchInputWrapper {
 
 impl SyncLogitsBatchInputWrapper {
     fn new(outputs: Vec<Arc<DevicesWrap<ThoTensor<LabelProbability, SynKey>>>>, labels: Vec<Vec<f32>>, labels_len: usize) -> Self {
-        Self { id: SynKey::new([mono_key!("logits_batch", "SyncLogitsBatch")]), outputs, labels, labels_len }
+        Self {
+            id: SynKey::new([mono_key!("logits_batch", "SyncLogitsBatch")]),
+            outputs,
+            labels,
+            labels_len,
+        }
     }
 }
 
 impl BorrowRef for SyncLogitsBatchInputWrapper {
-    fn protect(&self, device: usize) -> thoosa_common::runner::residency::ResidencyLease { thoosa_common::runner::residency::ResidencyLease::combine(self.outputs.iter().map(|value| value.protect(device))) }
+    fn protect(&self, device: usize) -> thoosa_common::runner::residency::ResidencyLease {
+        thoosa_common::runner::residency::ResidencyLease::combine(self.outputs.iter().map(|value| value.protect(device)))
+    }
 
-    type Out<'a> = SyncLogitsBatchInput<'a> where Self: 'a;
+    type Out<'a>
+        = SyncLogitsBatchInput<'a>
+    where
+        Self: 'a;
 
     fn borrow_ref<'a>(&'a self, to_device_idx: usize) -> impl std::future::Future<Output = Result<Self::Out<'a>, ThoError>> + Send
     where
         Self: 'a,
     {
         async move {
-
             let outputs = try_join_all(self.outputs.iter().map(|output| BorrowRef::borrow_ref(output, to_device_idx))).await?;
-            Ok(SyncLogitsBatchInput { id: self.id.clone(), outputs, labels: self.labels.clone(), labels_len: self.labels_len })
+            Ok(SyncLogitsBatchInput {
+                id: self.id.clone(),
+                outputs,
+                labels: self.labels.clone(),
+                labels_len: self.labels_len,
+            })
         }
     }
 }
@@ -343,7 +357,7 @@ impl SyncLogitsBatchOutput {
 
 impl WorkerStageOutput for SyncLogitsBatchOutput {
     fn encode_from_worker(self, all_cuda_tensors: &AllTensors, tho_device: &ThoDevice) -> Result<Self, ThoError> {
-        Ok(SyncLogitsBatchOutput{
+        Ok(SyncLogitsBatchOutput {
             id: self.id,
             x: self.x.encode_from_worker(all_cuda_tensors, tho_device)?,
             y: self.y.encode_from_worker(all_cuda_tensors, tho_device)?,
@@ -361,54 +375,51 @@ impl WithId for SyncLogitsBatchOutput {
 
 impl Output for SyncLogitsBatchOutput {}
 
-
 pub const SYNC_LOGITS_BATCH_ENDPOINT: &str = "SYNC_LOGITS_BATCH_ENDPOINT";
 static SYNC_LOGITS_BATCH_INSTANCES: InstanceCache = InstanceCache::new();
 
 #[derive(Debug)]
 struct SyncLogitsBatch<C>
 where
-    C: RunCtx  + 'static
+    C: RunCtx + 'static,
 {
     pd: PhantomData<C>,
 }
 
 impl<C> SyncLogitsBatch<C>
 where
-    C: RunCtx  + 'static
+    C: RunCtx + 'static,
 {
     async fn new(device: ThoDevice) -> Result<Arc<DynSyncStageEnum<SyncLogitsBatch<C>>>, ThoError> {
-        SYNC_LOGITS_BATCH_INSTANCES.get_or_try_insert_recreatable_with::<C, _, _, _, _>(device.tho_device_idx(), GlobalCtx::global().cuda_activity_gate(device.tho_device_idx()), GlobalCtx::global().is_ipc(), 0, move || async move {
+        SYNC_LOGITS_BATCH_INSTANCES
+            .get_or_try_insert_recreatable_with::<C, _, _, _, _>(device.tho_device_idx(), GlobalCtx::global().cuda_activity_gate(device.tho_device_idx()), GlobalCtx::global().is_ipc(), 0, move || async move {
                 if GlobalCtx::global().is_ipc() {
-                Ok(Arc::new(DynSyncStageEnum::Proxy {
-                    stage: Arc::new(ProxyStage::proxy_recreatable(SYNC_LOGITS_BATCH_ENDPOINT, Some(0.to_string()), device.tho_device_idx(), Box::new(())).await?),
-                    init: (),
-                }))
-            } else {
-                Ok(
-                    Arc::new(DynSyncStageEnum::Local(Arc::new(SyncLogitsBatch::new_local().await?)))
-                )
-            }
-        }).await
+                    Ok(Arc::new(DynSyncStageEnum::Proxy {
+                        stage: Arc::new(ProxyStage::proxy_recreatable(SYNC_LOGITS_BATCH_ENDPOINT, Some(0.to_string()), device.tho_device_idx(), Box::new(())).await?),
+                        init: (),
+                    }))
+                } else {
+                    Ok(Arc::new(DynSyncStageEnum::Local(Arc::new(SyncLogitsBatch::new_local().await?))))
+                }
+            })
+            .await
     }
 
-    async fn new_local()-> Result<Self, ThoError>{
-        Ok(Self {
-            pd: PhantomData
-        })
+    async fn new_local() -> Result<Self, ThoError> {
+        Ok(Self { pd: PhantomData })
     }
-
 }
 
 #[typetag::serde]
-impl WorkerOutput for SyncLogitsBatchOutput{}
+impl WorkerOutput for SyncLogitsBatchOutput {}
 
-pub fn sync_logits_batch_init<'a>(_stage_id:Option<String>, _init: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, _all_cuda_tensors: &'a AllTensors, _tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn sync_logits_batch_init<'a>(_stage_id: Option<String>, _init: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, _all_cuda_tensors: &'a AllTensors, _tho_device: &'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
-        let stage:SyncLogitsBatch<WokerRunCtx> = SyncLogitsBatch::new_local().await?;
+        let stage: SyncLogitsBatch<WokerRunCtx> = SyncLogitsBatch::new_local().await?;
 
         Ok(Box::new(WorkerWrapper::new(Arc::new(stage), PhantomData::<JsonIpcCodec>)) as Box<dyn SyncStageIpcWrapper>)
-    }.boxed()
+    }
+    .boxed()
 }
 
 impl<C> Adjustable for SyncLogitsBatch<C> where C: RunCtx + 'static {}
@@ -440,9 +451,7 @@ where
         if input.outputs.is_empty() {
             return Err(ThoError::new("SyncLogitsBatch: empty outputs"));
         }
-        let x_values = input.outputs.iter()
-            .map(|output| tch_result(output.as_ref().local()?.f_flatten(0, 1)))
-            .collect::<Result<Vec<_>, ThoError>>()?;
+        let x_values = input.outputs.iter().map(|output| tch_result(output.as_ref().local()?.f_flatten(0, 1))).collect::<Result<Vec<_>, ThoError>>()?;
 
         let x = tch_result(tch_result(Tensor::f_stack(x_values.as_slice(), 0))?.f_squeeze_dim(-1))?;
 
@@ -450,12 +459,16 @@ where
 
         let device = input.outputs[0].as_ref().local()?.device();
 
-        let y_values = input.labels.iter().map(|labels| {
-            if labels.len() != input.labels_len {
-                return Err(ThoError::new("SyncLogitsBatch: bad label size"));
-            }
-            Ok(tch_result(tch_result(Tensor::f_from_slice(labels.as_slice()))?.f_to_device(device))?)
-        }).collect::<Result<Vec<_>, ThoError>>()?;
+        let y_values = input
+            .labels
+            .iter()
+            .map(|labels| {
+                if labels.len() != input.labels_len {
+                    return Err(ThoError::new("SyncLogitsBatch: bad label size"));
+                }
+                Ok(tch_result(tch_result(Tensor::f_from_slice(labels.as_slice()))?.f_to_device(device))?)
+            })
+            .collect::<Result<Vec<_>, ThoError>>()?;
 
         let y = tch_result(Tensor::f_stack(y_values.as_slice(), 0))?;
 
@@ -515,7 +528,7 @@ where
         })
     }
 
-    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="LogitsResourcesBatch::build_batch_stream"))]
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "LogitsResourcesBatch::build_batch_stream"))]
     fn build_batch_stream(loader: Arc<L>, resources: Arc<Vec<(Resource, Vec<f32>)>>, batch_size: u32, labels_len: usize, mut ctx: C) -> BoxStream<'static, Result<(ThoBatch<LabelProbability>, Option<BatchLengths>, ThoBatch<LabelsProbabilities>), ThoError>> {
         let batches = shuffle_and_chunk_with_rng(resources.len(), batch_size, &mut rand::rng());
         let futures = futures::stream::iter(batches.into_iter()).then(move |batch_keys| {
@@ -536,58 +549,36 @@ where
                         let label_probability: Arc<DevicesWrap<ThoTensor<LabelProbability, SynKey>>> = t!(Arc::clone(&loader).run_cached(Arc::new(resource), ctx_for_loader)).await?;
 
                         if log_enabled!(DebugLevel) {
-
                             let val = BorrowRef::borrow_ref(&label_probability, tho_device_idx).await?;
                             debug!("LogitsResourcesBatch::build_batch_stream: out={val:?} \nlabels={labels:?}");
                             if log_enabled!(Trace) && !GlobalCtx::global().is_ipc() {
                                 trace!("LogitsResourcesBatch::build_batch_stream: out=\n{} \nlabels={labels:?}", val.as_ref());
                             }
-
                         }
 
                         Ok::<_, ThoError>((label_probability, labels))
                     }
                 });
 
-                let (label_probabilities, labels) = t!(collect_futures_with_progress(
-                    futures,
-                    batch_len,
-                    FuturesOrdering::Ordered,
-                    thoosa_shared::CollectionErrorPolicy::Propagate,
-                    "LogitsResourcesBatch::build_batch_stream",
-                )).await?
-                .into_iter()
-                .collect::<Vec<_>>()
-                .into_iter()
-                .fold((vec![], vec![]), |mut a, v| {
-                    a.0.push(v.0);
-                    a.1.push(v.1);
-                    a
-                });
+                let (label_probabilities, labels) = t!(collect_futures_with_progress(futures, batch_len, FuturesOrdering::Ordered, thoosa_shared::CollectionErrorPolicy::Propagate, "LogitsResourcesBatch::build_batch_stream",))
+                    .await?
+                    .into_iter()
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .fold((vec![], vec![]), |mut a, v| {
+                        a.0.push(v.0);
+                        a.1.push(v.1);
+                        a
+                    });
 
                 debug!("LogitsResourcesBatch::build_batch_stream: label_probabilities={label_probabilities:?} labels={labels:?}");
 
-
-
                 let stage = SyncLogitsBatch::<C>::new(ctx_for_batch.tho_device_idx().into()).await?;
                 let input = Arc::new(SyncLogitsBatchInputWrapper::new(label_probabilities, labels, labels_len));
-                let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(vec![
-                    Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(*MaxParallelStep::FAST))),
-                    Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("sync_label_batch"))),
-                ], None);
-                let output = t!(oom_handler.run(
-                    &stage,
-                    input,
-                    ctx_for_batch.branch(false),
-                    WithRunCtxContext::new(
-                       MaxParallelAndDumpToCpuAdjustableContex::new(
-                           MaxParallelAdjustContextImpl::new(),
-                           DumpToCpuContextImpl::new(),
-                       ),
-               ))).await?;
+                let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(vec![Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(*MaxParallelStep::FAST))), Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("sync_label_batch")))], None);
+                let output = t!(oom_handler.run(&stage, input, ctx_for_batch.branch(false), WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new(),),))).await?;
 
                 debug!("LogitsResourcesBatch::build_batch_stream: SyncLogitsBatch::outputs={output:?}");
-
 
                 Ok::<_, ThoError>(output.into_parts())
             }
@@ -612,8 +603,6 @@ where
     }
 }
 
-
-
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TrainFinalStepIpcInit {
     params: FinalNetParams,
@@ -623,7 +612,6 @@ pub struct TrainFinalStepIpcInit {
 }
 
 type SyncTrainFinalStep<C> = TrainStep<TrainStepXFn<LabelProbability>, LabelProbability, LabelsProbabilities, C>;
-
 
 /// Cross-entropy for soft/probabilistic targets.
 ///
@@ -649,18 +637,13 @@ fn train_final_loss(pred_y: &Tensor, target: &Tensor) -> anyhow::Result<Tensor> 
 
     let log_probs = pred_y.f_log_softmax(-1, Kind::Float)?;
 
-    Ok((target * log_probs)
-        .f_sum_dim_intlist(&[-1i64][..], false, Kind::Float)?
-        .f_mean(Kind::Float)?
-        .f_multiply_scalar(-1.)?)
+    Ok((target * log_probs).f_sum_dim_intlist(&[-1i64][..], false, Kind::Float)?.f_mean(Kind::Float)?.f_multiply_scalar(-1.)?)
 }
 
-impl WorkerStageInput for TrainFinalStepIpcInit {
-}
+impl WorkerStageInput for TrainFinalStepIpcInit {}
 
 #[typetag::serde(name = "TrainFinalStepIpcInit")]
 impl WorkerInput for TrainFinalStepIpcInit {}
-
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -675,7 +658,7 @@ impl std::borrow::Borrow<TrainStepInput<LabelProbability, LabelsProbabilities>> 
     }
 }
 
-fn train_final_step_endpoint_init<'a>(_stage_id:Option<String>, init: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, _all_cuda_tensors: &'a AllTensors, _tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+fn train_final_step_endpoint_init<'a>(_stage_id: Option<String>, init: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, _all_cuda_tensors: &'a AllTensors, _tho_device: &'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
         let Ok(init) = (init as Box<dyn std::any::Any>).downcast::<TrainFinalStepIpcInit>() else {
             return Err(ThoError::new("TrainFinalStep endpoint received invalid initializer"));
@@ -698,10 +681,12 @@ fn train_final_step_endpoint_init<'a>(_stage_id:Option<String>, init: Box<dyn Wo
             train_final_loss,
             init.training_config,
             init.vs_path,
-        ).await?;
+        )
+        .await?;
         // Shared stateful dispatch keeps final-net weights inside the CUDA worker.
         Ok(Box::new(WorkerWrapperWithState::<JsonIpcCodec, _, _, _>::new_with_checkpoint_input::<TrainFinalStepInput>(Arc::new(train_step), PhantomData)) as Box<dyn SyncStageIpcWrapper>)
-    }.boxed()
+    }
+    .boxed()
 }
 
 #[derive(Debug)]
@@ -726,35 +711,47 @@ where
         let node_params = FinalNetParams::new(self.num_label_nets, run_config.net.mid_features, self.labels_len, run_config.net.num_layers);
         let device = ctx.tho_device_idx();
         let execution = &self.execution;
-        let init = TrainFinalStepIpcInit { params: node_params.clone(), training_config: run_config.common_training_args.clone(), tho_device_idx: device, vs_path: vs_path.clone() };
+        let init = TrainFinalStepIpcInit {
+            params: node_params.clone(),
+            training_config: run_config.common_training_args.clone(),
+            tho_device_idx: device,
+            vs_path: vs_path.clone(),
+        };
         let params_for_module = node_params.clone();
         let input_cloner = Arc::new(|input: &thoosa_common::stages::train_step::TrainStepInput<LabelProbability, LabelsProbabilities>| -> Result<Box<dyn WorkerInput>, ThoError> { Ok(Box::new(TrainFinalStepInput(input.clone_refs_for_worker()?))) });
-        let stage = execution.install_stateful(
-            TRAIN_FINAL_STEP_ENDPOINT, thoosa_common::ipc::endpoints::StageRecovery::OwnerManaged,
-            || async move {
-                let (train_step, _) = TrainStep::new_local(
-                    device.into(),
-                    move |run_config, device| async move {
-                        let config = ModConfig::new(run_config.common_training_args.tho_optimizer(),
-                            move |var_store| final_net(&params_for_module)?.build_tch_module::<Batch<LabelProbability>, Batch<LabelsProbabilities>>(&var_store.root()),
-                            run_config.common_training_args.lr);
-                        Ok((ThoTrainModule::new_on_device(config, device)?, ()))
-                    },
-                    Arc::new(Box::new(|batch| batch) as TrainStepXFn<LabelProbability>), train_final_loss, run_config, vs_path,
-                ).await?;
-                Ok(Arc::new(train_step))
-            },
-            || async move { Ok((Box::new(init) as Box<dyn WorkerInput>, ())) }, Some(input_cloner),
-        ).await?;
+        let stage = execution
+            .install_stateful(
+                TRAIN_FINAL_STEP_ENDPOINT,
+                thoosa_common::ipc::endpoints::StageRecovery::OwnerManaged,
+                || async move {
+                    let (train_step, _) = TrainStep::new_local(
+                        device.into(),
+                        move |run_config, device| async move {
+                            let config = ModConfig::new(
+                                run_config.common_training_args.tho_optimizer(),
+                                move |var_store| final_net(&params_for_module)?.build_tch_module::<Batch<LabelProbability>, Batch<LabelsProbabilities>>(&var_store.root()),
+                                run_config.common_training_args.lr,
+                            );
+                            Ok((ThoTrainModule::new_on_device(config, device)?, ()))
+                        },
+                        Arc::new(Box::new(|batch| batch) as TrainStepXFn<LabelProbability>),
+                        train_final_loss,
+                        run_config,
+                        vs_path,
+                    )
+                    .await?;
+                    Ok(Arc::new(train_step))
+                },
+                || async move { Ok((Box::new(init) as Box<dyn WorkerInput>, ())) },
+                Some(input_cloner),
+            )
+            .await?;
         Ok((stage, node_params))
     }
 }
 
 pub fn train_final_step_endpoint_inits() -> HashMap<String, MotifsInitFn> {
-    HashMap::from([(
-        TRAIN_FINAL_STEP_ENDPOINT.to_string(),
-        Box::new(train_final_step_endpoint_init) as MotifsInitFn
-    )])
+    HashMap::from([(TRAIN_FINAL_STEP_ENDPOINT.to_string(), Box::new(train_final_step_endpoint_init) as MotifsInitFn)])
 }
 
 #[cfg(test)]
@@ -769,7 +766,7 @@ mod tests {
     use crate::stages::train_label_nets::TrainLabelNetRunConfig;
     use crate::train_nets::{FinalNetArgs, FinalNetArgsFields, FinalNetParams, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields};
     use crate::train_nets::{LabelNetParams, LabelNetTypeParams};
-    use log::{debug, LevelFilter};
+    use log::{LevelFilter, debug};
     use parking_lot::RwLock;
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
@@ -783,8 +780,8 @@ mod tests {
     use thoosa_common::nets::nodes::{ThoClosureModule, ThoModule};
     use thoosa_common::resources::{Logits, NetResources, SavableResult};
     use thoosa_common::runner::common::mock_run_ctx;
-    use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::runner::global_ctx::GlobalCtx;
+    use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::tch_error::tch_result;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::utils::reset_print_options;
@@ -855,10 +852,7 @@ mod tests {
 
         let ws = Arc::new(RwLock::new(
             crate::motifs_ws::MotifsWsMockBuilder::new(None, 1, 100, 1000)
-                .with_try_load_motif_net(vec![
-                    (motif_net_0_path.clone(), motif_0_params, motif_0_net),
-                    (motif_net_1_path.clone(), motif_1_params, motif_1_net),
-                ])
+                .with_try_load_motif_net(vec![(motif_net_0_path.clone(), motif_0_params, motif_0_net), (motif_net_1_path.clone(), motif_1_params, motif_1_net)])
                 .with_load_label_nets(HashMap::from([
                     ("aaa".to_string(), vec![(label_a_run_config_id, const_label_net(2, 1, 0.1, device).0, const_label_net(2, 1, 0.1, device).1)]),
                     ("bbb".to_string(), vec![(label_b_run_config_id, const_label_net(2, 1, 0.2, device).0, const_label_net(2, 1, 0.2, device).1)]),
@@ -881,7 +875,6 @@ mod tests {
             } else {
                 resources_map.insert(r.clone(), tch_result(Tensor::f_ones(&[1, 32], (Kind::Float, device)))?);
             }
-
         }
 
         let loader = Arc::new(mock_tensor_loader::build().with_out_id().with_run_cached(resources_map).finish());
@@ -889,69 +882,85 @@ mod tests {
         let train_logits = resources_train.iter().enumerate().map(|(i, r)| (r.clone(), if i % 2 == 0 { vec![1.0, 0.0] } else { vec![0.0, 1.0] })).collect::<Vec<_>>();
         let valid_logits = resources_valid.iter().enumerate().map(|(i, r)| (r.clone(), if i % 2 == 0 { vec![1.0, 0.0] } else { vec![0.0, 1.0] })).collect::<Vec<_>>();
 
-        let store =
-            MockMotifsStoreBuilder::new()
-                .with_get_input_run_config_ids([(train_label_nets_run_config_id, Ok(vec![train_motif_nets_run_config_id]))])
-                .with_list_trained_nets([
-                    (
-                        vec![train_motif_nets_run_config_id],
-                        Some(0.3),
-                        Some(2),
-                        Ok(vec![
-                            TrainedNet { id: motif_net_0_id, run_config_id: train_motif_nets_run_config_id, net_path: motif_net_0_path.clone(), loss: 0.1f32 },
-                            TrainedNet { id: motif_net_1_id, run_config_id: train_motif_nets_run_config_id, net_path: motif_net_1_path.clone(), loss: 0.2f32 },
-                        ]),
-                    ),
-                    (
-                        vec![train_motif_nets_run_config_id],
-                        None,
-                        None,
-                        Ok(vec![
-                            TrainedNet { id: motif_net_0_id, run_config_id: train_motif_nets_run_config_id, net_path: motif_net_0_path, loss: 0.1f32 },
-                            TrainedNet { id: motif_net_1_id, run_config_id: train_motif_nets_run_config_id, net_path: motif_net_1_path, loss: 0.2f32 },
-                        ]),
-                    ),
-                    (
-                        vec![label_a_run_config_id],
-                        None,
-                        None,
-                        Ok(vec![
-                            TrainedNet { id: label_a_run_config_id*10/*net id != run id*/, run_config_id: label_a_run_config_id, net_path: "aaa".into(), loss: 0.1f32 },
-                        ]),
-                    ),
-                    (
-                        vec![label_b_run_config_id],
-                        None,
-                        None,
-                        Ok(vec![
-                            TrainedNet { id: label_b_run_config_id*10, run_config_id: label_b_run_config_id, net_path: "bbb".into(), loss: 0.2f32 },
-                        ]),
-                    )
-                ])
-                .with_get_motif_meta([
-                    (0, Ok((0usize, 0))),
-                    (1, Ok((1usize, 0))),
-                ])
-                .with_run_config_descr([(
-                    0,
-                    Ok(RunConfigRow {
-                        id: 0,
-                        r#type: "FindMotifsRunConfig".to_string(),
-                        descr: "test find motifs".to_string(),
-                        run_on: "2026-01-01 00:00:00".to_string(),
-                    }),
-                )])
-                .with_list_run_config_values([(
-                    0,
-                    Ok(FindMotifsRunConfig::new_with_running_mean(Some(0), 10, 100, None, None).to_properties_iter(None).collect()),
-                )])
-                .with_list_output_run_config_ids([(train_label_nets_run_config_id, Ok(vec![100, 200]))])
-                .with_list_resource_random_in_group([(train_group, Ok(train_logits)), (valid_group, Ok(valid_logits))])
-                .with_list_input_nets([
-                    (label_a_run_config_id*10, Ok(vec![train_motif_nets_run_config_id])),
-                    (label_b_run_config_id*10, Ok(vec![train_motif_nets_run_config_id]))
-                ])
-                .build();
+        let store = MockMotifsStoreBuilder::new()
+            .with_get_input_run_config_ids([(train_label_nets_run_config_id, Ok(vec![train_motif_nets_run_config_id]))])
+            .with_list_trained_nets([
+                (
+                    vec![train_motif_nets_run_config_id],
+                    Some(0.3),
+                    Some(2),
+                    Ok(vec![
+                        TrainedNet {
+                            id: motif_net_0_id,
+                            run_config_id: train_motif_nets_run_config_id,
+                            net_path: motif_net_0_path.clone(),
+                            loss: 0.1f32,
+                        },
+                        TrainedNet {
+                            id: motif_net_1_id,
+                            run_config_id: train_motif_nets_run_config_id,
+                            net_path: motif_net_1_path.clone(),
+                            loss: 0.2f32,
+                        },
+                    ]),
+                ),
+                (
+                    vec![train_motif_nets_run_config_id],
+                    None,
+                    None,
+                    Ok(vec![
+                        TrainedNet {
+                            id: motif_net_0_id,
+                            run_config_id: train_motif_nets_run_config_id,
+                            net_path: motif_net_0_path,
+                            loss: 0.1f32,
+                        },
+                        TrainedNet {
+                            id: motif_net_1_id,
+                            run_config_id: train_motif_nets_run_config_id,
+                            net_path: motif_net_1_path,
+                            loss: 0.2f32,
+                        },
+                    ]),
+                ),
+                (
+                    vec![label_a_run_config_id],
+                    None,
+                    None,
+                    Ok(vec![TrainedNet {
+                        id: label_a_run_config_id * 10, /*net id != run id*/
+                        run_config_id: label_a_run_config_id,
+                        net_path: "aaa".into(),
+                        loss: 0.1f32,
+                    }]),
+                ),
+                (
+                    vec![label_b_run_config_id],
+                    None,
+                    None,
+                    Ok(vec![TrainedNet {
+                        id: label_b_run_config_id * 10,
+                        run_config_id: label_b_run_config_id,
+                        net_path: "bbb".into(),
+                        loss: 0.2f32,
+                    }]),
+                ),
+            ])
+            .with_get_motif_meta([(0, Ok((0usize, 0))), (1, Ok((1usize, 0)))])
+            .with_run_config_descr([(
+                0,
+                Ok(RunConfigRow {
+                    id: 0,
+                    r#type: "FindMotifsRunConfig".to_string(),
+                    descr: "test find motifs".to_string(),
+                    run_on: "2026-01-01 00:00:00".to_string(),
+                }),
+            )])
+            .with_list_run_config_values([(0, Ok(FindMotifsRunConfig::new_with_running_mean(Some(0), 10, 100, None, None).to_properties_iter(None).collect()))])
+            .with_list_output_run_config_ids([(train_label_nets_run_config_id, Ok(vec![100, 200]))])
+            .with_list_resource_random_in_group([(train_group, Ok(train_logits)), (valid_group, Ok(valid_logits))])
+            .with_list_input_nets([(label_a_run_config_id * 10, Ok(vec![train_motif_nets_run_config_id])), (label_b_run_config_id * 10, Ok(vec![train_motif_nets_run_config_id]))])
+            .build();
 
         let run_configs = OptRunConfigs::new(
             thoosa_shared::run_configs::GridRunConfigs::new(
@@ -987,10 +996,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_save_train_final_net_result_persists_loss_in_run_config_values() -> Result<(), ThoError> {
-        let store: Arc<dyn MotifsStore> = Arc::new(SqlStore::in_mem_(vec![
-            thoosa_store::create_tables,
-            create_motif_tables
-        ]).await?);
+        let store: Arc<dyn MotifsStore> = Arc::new(SqlStore::in_mem_(vec![thoosa_store::create_tables, create_motif_tables]).await?);
         store.bind_run(store.save_run("test".into()).await?)?;
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         let ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>> = Arc::new(RwLock::new(crate::motifs_ws::new_motifs_workspace(test_dir.clone(), WsConfigs::new(2, 1000, 32000))?));
@@ -1014,7 +1020,15 @@ mod tests {
         let _run_config_values = store.list_run_config_values(run_config_id).await?;
         let trained_nets = store.list_trained_nets(TrainedNetsBy::RunConfigIds(vec![run_config_id]), None, None).await?;
 
-        assert_eq!(vec![TrainedNet { id: 1, run_config_id, net_path: PathBuf::from(format!("3")), loss: 0.125 }], trained_nets);
+        assert_eq!(
+            vec![TrainedNet {
+                id: 1,
+                run_config_id,
+                net_path: PathBuf::from(format!("3")),
+                loss: 0.125
+            }],
+            trained_nets
+        );
         let (_, params_path) = ws.read().final_model(run_config_id)?;
         assert_eq!(FinalNetParams::from_file(&params_path)?.label_feature_schema()?, &[label_run_config_id_0, label_run_config_id_1]);
 
@@ -1024,7 +1038,6 @@ mod tests {
         assert!(error.chain().any(|cause| cause.downcast_ref::<std::io::Error>().is_some()), "{error:#}");
         Ok(())
     }
-
 }
 
 #[derive(Debug)]
@@ -1037,17 +1050,9 @@ pub struct TrainFinalNetsRunConfigResult {
 }
 
 impl TrainFinalNetsRunConfigResult {
-    pub fn new(
-        train_label_nets_run_config_ids: Option<&Vec<RunConfigId>>,
-        loss: f32,
-        var_store_path: TmpFile,
-        final_node_params: FinalNetParams,
-        train_final_nodes_values: TrainFinalNetRunConfig,
-    ) -> Self {
+    pub fn new(train_label_nets_run_config_ids: Option<&Vec<RunConfigId>>, loss: f32, var_store_path: TmpFile, final_node_params: FinalNetParams, train_final_nodes_values: TrainFinalNetRunConfig) -> Self {
         Self {
-            train_label_nets_run_config_ids: train_label_nets_run_config_ids
-                .expect("train_label_nodes_run_config_ids")
-                .clone(),
+            train_label_nets_run_config_ids: train_label_nets_run_config_ids.expect("train_label_nodes_run_config_ids").clone(),
             loss,
             var_store_path,
             final_node_params,
@@ -1062,24 +1067,13 @@ impl SavableResult for TrainFinalNetsRunConfigResult {
     type Workspace = dyn crate::motifs_ws::MotifsWorkspace;
     type R = u32;
 
-    async fn save(
-        &mut self,
-        store: &Arc<dyn MotifsStore>,
-        ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
-        _p: Self::P<'_>
-    ) -> anyhow::Result<u32> {
+    async fn save(&mut self, store: &Arc<dyn MotifsStore>, ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, _p: Self::P<'_>) -> anyhow::Result<u32> {
         // The constructor uses this exact order for feature positions; persist it with the weights.
         self.final_node_params.set_label_feature_schema(self.train_label_nets_run_config_ids.clone())?;
 
-        let run_config_id = t!(store.save_run_config(
-            Some(&self.train_label_nets_run_config_ids),
-            &TrainFinalNetRunConfig::type_name(),
-            "Final",
-            self.train_final_net_run_config.to_properties_iter(None).collect(),
-        )).await?;
+        let run_config_id = t!(store.save_run_config(Some(&self.train_label_nets_run_config_ids), &TrainFinalNetRunConfig::type_name(), "Final", self.train_final_net_run_config.to_properties_iter(None).collect(),)).await?;
 
-        let path = ws.read()
-            .save_final_net(run_config_id, (&self.var_store_path).into(), &self.final_node_params)?;
+        let path = ws.read().save_final_net(run_config_id, (&self.var_store_path).into(), &self.final_node_params)?;
 
         t!(store.save_trained_net(run_config_id, path, self.loss, None)).await?;
 

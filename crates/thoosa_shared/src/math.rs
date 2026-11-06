@@ -1,4 +1,3 @@
-
 /// Simple Gauss-Jordan inversion for small matrices.
 /// Returns None if singular / numerically unstable.
 pub fn invert_square(mat: &Vec<Vec<f64>>) -> Option<Vec<Vec<f64>>> {
@@ -58,8 +57,6 @@ pub fn invert_square(mat: &Vec<Vec<f64>>) -> Option<Vec<Vec<f64>>> {
     Some(inv)
 }
 
-
-
 /// Compute Savitzky–Golay smoothing (derivative=0) convolution coefficients.
 /// Window length must be odd. poly_order must be < window_len.
 /// Returns coefficients in left-to-right order over the window.
@@ -102,7 +99,7 @@ pub fn sg_smoothing_coeffs(window_len: usize, poly_order: usize) -> anyhow::Resu
     }
 
     // Invert ATA via Gauss-Jordan: inv = (ATA)^-1  [p x p]
-    let inv = invert_square(&ata).ok_or_else(||anyhow::anyhow!("failed to invert (A^T A)"))?;
+    let inv = invert_square(&ata).ok_or_else(|| anyhow::anyhow!("failed to invert (A^T A)"))?;
 
     // Pseudoinverse B = (A^T A)^-1 A^T  =>  [p x window_len]
     // We only need the first row (corresponding to value at x=0), i.e. row 0 of B:
@@ -121,17 +118,11 @@ pub fn sg_smoothing_coeffs(window_len: usize, poly_order: usize) -> anyhow::Resu
 
 pub fn unordered_sets_of_size<E>(elements: &[E], m: usize) -> Vec<Vec<E>>
 where
- E:Copy+Clone
+    E: Copy + Clone,
 {
     assert!(m > 0);
 
-    fn backtrack<E:Copy+Clone>(
-        elements: &[E],
-        m: usize,
-        start: usize,
-        current: &mut Vec<E>,
-        result: &mut Vec<Vec<E>>,
-    ) {
+    fn backtrack<E: Copy + Clone>(elements: &[E], m: usize, start: usize, current: &mut Vec<E>, result: &mut Vec<Vec<E>>) {
         if current.len() == m {
             result.push(current.clone());
             return;
@@ -163,7 +154,6 @@ where
     result
 }
 
-
 #[cfg(test)]
 mod tests {
     use crate::math::unordered_sets_of_size;
@@ -174,17 +164,7 @@ mod tests {
 
         let result = unordered_sets_of_size(&elements, 2);
 
-        assert_eq!(
-            result,
-            vec![
-                vec![0, 1],
-                vec![0, 2],
-                vec![0, 3],
-                vec![1, 2],
-                vec![1, 3],
-                vec![2, 3],
-            ]
-        );
+        assert_eq!(result, vec![vec![0, 1], vec![0, 2], vec![0, 3], vec![1, 2], vec![1, 3], vec![2, 3],]);
     }
 
     #[test]
@@ -193,14 +173,8 @@ mod tests {
 
         let result = unordered_sets_of_size(&elements, 4);
 
-        assert_eq!(
-            result,
-            vec![
-                vec![0, 1, 2]
-            ]
-        )
+        assert_eq!(result, vec![vec![0, 1, 2]])
     }
-
 
     #[test]
     fn size_equal_to_input_returns_whole_input() {
@@ -210,5 +184,4 @@ mod tests {
 
         assert_eq!(result, vec![vec![10, 20, 30]]);
     }
-
 }

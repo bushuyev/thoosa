@@ -1,6 +1,5 @@
 fn main() {
-    let libtorch = std::env::var("LIBTORCH")
-        .expect("LIBTORCH must be set (see .cargo/config.toml)");
+    let libtorch = std::env::var("LIBTORCH").expect("LIBTORCH must be set (see .cargo/config.toml)");
     let libtorch = libtorch.trim_end_matches('/');
     let mut ld = std::env::var("LD_LIBRARY_PATH").unwrap_or_default();
 

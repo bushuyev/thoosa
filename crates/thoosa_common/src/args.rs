@@ -1,9 +1,9 @@
-use std::sync::Arc;
+use crate::ws::Workspace;
 use async_trait::async_trait;
 use clap::{Args, Subcommand};
 use log::LevelFilter;
 use parking_lot::RwLock;
-use crate::ws::Workspace;
+use std::sync::Arc;
 
 #[async_trait]
 pub trait StageCommand {
@@ -11,20 +11,26 @@ pub trait StageCommand {
     /// Lets feature commands retain their extended workspace trait object at the common CLI boundary.
     type Workspace: Workspace + ?Sized = dyn Workspace;
     type Ctx;
-    async fn run(self, store:&Self::Store, ws: &Arc<RwLock<Box<Self::Workspace>>>, ctx:Self::Ctx) -> anyhow::Result<()>;
+    async fn run(self, store: &Self::Store, ws: &Arc<RwLock<Box<Self::Workspace>>>, ctx: Self::Ctx) -> anyhow::Result<()>;
 }
-
 
 /// The runtime currently supports CPU-only execution or CPU plus the first visible GPU.
 #[derive(clap::ValueEnum, Clone, Copy, Debug)]
-pub enum ExecutionDevice { Auto, Cpu, Cuda0 }
+pub enum ExecutionDevice {
+    Auto,
+    Cpu,
+    Cuda0,
+}
 
 impl ExecutionDevice {
     pub fn resolve(self, ipc: bool, cuda_available: bool) -> anyhow::Result<usize> {
         let device = match self {
             Self::Auto => usize::from(ipc || cuda_available),
             Self::Cpu => 0,
-            Self::Cuda0 => { anyhow::ensure!(ipc || cuda_available, "CUDA device 0 is not available"); 1 },
+            Self::Cuda0 => {
+                anyhow::ensure!(ipc || cuda_available, "CUDA device 0 is not available");
+                1
+            }
         };
         // The IPC parent hides CUDA; only its worker can validate GPU availability.
         anyhow::ensure!(!ipc || device == 1, "IPC execution requires --execution-device cuda0 or auto");
@@ -35,7 +41,7 @@ impl ExecutionDevice {
 #[derive(Args, Clone, Debug)]
 pub struct CommonArgs<C>
 where
-    C: Subcommand  + StageCommand+ Clone + std::fmt::Debug,
+    C: Subcommand + StageCommand + Clone + std::fmt::Debug,
 {
     #[arg(long, default_value = ".")]
     pub ws_path: String,
@@ -62,10 +68,10 @@ where
     pub futures_channel_bound: usize,
 
     #[arg(long)]
-    pub run_id:Option<u32>,
+    pub run_id: Option<u32>,
 
     #[arg(long)]
-    pub ipc:bool,
+    pub ipc: bool,
 
     #[arg(long, value_enum, default_value = "auto")]
     pub execution_device: ExecutionDevice,

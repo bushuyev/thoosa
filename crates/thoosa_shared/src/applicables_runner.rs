@@ -2,23 +2,19 @@ use crate::traits::{Named, WithId};
 use std::fmt::Debug;
 use std::sync::Arc;
 
+pub trait Input: Debug {}
 
-pub trait Input: Debug {
+impl<I> Input for Arc<I> where I: Input {}
 
-}
+pub trait Output: Debug {}
 
-impl <I> Input for Arc<I> where I: Input {
+impl<O> Output for Arc<O> where O: Output {}
+impl<O> Output for Box<O> where O: Output {}
 
-}
-
-pub trait Output:  Debug {
-
-}
-
-impl <O> Output for Arc<O> where O: Output {}
-impl <O> Output for Box<O> where O: Output {}
-
-impl <O> WithId for Arc<O>  where O:WithId + Debug {
+impl<O> WithId for Arc<O>
+where
+    O: WithId + Debug,
+{
     type ID = <O as WithId>::ID;
 
     fn id(&self) -> &Self::ID {
@@ -26,10 +22,7 @@ impl <O> WithId for Arc<O>  where O:WithId + Debug {
     }
 }
 
-
-impl Named for (){
-
-}
+impl Named for () {}
 impl WithId for () {
     type ID = ();
 

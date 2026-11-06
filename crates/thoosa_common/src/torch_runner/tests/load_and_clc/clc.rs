@@ -1,19 +1,15 @@
-use thoosa_common::runner::execution::{StageExecution, ExecutionContext};
-use thoosa_common::runner::execution::execute_stateful;
-use std::future::Future;
-use std::borrow::Borrow;
-use thoosa_common::runner::sync_stage::PrepareStage;
 use crate as thoosa_common;
 use crate::dims::Dims;
 use crate::ipc::cuda_wokrer::{AllTensors, DEBUG_DATA};
 use crate::ipc::proxy::{DynSyncStageWithStateEnum, ProxyStage};
 use crate::ipc::serialization::json::JsonIpcCodec;
-use crate::ipc::worker_msg::{WorkerInput};
+use crate::ipc::worker_msg::WorkerInput;
 use crate::ipc::wraps::SyncStageIpcWrapper;
 use crate::ipc::wraps::WorkerWrapperWithState;
 use crate::runner::common::cachable::DevicesWrap;
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, OOMHandler};
+use crate::runner::purge::CachePurger;
 use crate::runner::run_ctx::RunCtxImpl;
 use crate::runner::test::FailUntil;
 use crate::tho_device::ThoDevice;
@@ -27,16 +23,20 @@ use log::debug;
 use num_traits::ToPrimitive;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
+use std::borrow::Borrow;
+use std::future::Future;
 use std::sync::Arc;
 use tch::{Kind, Scalar, Tensor};
+use thoosa_common::runner::execution::execute_stateful;
+use thoosa_common::runner::execution::{ExecutionContext, StageExecution};
+use thoosa_common::runner::sync_stage::PrepareStage;
+use thoosa_common::runner::sync_stage::StageWithState;
 use thoosa_named_derive::Named;
 use thoosa_shared::comp_id::SynKey;
-use thoosa_shared::traits::{Adjustable, AsyncStage, MaxParallelCtx, MonoMetrics, OutId, RunCtx, DebugId, Stage};
-use thoosa_common::runner::sync_stage::{StageWithState};
+use thoosa_shared::ipc_types::WorkerOutput;
+use thoosa_shared::traits::{Adjustable, AsyncStage, DebugId, MaxParallelCtx, MonoMetrics, OutId, RunCtx, Stage};
 use thoosa_shared::{CopyToDevice, ThoError, debug_id};
 use tokio::sync::{Mutex, MutexGuard};
-use crate::runner::purge::CachePurger;
-use thoosa_shared::ipc_types::WorkerOutput;
 
 // //////////////////////////////
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
@@ -62,10 +62,7 @@ pub struct SyncClcStage {
     use_matmul: bool,
 }
 
-impl CachePurger for SyncClcStage {
-
-}
-
+impl CachePurger for SyncClcStage {}
 
 #[derive(Debug)]
 pub(crate) struct ClcDynSyncStage {
@@ -76,7 +73,13 @@ pub(crate) struct ClcDynSyncStage {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SyncClcStageInit {
-    id: SynKey, k: f64, k_i64: Option<i64>, dim: i64, kind: String, fail_until: Vec<FailUntil>, use_matmul: bool
+    id: SynKey,
+    k: f64,
+    k_i64: Option<i64>,
+    dim: i64,
+    kind: String,
+    fail_until: Vec<FailUntil>,
+    use_matmul: bool,
 }
 
 // Register the CLC configuration for postcard's typed install message.
@@ -84,7 +87,7 @@ pub struct SyncClcStageInit {
 impl WorkerInput for SyncClcStageInit {}
 
 impl SyncClcStageInit {
-    pub fn new<K>(id: SynKey, k: K, dim: i64, kind: Kind, fail_until: Vec<FailUntil>, use_matmul: bool) ->Self
+    pub fn new<K>(id: SynKey, k: K, dim: i64, kind: Kind, fail_until: Vec<FailUntil>, use_matmul: bool) -> Self
     where
         K: ToPrimitive + Copy,
     {
@@ -114,13 +117,17 @@ impl SyncClcStage {
                 id,
                 fail_until_dump_to_cpu: !dumped.is_empty(),
                 stage: Arc::new(DynSyncStageWithStateEnum::Proxy {
-                    stage: Arc::new(ProxyStage::proxy_with_input_cloner(
-                        SYNC_CLC_ENDPOINT,
-                        Some(0.to_string()),
-                        device.tho_device_idx(),
-                        Box::new(init),
-                        Arc::new(|input: &ThoTensor<LoadedTensor, SynKey>| Ok(Box::new(input.clone_ref()?) as Box<dyn WorkerInput>)),
-                    ).await.expect("SyncClcStage::new: install endpoint")),
+                    stage: Arc::new(
+                        ProxyStage::proxy_with_input_cloner(
+                            SYNC_CLC_ENDPOINT,
+                            Some(0.to_string()),
+                            device.tho_device_idx(),
+                            Box::new(init),
+                            Arc::new(|input: &ThoTensor<LoadedTensor, SynKey>| Ok(Box::new(input.clone_ref()?) as Box<dyn WorkerInput>)),
+                        )
+                        .await
+                        .expect("SyncClcStage::new: install endpoint"),
+                    ),
                     init: (),
                 }),
             }
@@ -137,61 +144,45 @@ impl SyncClcStage {
     where
         K: Into<Scalar> + Copy,
     {
-        let k =
-            if use_matmul {
-                ThoTensor::new(
-                    debug_id!("mul_k"),
-                    Tensor::ones([dim, 1], (kind, device.into()))
-                        .f_mul_scalar_(k)
-                        .unwrap(),
-                ).unwrap()
-            } else {
-                ThoTensor::new(
-                    debug_id!("mul_k"),
-                    Tensor::ones([dim], (kind, device.into()))
-                        .f_mul_scalar_(k)
-                        .unwrap(),
-                ).unwrap()
-            };
+        let k = if use_matmul {
+            ThoTensor::new(debug_id!("mul_k"), Tensor::ones([dim, 1], (kind, device.into())).f_mul_scalar_(k).unwrap()).unwrap()
+        } else {
+            ThoTensor::new(debug_id!("mul_k"), Tensor::ones([dim], (kind, device.into())).f_mul_scalar_(k).unwrap()).unwrap()
+        };
 
         debug!("ClcTask::new: use_matmul={use_matmul} i.size={:?}", k.size());
 
         Self { id, k: Mutex::new(k), fail_until, use_matmul }
     }
     pub fn init(init: SyncClcStageInit) -> Result<SyncClcStage, ThoError> {
-        let SyncClcStageInit {id, k, k_i64, dim, kind, fail_until, use_matmul} = init;
+        let SyncClcStageInit { id, k, k_i64, dim, kind, fail_until, use_matmul } = init;
         let kind = kind_from_worker_name(&kind)?;
         // Integer tensors require an integer scalar; using the postcard f64 value would make LibTorch reject an in-place Float-to-Long multiplication.
         match kind {
             Kind::Int | Kind::Int64 => Ok(SyncClcStage::new_local(
-                id, k_i64.ok_or_else(|| ThoError::new("SyncClcStageInit integer multiplier cannot convert to i64"))?, fail_until, dim, kind, thoosa_common::tho_device::ThoDevice::from(1usize), use_matmul
+                id,
+                k_i64.ok_or_else(|| ThoError::new("SyncClcStageInit integer multiplier cannot convert to i64"))?,
+                fail_until,
+                dim,
+                kind,
+                thoosa_common::tho_device::ThoDevice::from(1usize),
+                use_matmul,
             )),
-            _ => Ok(SyncClcStage::new_local(
-                id, k, fail_until, dim, kind, thoosa_common::tho_device::ThoDevice::from(1usize), use_matmul
-            )),
+            _ => Ok(SyncClcStage::new_local(id, k, fail_until, dim, kind, thoosa_common::tho_device::ThoDevice::from(1usize), use_matmul)),
         }
     }
-
 }
 
-
 impl ClcStage {
-    pub async fn new<K>(
-        id: SynKey,
-        k: K,
-        fail_until: Vec<FailUntil>,
-        dim: i64,
-        kind: Kind,
-        device: ThoDevice,
-        use_matmul: bool,
-    ) -> Self
+    pub async fn new<K>(id: SynKey, k: K, fail_until: Vec<FailUntil>, dim: i64, kind: Kind, device: ThoDevice, use_matmul: bool) -> Self
     where
         K: Into<Scalar> + ToPrimitive + Copy,
     {
-
-        Self { id: id.clone(), sync_clc: Arc::new(SyncClcStage::new(id, k, fail_until, dim, kind, device, use_matmul).await) }
+        Self {
+            id: id.clone(),
+            sync_clc: Arc::new(SyncClcStage::new(id, k, fail_until, dim, kind, device, use_matmul).await),
+        }
     }
-
 }
 
 impl Adjustable for ClcStage {}
@@ -200,14 +191,12 @@ impl Adjustable for SyncClcStage {}
 
 impl OutId for ClcStage {
     fn out_id(&self, input_id: &SynKey) -> SynKey {
-
         &self.id + input_id
     }
 }
 
 impl OutId for SyncClcStage {
     fn out_id(&self, input_id: &SynKey) -> SynKey {
-
         &self.id + input_id
     }
 }
@@ -226,9 +215,7 @@ impl Dims for ClcStageOutput {
 }
 
 #[typetag::serde]
-impl WorkerOutput for ClcStageOutput {
-
-}
+impl WorkerOutput for ClcStageOutput {}
 
 #[typetag::serde(name = "ThoTensor_ClcStageOutput")]
 impl WorkerOutput for ThoTensor<ClcStageOutput, SynKey> {}
@@ -247,7 +234,13 @@ impl Stage for SyncClcStage {
 
 impl StageExecution for SyncClcStage {
     fn execute<'a, 'i: 'a, I, IFut>(self: Arc<Self>, input: IFut, execution: &'a ExecutionContext<'_>, ctx: &'a Self::Ctx) -> futures_util::future::BoxFuture<'a, Result<Self::Out, ThoError>>
-    where Self: 'a, Self::In<'i>: Sync, Self::Out: Send, I: Borrow<Self::In<'i>> + Send + 'a, IFut: Future<Output = Result<I, ThoError>> + Send + 'a {
+    where
+        Self: 'a,
+        Self::In<'i>: Sync,
+        Self::Out: Send,
+        I: Borrow<Self::In<'i>> + Send + 'a,
+        IFut: Future<Output = Result<I, ThoError>> + Send + 'a,
+    {
         Box::pin(execute_stateful(self, input, execution, ctx))
     }
 }
@@ -260,15 +253,14 @@ impl PrepareStage for SyncClcStage {
             if k.tho_device_idx() != to_device_idx {
                 *k = k.copy_to_device(to_device_idx).await?;
             }
-            Ok(MutexGuard::map(k, |v|v))
-        }.boxed()
+            Ok(MutexGuard::map(k, |v| v))
+        }
+        .boxed()
     }
 }
 
 impl StageWithState for SyncClcStage {
     fn do_run_with_state<'a>(self: Arc<Self>, input: &Self::In<'a>, k: &mut Self::S, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
-
-
         DEBUG_DATA.lock().push(format!("SyncClcStage::do_run_with_state: input.size={:?}", input.size()));
 
         debug!("SyncClcStage::do_run_with_state: input={:?} self.fail_until={:?}", input, self.fail_until);
@@ -279,7 +271,6 @@ impl StageWithState for SyncClcStage {
             match fail_until {
                 FailUntil::MemLimit(mem_limit) => {
                     let _device_idx = device_idx;
-
 
                     if input.size()[1] > *mem_limit as i64 {
                         debug!("SyncClcStage::do_run_with_state: MyError::OutOfMemory on MemLimit mem_limit={mem_limit}");
@@ -298,7 +289,7 @@ impl StageWithState for SyncClcStage {
                 FailUntil::DumpedToCpu => {
                     let device_idx = ctx.tho_device_idx();
                     let is_all_on_cpu = GlobalCtx::global().is_all_on_cpu(device_idx);
-                    debug!("SyncClcStage::do_run_with_state: ctx.name={:?} device_idx={} is_all_on_cpu={is_all_on_cpu}","ctx.name()",device_idx);
+                    debug!("SyncClcStage::do_run_with_state: ctx.name={:?} device_idx={} is_all_on_cpu={is_all_on_cpu}", "ctx.name()", device_idx);
 
                     if !is_all_on_cpu {
                         debug!("SyncClcStage::do_run_with_state: MyError::OutOfMemory on DumpedToCpu is_all_on_cpu={is_all_on_cpu}");
@@ -325,52 +316,41 @@ impl Stage for ClcDynSyncStage {
     type Ctx = RunCtxImpl;
 }
 
-
-
-
-
-
-
-
-
-pub(crate) fn sync_clc_endpoint_init<'a>(_stage_id:Option<String>, init: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &'a AllTensors, _tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub(crate) fn sync_clc_endpoint_init<'a>(_stage_id: Option<String>, init: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &'a AllTensors, _tho_device: &'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     let init: Box<dyn std::any::Any> = init;
     let init = init.downcast::<SyncClcStageInit>().expect("SyncClcStage endpoint received an unexpected initializer type");
     async move {
         // WorkerWrapperWithState keeps the multiplier on the worker across calls.
         Ok(Box::new(WorkerWrapperWithState::<JsonIpcCodec, _, _, _>::new_execution_only(Arc::new(SyncClcStage::init(*init)?), std::marker::PhantomData)) as Box<dyn SyncStageIpcWrapper>)
-    }.boxed()
+    }
+    .boxed()
 }
 
 impl AsyncStage for ClcStage {
-
-    async fn run(
-        self: Arc<Self>,
-        input: Self::In<'static>,
-        ctx: Self::Ctx,
-    ) -> Result<Self::Out, ThoError> {
+    async fn run(self: Arc<Self>, input: Self::In<'static>, ctx: Self::Ctx) -> Result<Self::Out, ThoError> {
         let device_idx = ctx.tho_device_idx();
 
         debug!("AsyncStage for ClcTask::run: device_idx={device_idx} input={input:?}");
 
-        let output = OOMHandler::<NoInputAdjuster, NoStageAdjuster, NoRunCtxAdjuster, LoadedRange>::new(vec![], None).run(
-            &self.sync_clc,
-            input,
-            ctx,
-            NoContexts
-        ).await?;
-
+        let output = OOMHandler::<NoInputAdjuster, NoStageAdjuster, NoRunCtxAdjuster, LoadedRange>::new(vec![], None).run(&self.sync_clc, input, ctx, NoContexts).await?;
 
         Ok(Arc::new(DevicesWrap::wrap(output)))
     }
-
 }
 
 impl StageExecution for ClcDynSyncStage {
     fn execute<'a, 'i: 'a, I, IFut>(self: Arc<Self>, input: IFut, execution: &'a ExecutionContext<'_>, ctx: &'a Self::Ctx) -> futures_util::future::BoxFuture<'a, Result<Self::Out, ThoError>>
-    where Self: 'a, Self::In<'i>: Sync, Self::Out: Send, I: Borrow<Self::In<'i>> + Send + 'a, IFut: Future<Output = Result<I, ThoError>> + Send + 'a {
+    where
+        Self: 'a,
+        Self::In<'i>: Sync,
+        Self::Out: Send,
+        I: Borrow<Self::In<'i>> + Send + 'a,
+        IFut: Future<Output = Result<I, ThoError>> + Send + 'a,
+    {
         Box::pin(async move {
-            if self.fail_until_dump_to_cpu && !GlobalCtx::global().is_all_on_cpu(ctx.tho_device_idx()) { return Err(ThoError::oom()); }
+            if self.fail_until_dump_to_cpu && !GlobalCtx::global().is_all_on_cpu(ctx.tho_device_idx()) {
+                return Err(ThoError::oom());
+            }
             Arc::clone(&self.stage).execute(input, execution, ctx).await
         })
     }

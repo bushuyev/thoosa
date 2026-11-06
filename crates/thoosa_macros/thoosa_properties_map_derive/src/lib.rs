@@ -25,11 +25,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                     let mut chains_in_to_properties = vec![];
                     let mut fields_in_from_properties = vec![];
 
-                    for field in named_fields
-                        .named
-                        .iter()
-                        .filter(|field| has_attr(field, IN_MAP_ATTR))
-                    {
+                    for field in named_fields.named.iter().filter(|field| has_attr(field, IN_MAP_ATTR)) {
                         let field_ident = field.ident.as_ref().expect("Should be an identifier");
                         let field_name = format!("{}", field_ident);
                         let field_name_path = format!("{}.", field_ident);
@@ -143,11 +139,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                                 });
                             } else {
                                 let field_type = inner_ty.clone();
-                                let _field_path = format!(
-                                    "{}::{}",
-                                    field_type.to_token_stream(),
-                                    field_name_path
-                                );
+                                let _field_path = format!("{}::{}", field_type.to_token_stream(), field_name_path);
 
                                 chains_in_to_properties.push(quote! {
                                     .chain(self.#field_ident.as_ref().map(|s|s.to_properties_iter(Some(thoosa_shared::conc_str(&prefix, #field_name_path)))).unwrap_or(Box::new(std::iter::empty::<(String, thoosa_shared::val::Val)>())))
@@ -245,11 +237,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                                 });
                             } else {
                                 let field_type = field.ty.clone();
-                                let _field_path = format!(
-                                    "{}::{}",
-                                    field_type.to_token_stream(),
-                                    field_name_path
-                                );
+                                let _field_path = format!("{}::{}", field_type.to_token_stream(), field_name_path);
                                 chains_in_to_properties.push(quote! {
                                     .chain(self.#field_ident.to_properties_iter(Some(thoosa_shared::conc_str(&prefix, #field_name_path))))
                                 });
@@ -330,22 +318,12 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
 
             for variant in &data_enum.variants {
                 let variant_ident = &variant.ident;
-                let variant_name =
-                    thoosa_shared::camel_to_snake(&variant_ident.to_token_stream().to_string());
+                let variant_name = thoosa_shared::camel_to_snake(&variant_ident.to_token_stream().to_string());
                 let variant_path = thoosa_shared::conc_str(&variant_name, ".");
                 if let syn::Fields::Unnamed(fields) = &variant.fields {
                     if fields.unnamed.len() == 1 {
                         //TODO proper Type to Ident
-                        let ty = format_ident!(
-                            "{}",
-                            &fields
-                                .unnamed
-                                .first()
-                                .expect("no config type")
-                                .ty
-                                .to_token_stream()
-                                .to_string()
-                        );
+                        let ty = format_ident!("{}", &fields.unnamed.first().expect("no config type").ty.to_token_stream().to_string());
                         variants_in_to_properties.push(quote! {
                             #target_ident::#variant_ident(v) => {
                                 Box::new([
@@ -381,7 +359,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                 }
             });
 
-            quote!{
+            quote! {
                  impl thoosa_properties_map::ToHashmap for #target_ident {
                     fn to_properties_iter(&self, parent: Option<String>) -> Box<dyn Iterator<Item=(String, thoosa_shared::val::Val)>> {
                         let prefix = parent.unwrap_or(#target_ident_prefix.to_string());
@@ -400,7 +378,8 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                         #(#variants_in_from_properties)*
                     }
                 }
-            }.into()
+            }
+            .into()
         }
         _ => quote! {}.into(),
     }

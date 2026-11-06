@@ -5,8 +5,8 @@
 mod data;
 mod run_all;
 
+use crate::run_all::{RunAllSettings, run_all, run_all_config_0};
 use anyhow::Context as _;
-use crate::run_all::{run_all, run_all_config_0, RunAllSettings};
 use async_trait::async_trait;
 use clap::{Parser, Subcommand};
 use log::{debug, error, info};
@@ -35,7 +35,7 @@ use thoosa_motifs::cli::{CommonCommands, ImportResourcesArgs, MotifCommands, Run
 use thoosa_motifs::find::FindMotifsArgs;
 use thoosa_motifs::motifs_store::MotifsStore;
 use thoosa_motifs::stages::apply_label_nets::{APPLY_LABEL_NET_ENDPOINT, STACK_APPLIED_LABEL_NETS_ENDPOINT, apply_label_net_endpoint_init, stack_applied_label_nets_init};
-use thoosa_motifs::stages::apply_motif_nets::{APPLY_MOTIF_NET_ENDPOINT, SyncApplyMotifNet, STACK_APPLIED_MOTIF_NETS_ENDPOINT, apply_motif_net_endpoint_init, stack_applied_motif_nets_init};
+use thoosa_motifs::stages::apply_motif_nets::{APPLY_MOTIF_NET_ENDPOINT, STACK_APPLIED_MOTIF_NETS_ENDPOINT, SyncApplyMotifNet, apply_motif_net_endpoint_init, stack_applied_motif_nets_init};
 use thoosa_motifs::stages::cross_batch_clc::{CROSS_UNFOLD_CLC_ENDPOINT, sync_cross_unfold_clc_endpoint_init};
 use thoosa_motifs::stages::cross_loader::ResourcesConfigInput;
 use thoosa_motifs::stages::find_motifs_run_config::FindMotifsRunConfigRangeOrValue;
@@ -50,7 +50,6 @@ use thoosa_shared::{ThoError, cdt_for_dir};
 use thoosa_shims::context::ThoCudaContext;
 use thoosa_store::rusqlite::Transaction;
 use thoosa_store::{SqlStore, Store};
-
 
 #[derive(clap::Subcommand, Clone, Debug)]
 pub enum HbacAppCommands {
@@ -70,26 +69,18 @@ impl StageCommand for HbacAppCommands {
     type Workspace = dyn thoosa_motifs::motifs_ws::MotifsWorkspace;
     type Ctx = RunCtxImpl;
 
-    async fn run(self, service:&Arc<SqlStore>, ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>, ctx:RunCtxImpl) -> anyhow::Result<()> {
+    async fn run(self, service: &Arc<SqlStore>, ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>, ctx: RunCtxImpl) -> anyhow::Result<()> {
         match self {
-            HbacAppCommands::CommonCommands(c) => {
-                c.run(&(Arc::clone(&service) as Arc<dyn Store>), ws, ctx).await
-            }
-            HbacAppCommands::Motifs(c) => {
-                c.run(&(Arc::clone(&service) as Arc<dyn MotifsStore>), ws, ctx).await
-            }
-            HbacAppCommands::Hbac(c) => {
-                c.run(service, ws, ctx).await
-            }
+            HbacAppCommands::CommonCommands(c) => c.run(&(Arc::clone(&service) as Arc<dyn Store>), ws, ctx).await,
+            HbacAppCommands::Motifs(c) => c.run(&(Arc::clone(&service) as Arc<dyn MotifsStore>), ws, ctx).await,
+            HbacAppCommands::Hbac(c) => c.run(service, ws, ctx).await,
         }
     }
 }
 
-
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 pub struct HbacArgs {
-
     #[command(flatten)]
     pub common_args: CommonArgs<HbacAppCommands>,
 }
@@ -97,7 +88,7 @@ pub struct HbacArgs {
 #[derive(Debug, Subcommand, Clone)]
 pub enum HbacCommands {
     ImportResources(ImportResourcesArgs),
-    RunAll(RunAllArgs)
+    RunAll(RunAllArgs),
 }
 
 const LABELS: [&str; 6] = ["seizure", "lpd", "gpd", "lrda", "grda", "other"];
@@ -108,10 +99,10 @@ impl StageCommand for HbacCommands {
     type Workspace = dyn thoosa_motifs::motifs_ws::MotifsWorkspace;
     type Ctx = RunCtxImpl;
 
-    async fn run(self, store: &Self::Store, ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>, ctx:RunCtxImpl) -> anyhow::Result<()> {
+    async fn run(self, store: &Self::Store, ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>, ctx: RunCtxImpl) -> anyhow::Result<()> {
         match self {
             HbacCommands::ImportResources(import_resources_args) => {
-                debug!("ImportResources2: import_resources_params={:?}",import_resources_args);
+                debug!("ImportResources2: import_resources_params={:?}", import_resources_args);
                 let freq_filter = if import_resources_args.freq_filters.is_empty() {
                     None
                 } else {
@@ -128,19 +119,10 @@ impl StageCommand for HbacCommands {
                     store.as_ref(),
                     &LABELS,
                     || data::labeled_resourses(&import_resources_args.source_path, "train.csv"),
-
-                    | key| {
-                        thoosa_motifs::data::parquet_to_tensor_by_path(
-                            PathBuf::from(&import_resources_args.source_path)
-                                .join("train_eegs")
-                                .join(format!("{}.parquet", key)),
-                            Cpu,
-                        )
-                    },
+                    |key| { thoosa_motifs::data::parquet_to_tensor_by_path(PathBuf::from(&import_resources_args.source_path).join("train_eegs").join(format!("{}.parquet", key)), Cpu,) },
                     freq_filter,
                     true,
-                    |t: &Transaction|{
-
+                    |t: &Transaction| {
                         for pure_sets_len in [(3, true), (10, true), (50, true), (100, true), (150, true), (10000, false)] {
                             SqlStore::save_pure_sets(pure_sets_len.0, pure_sets_len.1, &t)?;
                         }
@@ -149,7 +131,8 @@ impl StageCommand for HbacCommands {
 
                         Ok(())
                     }
-                )).await?;
+                ))
+                .await?;
 
                 Ok(())
             }
@@ -158,7 +141,6 @@ impl StageCommand for HbacCommands {
                 let loader = init_loader(ws);
 
                 let all_configs = run_all_config_0(&run_all_args);
-
 
                 // let all_configs = run_all_config_1(&run_all_args, &RunAllSettings {
                 //     resources_per_label: 0,
@@ -175,21 +157,13 @@ impl StageCommand for HbacCommands {
                 //     max_batch_size : 20,
                 // });
 
-                t!(run_all(
-                    &ws,
-                    &store,
-                    &loader,
-                    ctx,
-                    &run_all_args,
-                    all_configs
-                )).await?;
+                t!(run_all(&ws, &store, &loader, ctx, &run_all_args, all_configs)).await?;
 
                 Ok(())
             }
         }
     }
 }
-
 
 fn main() -> anyhow::Result<()> {
     let cdt = cdt_for_dir();
@@ -216,8 +190,6 @@ fn main() -> anyhow::Result<()> {
     */
     let cpu_num = std::thread::available_parallelism().map(|nz| nz.get()).unwrap_or(2);
 
-
-
     let rt = tokio::runtime::Builder::new_multi_thread()
         .on_thread_start(|| {
             //TODO enable if not in ipc mode
@@ -232,37 +204,19 @@ fn main() -> anyhow::Result<()> {
         .build()
         .context("tokio runtime build failed")?;
 
-
     let run_result = rt.block_on(async move {
+        let ws = Arc::new(RwLock::new(thoosa_motifs::motifs_ws::new_motifs_workspace(args.common_args.ws_path.clone(), app_configs.clone())?));
 
-        let ws = Arc::new(RwLock::new(thoosa_motifs::motifs_ws::new_motifs_workspace(
-            args.common_args.ws_path.clone(),
-            app_configs.clone(),
-        )?));
-
-        let store = Arc::new(SqlStore::from_path_with_tables(
-            ws.read().store_path(),
-            vec![
-                thoosa_store::create_tables,
-                thoosa_motifs::motifs_store::create_motif_tables
-            ]
-        ).await?);
+        let store = Arc::new(SqlStore::from_path_with_tables(ws.read().store_path(), vec![thoosa_store::create_tables, thoosa_motifs::motifs_store::create_motif_tables]).await?);
 
         run_common_cli(
             args.common_args.clone(),
             Arc::clone(&store),
             Arc::clone(&ws),
-            |source_path, key| {
-                thoosa_motifs::data::parquet_to_tensor_by_path(
-                    source_path
-                        .as_ref()
-                        .join("train_eegs")
-                        .join(format!("{}.parquet", key)),
-                    Cpu,
-                )
-            },
-            cdt.clone()
-        ).await?;
+            |source_path, key| thoosa_motifs::data::parquet_to_tensor_by_path(source_path.as_ref().join("train_eegs").join(format!("{}.parquet", key)), Cpu),
+            cdt.clone(),
+        )
+        .await?;
 
         Ok(())
     });
@@ -277,11 +231,12 @@ fn main() -> anyhow::Result<()> {
             error!("failed with {:?} in {} mls", e, t1.elapsed().as_millis());
             // A poisoned local CUDA call may never return from spawn_blocking.
             // Runtime Drop must not prevent the failed application from exiting.
-            if GlobalCtx::process_failure().is_some() { rt.shutdown_background(); }
+            if GlobalCtx::process_failure().is_some() {
+                rt.shutdown_background();
+            }
             Err(e)
         }
     }
-    
 }
 
 #[cfg(test)]
@@ -293,26 +248,11 @@ mod tests {
 
     #[test]
     fn test_import_resources_freq_filters_parse() {
-        let cli = HbacArgs::parse_from([
-            "thoosa_main",
-            "import-resources",
-            "--source-path",
-            "/tmp/input",
-            "--freq-filters",
-            "{MedianFilter:{window:5}}",
-            "--freq-filters",
-            "{AverageFilter:{window:7,step:1}}",
-        ]);
+        let cli = HbacArgs::parse_from(["thoosa_main", "import-resources", "--source-path", "/tmp/input", "--freq-filters", "{MedianFilter:{window:5}}", "--freq-filters", "{AverageFilter:{window:7,step:1}}"]);
 
         match cli.common_args.command {
             Some(HbacAppCommands::Hbac(HbacCommands::ImportResources(args))) => {
-                assert_eq!(
-                    args.freq_filters,
-                    vec![
-                        InputFilter::MedianFilter(MedianFilterParams { window: 5 }),
-                        InputFilter::AverageFilter(AverageFilterParams { window: 7, step: 1 }),
-                    ],
-                );
+                assert_eq!(args.freq_filters, vec![InputFilter::MedianFilter(MedianFilterParams { window: 5 }), InputFilter::AverageFilter(AverageFilterParams { window: 7, step: 1 }),],);
             }
             other => panic!("unexpected command: {other:?}"),
         }
@@ -320,18 +260,11 @@ mod tests {
 
     #[test]
     fn test_run_all_resolution_flag_parses_high() {
-        let cli = HbacArgs::parse_from([
-            "thoosa_main",
-            "run-all",
-            "--find-resources", "group:find",
-            "--select-resources", "group:select",
-            "--resolution", "high",
-        ]);
+        let cli = HbacArgs::parse_from(["thoosa_main", "run-all", "--find-resources", "group:find", "--select-resources", "group:select", "--resolution", "high"]);
 
         match cli.common_args.command {
             Some(HbacAppCommands::Hbac(HbacCommands::RunAll(args))) => assert_eq!(args.resolution, Resolution::High),
             other => panic!("unexpected command: {other:?}"),
         }
     }
-
 }

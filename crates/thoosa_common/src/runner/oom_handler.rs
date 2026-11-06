@@ -1,19 +1,19 @@
 pub use super::syn_stage_runner::RetryToken;
 use crate as thoosa_common;
-use thoosa_shared::traits::MaxParallelCtx;
 use crate::runner::common::cachable::{BorrowRef, ConsumeData, SelectRef};
 use crate::ws::Workspace;
 use mockall_double::double;
 use parking_lot::RwLock;
 use std::borrow::Borrow;
-use thoosa_shared::collect_futures_eta::{collect_eta_record_oom_all_failed, collect_eta_record_oom_success};
-use thoosa_common::runner::sync_stage::ConsumeResult;
-use thoosa_shared::traits::{Stage};
-#[cfg(test)]
-use thoosa_shared::traits::OutId;
 use thoosa_common::runner::execution::StageExecution;
 #[double]
 use thoosa_common::runner::global_ctx::GlobalCtx;
+use thoosa_common::runner::sync_stage::ConsumeResult;
+use thoosa_shared::collect_futures_eta::{collect_eta_record_oom_all_failed, collect_eta_record_oom_success};
+use thoosa_shared::traits::MaxParallelCtx;
+#[cfg(test)]
+use thoosa_shared::traits::OutId;
+use thoosa_shared::traits::Stage;
 
 use crate::runner::statistics::Statistics;
 use async_trait::async_trait;
@@ -23,26 +23,21 @@ use std::fmt::Debug;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::sync::Arc;
+use thoosa_shared::ThoError;
 use thoosa_shared::tracked_await::t;
 use thoosa_shared::traits::{Adjustable, Data, RunCtx, ThoSelector, WithId};
-use thoosa_shared::ThoError;
 use thoosa_shared::{os_thread_id, panic_to_err_async};
 
 #[derive(Debug)]
 pub enum AdjusterError<A: Adjustable> {
     AdjustFailed(A),
-    SomethingElse(ThoError)
-
+    SomethingElse(ThoError),
 }
 #[async_trait]
 pub trait Adjuster<AC>: Debug + Send + Sync {
     type A: Adjustable;
 
-    async fn adjust(
-        &self,
-        adjustable: Self::A,
-        adjust_context: &mut AC,
-    ) -> Result<Self::A, AdjusterError<Self::A>>;
+    async fn adjust(&self, adjustable: Self::A, adjust_context: &mut AC) -> Result<Self::A, AdjusterError<Self::A>>;
 
     fn degrade(&self, _adjust_context: &mut AC) -> bool {
         false
@@ -91,9 +86,7 @@ pub mod mock_input_context {
         }
 
         pub fn with_build_final_output(mut self, inp: TestOutput) -> Self {
-            self.mock
-                .expect_build_final_output()
-                .return_once(move || Ok(inp));
+            self.mock.expect_build_final_output().return_once(move || Ok(inp));
             self
         }
 
@@ -111,9 +104,7 @@ pub mod mock_input_context {
     }
 
     pub fn build() -> InputContextBuilder {
-        InputContextBuilder {
-            mock: MockInputContext::new(),
-        }
+        InputContextBuilder { mock: MockInputContext::new() }
     }
 }
 
@@ -215,12 +206,7 @@ where
     RCC: RunCtxContext,
 {
     pub fn new(input: IC, runnable: RC, run_ctx: RCC) -> Self {
-        Self {
-            input,
-            runnable,
-            run_ctx,
-            pd: PhantomData,
-        }
+        Self { input, runnable, run_ctx, pd: PhantomData }
     }
 }
 
@@ -267,7 +253,7 @@ pub enum NoRunCtxAdjuster {}
 
 #[derive(Debug)]
 pub enum Adjusters<IA = NoInputAdjuster, SA = NoStageAdjuster, CA = NoRunCtxAdjuster> {
-    Input(IA),//it adjusts Selector used to fetch chunk of input
+    Input(IA), //it adjusts Selector used to fetch chunk of input
     Stage(SA),
     RunContext(CA),
 }
@@ -654,7 +640,6 @@ where
     }
 }
 
-
 #[derive(Debug)]
 pub struct OOMHandler<'a, 'z, IA = NoInputAdjuster, TA = NoStageAdjuster, CA = NoRunCtxAdjuster, S = ()> {
     adjusters: Vec<Adjusters<IA, TA, CA>>,
@@ -702,24 +687,15 @@ where
     type Out = SyncStageInitOutput<St>;
 }
 
-
-
-
 fn oom_executor(tho_device_idx: usize) -> &'static crate::runner::syn_stage_runner::SyncStageRunner {
     GlobalCtx::global().get_runner(tho_device_idx)
 }
 
-async fn run_stage_borrowed<R, W>(
-    task: Arc<R>,
-    input: Arc<W>,
-    tho_device_idx: usize,
-    run_ctx: R::Ctx,
-    retry_token: Option<RetryToken>,
-) -> Result<R::Out, ThoError>
+async fn run_stage_borrowed<R, W>(task: Arc<R>, input: Arc<W>, tho_device_idx: usize, run_ctx: R::Ctx, retry_token: Option<RetryToken>) -> Result<R::Out, ThoError>
 where
     R: StageExecution + Send + Sync + 'static,
     R::Ctx: MaxParallelCtx + Send + Sync + 'static,
-    for<'i> <R as Stage>::In<'i>:  Send + Sync + Debug,
+    for<'i> <R as Stage>::In<'i>: Send + Sync + Debug,
     R::Out: Send + Sync + 'static,
     W: BorrowRef + Debug + Send + Sync + 'static,
     for<'f> <W as BorrowRef>::Out<'f>: Borrow<<R as Stage>::In<'f>> + Send + Debug,
@@ -735,20 +711,15 @@ where
             execution.run_stage(task, input, tho_device_idx, &run_ctx).await
         },
         retry_token
-    )).await
+    ))
+    .await
 }
 
-async fn consume_stage_owned<'z, R, W>(
-    task: Arc<R>,
-    input: W,
-    tho_device_idx: usize,
-    run_ctx: R::Ctx,
-    retry: Option<RetryToken>,
-) -> Result<ConsumeResult<R::In<'z>, R::Out>, ThoError>
+async fn consume_stage_owned<'z, R, W>(task: Arc<R>, input: W, tho_device_idx: usize, run_ctx: R::Ctx, retry: Option<RetryToken>) -> Result<ConsumeResult<R::In<'z>, R::Out>, ThoError>
 where
     R: crate::runner::execution::ConsumingExecution + Send + Sync + 'static,
     R::Ctx: MaxParallelCtx + Send + Sync + 'static,
-    for<'i> <R as Stage>::In<'i>:Send + Sync,
+    for<'i> <R as Stage>::In<'i>: Send + Sync,
     R::Out: Send + Sync + 'static + Debug,
     W: ConsumeData<O = R::In<'z>> + Debug + Send + Sync + 'static,
     R::In<'z>: 'static,
@@ -768,21 +739,15 @@ where
             execution.consume_stage(task, input, tho_device_idx, run_ctx).await
         },
         retry,
-    )).await
+    ))
+    .await
 }
 
-async fn run_stage_selected<R, W, S>(
-    task: Arc<R>,
-    input: Arc<W>,
-    selector: Option<S>,
-    tho_device_idx: usize,
-    run_ctx: R::Ctx,
-    retry: Option<RetryToken>,
-) -> Result<R::Out, ThoError>
+async fn run_stage_selected<R, W, S>(task: Arc<R>, input: Arc<W>, selector: Option<S>, tho_device_idx: usize, run_ctx: R::Ctx, retry: Option<RetryToken>) -> Result<R::Out, ThoError>
 where
     R: StageExecution + Send + Sync + 'static,
     R::Ctx: MaxParallelCtx + Send + Sync + 'static,
-     for<'i> <R as Stage>::In<'i>:  Send + Sync + Debug,
+    for<'i> <R as Stage>::In<'i>: Send + Sync + Debug,
     R::Out: Send + Sync + 'static,
     S: ThoSelector + Debug + Clone + Default + Send + 'static,
     W: SelectRef<S> + Debug + Send + Sync + 'static,
@@ -799,7 +764,8 @@ where
             execution.run_stage_with_select(task, input, selector, tho_device_idx, &run_ctx).await
         },
         retry
-    )).await
+    ))
+    .await
 }
 
 #[doc(hidden)]
@@ -808,33 +774,19 @@ pub trait InputRun<R, W, S>: Debug
 where
     R: StageExecution,
 {
-    async fn run_stage(
-        task: Arc<R>,
-        input: Arc<W>,
-        selector: Option<S>,
-        tho_device_idx: usize,
-        run_ctx: R::Ctx,
-        retry: Option<RetryToken>,
-    ) -> Result<R::Out, ThoError>;
+    async fn run_stage(task: Arc<R>, input: Arc<W>, selector: Option<S>, tho_device_idx: usize, run_ctx: R::Ctx, retry: Option<RetryToken>) -> Result<R::Out, ThoError>;
 }
 
 impl<R, W, S> InputRun<R, W, S> for NoInputAdjuster
 where
     R: StageExecution + Send + Sync + 'static,
     R::Ctx: MaxParallelCtx + Send + Sync + 'static,
-     for<'i> <R as Stage>::In<'i>:  Send + Sync + Debug,
+    for<'i> <R as Stage>::In<'i>: Send + Sync + Debug,
     R::Out: Send + Sync + 'static,
     W: BorrowRef + Debug + Send + Sync + 'static,
     for<'f> <W as BorrowRef>::Out<'f>: Borrow<<R as Stage>::In<'f>> + Send + Debug,
 {
-    async fn run_stage(
-        task: Arc<R>,
-        input: Arc<W>,
-        selector: Option<S>,
-        tho_device_idx: usize,
-        run_ctx: R::Ctx,
-        retry: Option<RetryToken>,
-    ) -> Result<R::Out, ThoError> {
+    async fn run_stage(task: Arc<R>, input: Arc<W>, selector: Option<S>, tho_device_idx: usize, run_ctx: R::Ctx, retry: Option<RetryToken>) -> Result<R::Out, ThoError> {
         let _ = selector;
         t!(run_stage_borrowed(task, input, tho_device_idx, run_ctx, retry)).await
     }
@@ -844,20 +796,13 @@ impl<'adjuster, R, W, S, IC> InputRun<R, W, S> for Box<dyn Adjuster<IC, A = S> +
 where
     R: StageExecution + Send + Sync + 'static,
     R::Ctx: MaxParallelCtx + Send + Sync + 'static,
-     for<'i> <R as Stage>::In<'i>:  Send + Sync + Debug,
+    for<'i> <R as Stage>::In<'i>: Send + Sync + Debug,
     R::Out: Send + Sync + 'static,
     S: ThoSelector + Debug + Clone + Default + Send + 'static,
     W: SelectRef<S> + Debug + Send + Sync + 'static,
     for<'f> <W as BorrowRef>::Out<'f>: Borrow<<R as Stage>::In<'f>> + Send + Debug,
 {
-    async fn run_stage(
-        task: Arc<R>,
-        input: Arc<W>,
-        selector: Option<S>,
-        tho_device_idx: usize,
-        run_ctx: R::Ctx,
-        retry: Option<RetryToken>,
-    ) -> Result<R::Out, ThoError> {
+    async fn run_stage(task: Arc<R>, input: Arc<W>, selector: Option<S>, tho_device_idx: usize, run_ctx: R::Ctx, retry: Option<RetryToken>) -> Result<R::Out, ThoError> {
         t!(run_stage_selected(task, input, selector, tho_device_idx, run_ctx, retry)).await
     }
 }
@@ -868,25 +813,12 @@ where
     TA: Debug,
     CA: Debug,
 {
-    pub fn new(
-        adjusters: Vec<Adjusters<IA, TA, CA>>,
-        statistics: Option<&'a Arc<Statistics>>,
-    ) -> Self {
-        Self {
-            adjusters,
-            statistics,
-            pd_rc: Default::default(),
-        }
+    pub fn new(adjusters: Vec<Adjusters<IA, TA, CA>>, statistics: Option<&'a Arc<Statistics>>) -> Self {
+        Self { adjusters, statistics, pd_rc: Default::default() }
     }
 
-    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="OOMHandler::run"))]
-    pub async fn run<R, W, C>(
-        &self,
-        task: &Arc<R>,
-        input: Arc<W>,
-        run_context: R::Ctx,
-        contexts: C,
-    ) -> Result<R::Out, ThoError>
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "OOMHandler::run"))]
+    pub async fn run<R, W, C>(&self, task: &Arc<R>, input: Arc<W>, run_context: R::Ctx, contexts: C) -> Result<R::Out, ThoError>
     where
         R: StageExecution + Send + Sync + 'static + 'a,
         R::Ctx: MaxParallelCtx + Send + Sync + 'static,
@@ -895,7 +827,7 @@ where
         TA: StageAdjustment<'a, R, C>,
         CA: RunContextAdjustment<R::Ctx, C>,
         C: Debug,
-         for<'i> <R as Stage>::In<'i>:  Send + Sync + Debug,
+        for<'i> <R as Stage>::In<'i>: Send + Sync + Debug,
         R::Out: Send + Sync + 'static,
         S: Debug + Clone + Default + Send + 'static,
         W: BorrowRef + Debug + Send + Sync + 'static,
@@ -910,39 +842,27 @@ where
 
         let _tho_device_idx = run_context.tho_device_idx();
 
-        t!(run_with_runner(
-            &self.adjusters,
-            Arc::clone(task),
-            input,
-            run_context,
-            contexts,
-            |task, input, selector, tho_device_idx, run_ctx, retry| async move {
-                debug!("OOMHandler::run: task={task:?} input={input:?} run_ctx={run_ctx:?} max_other_parallel={}", run_ctx.max_other_parallel());
+        t!(run_with_runner(&self.adjusters, Arc::clone(task), input, run_context, contexts, |task, input, selector, tho_device_idx, run_ctx, retry| async move {
+            debug!("OOMHandler::run: task={task:?} input={input:?} run_ctx={run_ctx:?} max_other_parallel={}", run_ctx.max_other_parallel());
 
-                /*
-                SyncStage::do_run – executes operations on tensors synchronously, receives tensors or composite tensor types as references
-                OOMHandler::run - runs syn_stage.do_run/consume until it succeeds decreasing allowed number of stages executed in parallel and applying stage- and  stage input-specific adjusters as configured at call site
-                StageExecutor::submit – ensures that no more than requested max_other_parallel sync stages are being executed at a given moment.
-                selector – when OOMHandler tries to process input in chunks the selector is used to select current chunk.
-                Then – input.with_data_ref/with_selected_data_ref calls
-                            load_from_any_device_→ensure_copied→
-                            if tensor is absent in current (from RunContext)  memory it’s copied with
-                            ThoTensor::copy_to_device-> GlobalCtx::global().cuda_actor(ctx_device)/copy→copy_h2d_from_ptr or ipc_copy_h2d_from_ptr
+            /*
+            SyncStage::do_run – executes operations on tensors synchronously, receives tensors or composite tensor types as references
+            OOMHandler::run - runs syn_stage.do_run/consume until it succeeds decreasing allowed number of stages executed in parallel and applying stage- and  stage input-specific adjusters as configured at call site
+            StageExecutor::submit – ensures that no more than requested max_other_parallel sync stages are being executed at a given moment.
+            selector – when OOMHandler tries to process input in chunks the selector is used to select current chunk.
+            Then – input.with_data_ref/with_selected_data_ref calls
+                        load_from_any_device_→ensure_copied→
+                        if tensor is absent in current (from RunContext)  memory it’s copied with
+                        ThoTensor::copy_to_device-> GlobalCtx::global().cuda_actor(ctx_device)/copy→copy_h2d_from_ptr or ipc_copy_h2d_from_ptr
 
-                 */
-                t!(<IA as InputRun<R, W, S>>::run_stage(task, input, selector, tho_device_idx, run_ctx, retry)).await
-            },
-        )).await
+             */
+            t!(<IA as InputRun<R, W, S>>::run_stage(task, input, selector, tho_device_idx, run_ctx, retry)).await
+        },))
+        .await
     }
 
-    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="OOMHandler::consume"))]
-    pub async fn consume<R, W, C>(
-        &self,
-        task: &Arc<R>,
-        input: W,
-        run_context: R::Ctx,
-        contexts: C,
-    ) -> Result<R::Out, ThoError>
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "OOMHandler::consume"))]
+    pub async fn consume<R, W, C>(&self, task: &Arc<R>, input: W, run_context: R::Ctx, contexts: C) -> Result<R::Out, ThoError>
     where
         R: crate::runner::execution::ConsumingExecution + Send + Sync + 'static + 'a,
         R::Ctx: MaxParallelCtx + Send + Sync + 'static,
@@ -950,15 +870,13 @@ where
         TA: StageAdjustment<'a, R, C>,
         CA: RunContextAdjustment<R::Ctx, C>,
         C: Debug,
-        for<'i> <R as Stage>::In<'i>:Send + Sync,
+        for<'i> <R as Stage>::In<'i>: Send + Sync,
         R::Out: Send + Sync + 'static,
         S: Debug + Clone + Default + Send + 'static,
-        W:ConsumeData<O = <R as Stage>::In<'z>>,
+        W: ConsumeData<O = <R as Stage>::In<'z>>,
         W: Debug + Send + Sync + 'static,
         <R as Stage>::In<'z>: 'static,
     {
-
-
         t!(run_with_runner_consume(
             &self.adjusters,
             Arc::clone(task),
@@ -969,9 +887,9 @@ where
                 debug!("OOMHandler::consume: task={task:?} run_ctx={run_ctx:?} max_other_parallel={}", run_ctx.max_other_parallel());
                 t!(consume_stage_owned(task, input, tho_device_idx, run_ctx, retry)).await
             },
-        )).await
+        ))
+        .await
     }
-
 }
 
 impl<'a, 'z, CA> OOMHandler<'a, 'z, NoInputAdjuster, NoStageAdjuster, CA, ()>
@@ -980,14 +898,8 @@ where
 {
     /// Constructs a sync stage with the same run-context adjustment and retry machinery used by execution.
     /// Input and task adjusters are intentionally unavailable because neither exists before construction succeeds.
-    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="OOMHandler::new_stage"))]
-    pub async fn new_stage<I, RC, St, C, W>(
-        &self,
-        sync_init: I,
-        run_context: RC,
-        contexts: C,
-        ws: &Arc<RwLock<Box<W>>>,
-    ) -> Result<Arc<St>, ThoError>
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "OOMHandler::new_stage"))]
+    pub async fn new_stage<I, RC, St, C, W>(&self, sync_init: I, run_context: RC, contexts: C, ws: &Arc<RwLock<Box<W>>>) -> Result<Arc<St>, ThoError>
     where
         I: SyncStageInit<RC, St, W>,
         RC: RunCtx + MaxParallelCtx + Send + Sync + 'static,
@@ -1003,11 +915,7 @@ where
         #[cfg(tho_debug)]
         let input_id_dbg = format!("sync_init={:?}", sync_init);
 
-        let stage = Arc::new(SyncStageInitImpl {
-            init: sync_init,
-            ws: Arc::clone(ws),
-            pd: PhantomData,
-        });
+        let stage = Arc::new(SyncStageInitImpl { init: sync_init, ws: Arc::clone(ws), pd: PhantomData });
 
         let output = t!(run_with_runner_impl(
             &self.adjusters,
@@ -1017,31 +925,25 @@ where
             run_context,
             contexts,
             SyncStageInitRetryAdapter,
-        )).await?;
+        ))
+        .await?;
         Ok(output.0)
     }
 }
 
-#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="pref_oom_count"))]
-fn perf_oom_count(){
-
-}
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "pref_oom_count"))]
+fn perf_oom_count() {}
 
 #[allow(async_fn_in_trait)]
 trait RunnerRetryAdapter<'z, R, S>
 where
     R: Stage,
 {
-    async fn run(
-        &mut self,
-        task: Arc<R>,
-        selector: Option<S>,
-        device_idx: usize,
-        run_ctx: R::Ctx,
-        retry: Option<RetryToken>,
-    ) -> Result<R::Out, ThoError>;
+    async fn run(&mut self, task: Arc<R>, selector: Option<S>, device_idx: usize, run_ctx: R::Ctx, retry: Option<RetryToken>) -> Result<R::Out, ThoError>;
 
-    fn can_retry(&self) -> bool { true }
+    fn can_retry(&self) -> bool {
+        true
+    }
 }
 
 struct SyncStageInitRetryAdapter;
@@ -1053,14 +955,7 @@ where
     St: Stage + Send + Sync + 'static,
     W: Workspace + ?Sized + 'static,
 {
-    async fn run(
-        &mut self,
-        task: Arc<SyncStageInitImpl<I, RC, St, W>>,
-        _selector: Option<()>,
-        device_idx: usize,
-        run_ctx: RC,
-        retry: Option<RetryToken>,
-    ) -> Result<SyncStageInitOutput<St>, ThoError> {
+    async fn run(&mut self, task: Arc<SyncStageInitImpl<I, RC, St, W>>, _selector: Option<()>, device_idx: usize, run_ctx: RC, retry: Option<RetryToken>) -> Result<SyncStageInitOutput<St>, ThoError> {
         let init = task.init.clone();
         let ws = Arc::clone(&task.ws);
         let max_other_parallel = run_ctx.max_other_parallel();
@@ -1073,7 +968,8 @@ where
                 Ok(SyncStageInitOutput(stage))
             },
             retry,
-        )).await
+        ))
+        .await
     }
 }
 
@@ -1088,19 +984,10 @@ where
     Run: Fn(Arc<R>, Arc<W>, Option<S>, usize, R::Ctx, Option<RetryToken>) -> Fut,
     Fut: Future<Output = Result<R::Out, ThoError>>,
 {
-    async fn run(
-        &mut self,
-        task: Arc<R>,
-        selector: Option<S>,
-        device_idx: usize,
-        run_ctx: R::Ctx,
-        retry: Option<RetryToken>,
-    ) -> Result<R::Out, ThoError> {
+    async fn run(&mut self, task: Arc<R>, selector: Option<S>, device_idx: usize, run_ctx: R::Ctx, retry: Option<RetryToken>) -> Result<R::Out, ThoError> {
         let runner = &self.runner;
 
-        panic_to_err_async!({
-            runner(task, Arc::clone(&self.input), selector, device_idx, run_ctx, retry)
-        })
+        panic_to_err_async!(runner(task, Arc::clone(&self.input), selector, device_idx, run_ctx, retry))
     }
 }
 
@@ -1117,25 +1004,15 @@ where
     Run: Fn(Arc<R>, W, Option<S>, usize, R::Ctx, Option<RetryToken>) -> Fut,
     Fut: Future<Output = Result<ConsumeResult<R::In<'z>, R::Out>, ThoError>>,
 {
-    fn can_retry(&self) -> bool {
-        // A synchronization error after successful consumption has no input to replay.
-        self.input.is_some()
-    }
-
-    async fn run(
-        &mut self,
-        task: Arc<R>,
-        selector: Option<S>,
-        device_idx: usize,
-        run_ctx: R::Ctx,
-        retry: Option<RetryToken>,
-    ) -> Result<R::Out, ThoError> {
+    async fn run(&mut self, task: Arc<R>, selector: Option<S>, device_idx: usize, run_ctx: R::Ctx, retry: Option<RetryToken>) -> Result<R::Out, ThoError> {
         let input = self.input.take().expect("ConsumeRunnerRetryAdapter::run: missing input");
         let runner = &self.runner;
 
-        let run_result = match t!(futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe({//TODO use panic_to_err_async?
+        let run_result = match t!(futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe({
+            //TODO use panic_to_err_async?
             runner(task, input, selector, device_idx, run_ctx, retry)
-        }))).await
+        })))
+        .await
         {
             Ok(run_result) => run_result?,
             Err(panic) => std::panic::resume_unwind(panic),
@@ -1154,17 +1031,13 @@ where
         }
     }
 
+    fn can_retry(&self) -> bool {
+        // A synchronization error after successful consumption has no input to replay.
+        self.input.is_some()
+    }
 }
 
-async fn run_with_runner_impl<'a, 'z, R, S, A, C, IA, TA, CA>(
-    adjusters: &[Adjusters<IA, TA, CA>],
-    stage: Arc<R>,
-    #[cfg(tho_debug)]
-    input_id_dbg: String,
-    run_context: R::Ctx,
-    mut contexts: C,
-    mut runner: A,
-) -> Result<R::Out, ThoError>
+async fn run_with_runner_impl<'a, 'z, R, S, A, C, IA, TA, CA>(adjusters: &[Adjusters<IA, TA, CA>], stage: Arc<R>, #[cfg(tho_debug)] input_id_dbg: String, run_context: R::Ctx, mut contexts: C, mut runner: A) -> Result<R::Out, ThoError>
 where
     R: Stage + 'a,
     S: Debug + Clone + Default + 'static,
@@ -1172,7 +1045,7 @@ where
     IA: InputAdjustment<'a, R, C, S>,
     TA: StageAdjustment<'a, R, C>,
     CA: RunContextAdjustment<R::Ctx, C>,
-     for<'i> <R as Stage>::In<'i>:  Send + Sync + Debug,
+    for<'i> <R as Stage>::In<'i>: Send + Sync + Debug,
     R::Out: Send + Sync + 'static,
     R::Ctx: MaxParallelCtx,
     A: RunnerRetryAdapter<'z, R, S>,
@@ -1181,169 +1054,190 @@ where
     // Ownership starts before the first attempt and survives every adapter/adjuster
     // await, so cancellation never leaves a detached job owning an exclusive retry.
     let retry_scope = oom_executor(device_idx).retry_scope();
-    retry_scope.run(async {
-    let mut task = Some(stage);
-    let mut run_context = Some(run_context);
+    retry_scope
+        .run(async {
+            let mut task = Some(stage);
+            let mut run_context = Some(run_context);
 
+            debug!(
+                "OOMHandler::run: 1.  ctx_id={ctx_id:?} task={:?} os_thread_id={}  max_other_parallel={:?}",
+                task.as_ref().expect("run_with_runner_impl: missing task"),
+                os_thread_id(),
+                run_context.as_ref().expect("run_with_runner_impl: missing run context").max_other_parallel(),
+            );
 
-    debug!("OOMHandler::run: 1.  ctx_id={ctx_id:?} task={:?} os_thread_id={}  max_other_parallel={:?}",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),run_context.as_ref().expect("run_with_runner_impl: missing run context").max_other_parallel(),);
+            let mut i = 0;
+            let mut input_select_adjusted: Option<S> = None;
 
-    let mut i = 0;
-    let mut input_select_adjusted: Option<S> = None;
+            match t!(runner.run(
+                Arc::clone(task.as_ref().expect("run_with_runner_impl: missing task")),
+                None,
+                device_idx,
+                run_context.as_mut().expect("run_with_runner_impl: missing run context").branch(false),
+                Some(retry_scope.token()),
+            ))
+            .await
+            {
+                Err(te) => {
+                    if !runner.can_retry() {
+                        warn!("OOMHandler::run, error: 0. ctx_id={ctx_id:?} task={:?} os_thread_id={}  te={te:?} runner can't retry", task.as_ref().expect("run_with_runner_impl: missing task"), os_thread_id(),);
 
+                        return Err(te);
+                    }
 
-    match t!(runner
-        .run(
-            Arc::clone(task.as_ref().expect("run_with_runner_impl: missing task")),
-            None,
-            device_idx,
-            run_context
-                .as_mut()
-                .expect("run_with_runner_impl: missing run context")
-                .branch(false),
-            Some(retry_scope.token()),
-        )).await {
-        Err(te) => {
-            if !runner.can_retry() {
-                warn!("OOMHandler::run, error: 0. ctx_id={ctx_id:?} task={:?} os_thread_id={}  te={te:?} runner can't retry",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
+                    debug!("OOMHandler::run, error: 0. ctx_id={ctx_id:?} task={:?} os_thread_id={}  te={te:?}", task.as_ref().expect("run_with_runner_impl: missing task"), os_thread_id(),);
 
-                return Err(te);
-            }
+                    if te.is_retryable_oom() {
+                        perf_oom_count();
+                        debug!("OOMHandler::run, error: 1. ctx_id={ctx_id:?} task={:?} os_thread_id={} before adjusters", task.as_ref().expect("run_with_runner_impl: missing task"), os_thread_id(),);
 
-            debug!("OOMHandler::run, error: 0. ctx_id={ctx_id:?} task={:?} os_thread_id={}  te={te:?}",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
+                        for adjuster in adjusters {
+                            debug!(
+                                "OOMHandler::run, error: 2. ctx_id={ctx_id:?} task={:?} adjuster={adjuster:?} os_thread_id={}  starting adjuster",
+                                task.as_ref().expect("run_with_runner_impl: missing task"),
+                                os_thread_id(),
+                            );
 
-            if te.is_retryable_oom() {
-                perf_oom_count();
-                debug!("OOMHandler::run, error: 1. ctx_id={ctx_id:?} task={:?} os_thread_id={} before adjusters",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
-
-                for adjuster in adjusters {
-                    debug!("OOMHandler::run, error: 2. ctx_id={ctx_id:?} task={:?} adjuster={adjuster:?} os_thread_id={}  starting adjuster",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
-
-                    loop {//TODO while adjuster.can_degrade
-                        i += 1;
-                        if i > 100 {//TODO Config
-                            return Err(ThoError::new(format!("OOMHandler: ctx_id={ctx_id:?}  i={i}")));
-                        }
-
-                        debug!("OOMHandler::run, error: 3. ctx_id={ctx_id:?} task={:?} os_thread_id={} oom i={i} in loop",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
-
-                        let adjust_result = t!(adjuster.apply(
-                            &mut task,
-                            &mut run_context,
-                            &mut input_select_adjusted,
-                            &mut contexts,
-                        )).await;
-
-                        debug!("OOMHandler::run, error: on adjust_result ={adjust_result:?} os_thread_id={}",os_thread_id());
-
-                        if let Err(te) = adjust_result {
-
-                            debug!("OOMHandler::run, error: on ctx_id={ctx_id:?} task={:?} adjuster={adjuster:?} os_thread_id={} adjuster error te={te:?}",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
-
-                            if te.is_retryable_oom() {
-                                debug!("OOMHandler::run, error: on adjust_result ctx_id={ctx_id:?} task={:?} os_thread_id={} adjust_context={contexts:?}",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
-
-                                if !adjuster.degrade(&mut contexts) {
-                                    debug!("OOMHandler::run, error: on adjust_result moving to next adjuster adjust_result ctx_id={ctx_id:?} task={:?} os_thread_id={} adjust_context={contexts:?}",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
-
-                                    break;
+                            loop {
+                                //TODO while adjuster.can_degrade
+                                i += 1;
+                                if i > 100 {
+                                    //TODO Config
+                                    return Err(ThoError::new(format!("OOMHandler: ctx_id={ctx_id:?}  i={i}")));
                                 }
 
-                                continue;
-                            }
+                                debug!("OOMHandler::run, error: 3. ctx_id={ctx_id:?} task={:?} os_thread_id={} oom i={i} in loop", task.as_ref().expect("run_with_runner_impl: missing task"), os_thread_id(),);
 
-                            return Err(te);
-                        }
+                                let adjust_result = t!(adjuster.apply(&mut task, &mut run_context, &mut input_select_adjusted, &mut contexts,)).await;
 
-                        debug!("OOMHandler::run, error: ctx_id={ctx_id:?} task={:?} os_thread_id={}  1. input_select_adjusted={input_select_adjusted:?} max_other_parallel={:?}",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),run_context.as_ref().expect("run_with_runner_impl: missing run context").max_other_parallel(),);
+                                debug!("OOMHandler::run, error: on adjust_result ={adjust_result:?} os_thread_id={}", os_thread_id());
 
-                        let run_result = t!(runner
-                            .run(
-                                Arc::clone(task.as_ref().expect("run_with_runner_impl: missing task")),
-                                input_select_adjusted.clone(),
-                                device_idx,
+                                if let Err(te) = adjust_result {
+                                    debug!(
+                                        "OOMHandler::run, error: on ctx_id={ctx_id:?} task={:?} adjuster={adjuster:?} os_thread_id={} adjuster error te={te:?}",
+                                        task.as_ref().expect("run_with_runner_impl: missing task"),
+                                        os_thread_id(),
+                                    );
 
-                                run_context
-                                    .as_mut()
-                                    .expect("run_with_runner_impl: missing run context")
-                                    .branch(false),
+                                    if te.is_retryable_oom() {
+                                        debug!(
+                                            "OOMHandler::run, error: on adjust_result ctx_id={ctx_id:?} task={:?} os_thread_id={} adjust_context={contexts:?}",
+                                            task.as_ref().expect("run_with_runner_impl: missing task"),
+                                            os_thread_id(),
+                                        );
 
-                                Some(retry_scope.token()),
-                            )).await;
+                                        if !adjuster.degrade(&mut contexts) {
+                                            debug!(
+                                                "OOMHandler::run, error: on adjust_result moving to next adjuster adjust_result ctx_id={ctx_id:?} task={:?} os_thread_id={} adjust_context={contexts:?}",
+                                                task.as_ref().expect("run_with_runner_impl: missing task"),
+                                                os_thread_id(),
+                                            );
 
-                        match run_result {
-                            Ok(v) => {
-                                debug!("OOMHandler::run, error: got ok ctx_id={ctx_id:?} task={:?} os_thread_id={} adjuster={adjuster:?} adjust_context={contexts:?}",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
-                                trace!("OOMHandler::run, error: got ok ctx_id={ctx_id:?} v={v:?}");
+                                            break;
+                                        }
 
-                                match t!(<IA as InputAdjustment<'a, R, C, S>>::handle_success(v, contexts)).await? {
-                                    InputAdjustedRun::Done(out) => {
-                                        collect_eta_record_oom_success();
-
-                                        debug!("done in {i} steps");
-                                        return Ok(out);
+                                        continue;
                                     }
-                                    InputAdjustedRun::Continue(next_contexts) => {
-                                        contexts = next_contexts;
-                                    }
-                                }
-                            }
-                            Err(te) => {
-                                if !runner.can_retry() { return Err(te); }
 
-                                debug!("OOMHandler::run, error: err is_retryable_oom={} te={te:?}", te.is_retryable_oom());
-
-                                if te.is_retryable_oom() {
-                                    perf_oom_count();
-                                    debug!("OOMHandler::run, error: on oom ctx_id={ctx_id:?} task={:?} os_thread_id={} adjust_context={contexts:?}",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
-
-                                    if !adjuster.degrade(&mut contexts) {
-                                        debug!("OOMHandler::run, inner error: on oom moving to next adjuster ctx_id={ctx_id:?} task={:?} os_thread_id={} adjust_context={contexts:?}",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
-
-                                        break;
-                                    }
-                                } else {
-                                    warn!("OOMHandler::run, inner error: task={:?} os_thread_id={} \nunexpected error: {te:?}", task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
                                     return Err(te);
                                 }
+
+                                debug!(
+                                    "OOMHandler::run, error: ctx_id={ctx_id:?} task={:?} os_thread_id={}  1. input_select_adjusted={input_select_adjusted:?} max_other_parallel={:?}",
+                                    task.as_ref().expect("run_with_runner_impl: missing task"),
+                                    os_thread_id(),
+                                    run_context.as_ref().expect("run_with_runner_impl: missing run context").max_other_parallel(),
+                                );
+
+                                let run_result = t!(runner.run(
+                                    Arc::clone(task.as_ref().expect("run_with_runner_impl: missing task")),
+                                    input_select_adjusted.clone(),
+                                    device_idx,
+                                    run_context.as_mut().expect("run_with_runner_impl: missing run context").branch(false),
+                                    Some(retry_scope.token()),
+                                ))
+                                .await;
+
+                                match run_result {
+                                    Ok(v) => {
+                                        debug!(
+                                            "OOMHandler::run, error: got ok ctx_id={ctx_id:?} task={:?} os_thread_id={} adjuster={adjuster:?} adjust_context={contexts:?}",
+                                            task.as_ref().expect("run_with_runner_impl: missing task"),
+                                            os_thread_id(),
+                                        );
+                                        trace!("OOMHandler::run, error: got ok ctx_id={ctx_id:?} v={v:?}");
+
+                                        match t!(<IA as InputAdjustment<'a, R, C, S>>::handle_success(v, contexts)).await? {
+                                            InputAdjustedRun::Done(out) => {
+                                                collect_eta_record_oom_success();
+
+                                                debug!("done in {i} steps");
+                                                return Ok(out);
+                                            }
+                                            InputAdjustedRun::Continue(next_contexts) => {
+                                                contexts = next_contexts;
+                                            }
+                                        }
+                                    }
+                                    Err(te) => {
+                                        if !runner.can_retry() {
+                                            return Err(te);
+                                        }
+
+                                        debug!("OOMHandler::run, error: err is_retryable_oom={} te={te:?}", te.is_retryable_oom());
+
+                                        if te.is_retryable_oom() {
+                                            perf_oom_count();
+                                            debug!("OOMHandler::run, error: on oom ctx_id={ctx_id:?} task={:?} os_thread_id={} adjust_context={contexts:?}", task.as_ref().expect("run_with_runner_impl: missing task"), os_thread_id(),);
+
+                                            if !adjuster.degrade(&mut contexts) {
+                                                debug!(
+                                                    "OOMHandler::run, inner error: on oom moving to next adjuster ctx_id={ctx_id:?} task={:?} os_thread_id={} adjust_context={contexts:?}",
+                                                    task.as_ref().expect("run_with_runner_impl: missing task"),
+                                                    os_thread_id(),
+                                                );
+
+                                                break;
+                                            }
+                                        } else {
+                                            warn!("OOMHandler::run, inner error: task={:?} os_thread_id={} \nunexpected error: {te:?}", task.as_ref().expect("run_with_runner_impl: missing task"), os_thread_id(),);
+                                            return Err(te);
+                                        }
+                                    }
+                                }
                             }
                         }
+                    } else {
+                        warn!("OOMHandler::run, error: ctx_id={ctx_id:?}  task={:?}  os_thread_id={} \nunexpected error: {te:?}", task.as_ref().expect("run_with_runner_impl: missing task"), os_thread_id(),);
+                        return Err(te);
                     }
+
+                    collect_eta_record_oom_all_failed();
+
+                    warn!("OOMHandler::run, error: ctx_id={ctx_id:?} task={:?} os_thread_id={} all failed", task.as_ref().expect("run_with_runner_impl: missing task"), os_thread_id());
+                    #[cfg(tho_debug)]
+                    t!(GlobalCtx::global().debug_caches(device_idx, &format!("all_failed for {}", input_id_dbg))).await;
+
+                    #[cfg(tho_debug)]
+                    GlobalCtx::global().execution(device_idx).debug_worker().await?;
+
+                    // Exhausted adjustments may exclude this data item, without making it retryable again. TODO : it's not ThoError::Data - make ThoError::OOMHandlingFailed
+                    Err(ThoError::Data {
+                        kind: thoosa_shared::DataErrorKind::OOMHandlingFailed,
+                        msg: format!("all_failed: task={:?}", task.as_ref().expect("run_with_runner_impl: missing task")),
+                    })
                 }
-            } else {
-                warn!("OOMHandler::run, error: ctx_id={ctx_id:?}  task={:?}  os_thread_id={} \nunexpected error: {te:?}",task.as_ref().expect("run_with_runner_impl: missing task"), os_thread_id(),);
-                return Err(te);
+                Ok(o) => {
+                    debug!("OOMHandler::run: ctx_id={ctx_id:?} os_thread_id={} done without oom ", os_thread_id());
+
+                    Ok(o)
+                }
             }
-
-            collect_eta_record_oom_all_failed();
-
-            warn!("OOMHandler::run, error: ctx_id={ctx_id:?} task={:?} os_thread_id={} all failed", task.as_ref().expect("run_with_runner_impl: missing task"), os_thread_id());
-            #[cfg(tho_debug)]
-            t!(GlobalCtx::global().debug_caches(device_idx, &format!("all_failed for {}", input_id_dbg))).await;
-
-            #[cfg(tho_debug)]
-            GlobalCtx::global().execution(device_idx).debug_worker().await?;
-
-            // Exhausted adjustments may exclude this data item, without making it retryable again. TODO : it's not ThoError::Data - make ThoError::OOMHandlingFailed
-            Err(ThoError::Data { kind: thoosa_shared::DataErrorKind::OOMHandlingFailed, msg: format!("all_failed: task={:?}", task.as_ref().expect("run_with_runner_impl: missing task")) })
-        }
-        Ok(o) => {
-            debug!("OOMHandler::run: ctx_id={ctx_id:?} os_thread_id={} done without oom ",os_thread_id());
-
-            Ok(o)
-        }
-    }
-    }).await
+        })
+        .await
 }
 
-async fn run_with_runner<'a, 'z, R, S, W, Run, Fut, C, IA, TA, CA>(
-    adjusters: &[Adjusters<IA, TA, CA>],
-    stage: Arc<R>,
-    input: Arc<W>,
-    run_context: R::Ctx,
-    contexts: C,
-    runner: Run,
-) -> Result<R::Out, ThoError>
+async fn run_with_runner<'a, 'z, R, S, W, Run, Fut, C, IA, TA, CA>(adjusters: &[Adjusters<IA, TA, CA>], stage: Arc<R>, input: Arc<W>, run_context: R::Ctx, contexts: C, runner: Run) -> Result<R::Out, ThoError>
 where
     R: Stage + 'a,
     S: Debug + Clone + Default + 'static,
@@ -1351,10 +1245,10 @@ where
     IA: InputAdjustment<'a, R, C, S>,
     TA: StageAdjustment<'a, R, C>,
     CA: RunContextAdjustment<R::Ctx, C>,
-     for<'i> <R as Stage>::In<'i>:  Send + Sync + Debug,
+    for<'i> <R as Stage>::In<'i>: Send + Sync + Debug,
     R::Out: Send + Sync + 'static,
     R::Ctx: MaxParallelCtx,
-    W:Debug,
+    W: Debug,
     Run: Fn(Arc<R>, Arc<W>, Option<S>, usize, R::Ctx, Option<RetryToken>) -> Fut,
     Fut: Future<Output = Result<R::Out, ThoError>>,
 {
@@ -1369,18 +1263,11 @@ where
         run_context,
         contexts,
         SharedRunnerRetryAdapter { input, runner },
-    )).await
+    ))
+    .await
 }
 
-
-async fn run_with_runner_consume<'a, 'z, R, S, W, Run, Fut, C, IA, TA, CA>(
-    adjusters: &[Adjusters<IA, TA, CA>],
-    stage: Arc<R>,
-    input: W,
-    run_context: R::Ctx,
-    contexts: C,
-    runner: Run,
-) -> Result<R::Out, ThoError>
+async fn run_with_runner_consume<'a, 'z, R, S, W, Run, Fut, C, IA, TA, CA>(adjusters: &[Adjusters<IA, TA, CA>], stage: Arc<R>, input: W, run_context: R::Ctx, contexts: C, runner: Run) -> Result<R::Out, ThoError>
 where
     R: Stage + 'a,
     S: Debug + Clone + Default + 'static,
@@ -1398,7 +1285,6 @@ where
     #[cfg(tho_debug)]
     let input_id_dbg = format!("input={:?}", input);
 
-
     let leases = input.protect(run_context.tho_device_idx());
     t!(run_with_runner_impl(
         adjusters,
@@ -1407,12 +1293,9 @@ where
         input_id_dbg,
         run_context,
         contexts,
-        ConsumeRunnerRetryAdapter {
-            leases,
-            input: Some(input),
-            runner,
-        },
-    )).await
+        ConsumeRunnerRetryAdapter { leases, input: Some(input), runner },
+    ))
+    .await
 }
 
 #[cfg(test)]
@@ -1440,19 +1323,18 @@ pub mod test_types {
         pub data: DummyTensor,
     }
 
-
     impl Select<RangeSelector> for TestInput {
         type Output = TestInput;
 
         fn subview(&self, selector: RangeSelector) -> Result<Self::Output, ThoError> {
             Ok(TestInput {
                 id: self.id.clone(),
-                data: DummyTensor(self.data.0[selector.start[0] as usize..selector.end[0] as usize].to_vec())//.0[selector.start..selector.end])
+                data: DummyTensor(self.data.0[selector.start[0] as usize..selector.end[0] as usize].to_vec()), //.0[selector.start..selector.end])
             })
         }
     }
 
-    impl Input for TestInput {  }
+    impl Input for TestInput {}
 
     impl Adjustable for TestInput {}
 
@@ -1507,10 +1389,7 @@ pub mod test_types {
 
     impl TestOutput {
         pub fn new(v: f32) -> Self {
-            Self {
-                id: "test".into(),
-                v: v.into(),
-            }
+            Self { id: "test".into(), v: v.into() }
         }
     }
 
@@ -1526,7 +1405,6 @@ pub mod test_types {
     #[async_trait]
     impl Data for TestOutput {
         type Metrics = [usize; 1];
-
 
         fn size(&self) -> Self::Metrics {
             [1]
@@ -1551,10 +1429,7 @@ pub mod test_types {
     #[async_trait]
     impl CopyToDevice for TestOutput {
         async fn copy_to_device(&self, _dst_device: usize) -> Result<Self, ThoError> {
-            Ok(TestOutput {
-                id: self.id.clone(),
-                v: self.v.clone(),
-            })
+            Ok(TestOutput { id: self.id.clone(), v: self.v.clone() })
         }
     }
 
@@ -1565,7 +1440,7 @@ pub mod test_types {
         }
     }
 
-    impl Output for TestOutput {  }
+    impl Output for TestOutput {}
 }
 
 #[cfg(test)]
@@ -1576,8 +1451,8 @@ pub mod mock_runnable {
     use mockall::mock;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use thoosa_shared::traits::{Stage, WithId};
     use thoosa_common::runner::sync_stage::SyncStage;
+    use thoosa_shared::traits::{Stage, WithId};
 
     mock! {
         #[derive(Clone, Debug)]
@@ -1600,8 +1475,6 @@ pub mod mock_runnable {
         fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
             MockRunnable::do_run(self.as_ref(), input, ctx)
         }
-
-
     }
 
     impl crate::runner::sync_stage::ConsumingStage for MockRunnable {
@@ -1613,10 +1486,7 @@ pub mod mock_runnable {
     impl Adjustable for MockRunnable {}
 
     impl OutId for MockRunnable {
-        fn out_id(
-            &self,
-            input_id: &<Self::In<'static> as WithId>::ID,
-        ) -> <Self::Out as WithId>::ID {
+        fn out_id(&self, input_id: &<Self::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
             input_id.clone()
         }
     }
@@ -1773,12 +1643,12 @@ mod tests {
     use super::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, WithInputContext, WithRunCtxContext, WithRunnableContext, input_adjuster, run_ctx_adjuster, task_adjuster};
     // use crate::common::runnable::Runnable;
     use crate::runner::common::cachable::{BorrowRef, DevicesWrap};
+    use crate::runner::global_ctx::GlobalCtx;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
-    use thoosa_shared::traits::RangeSelector;
     use thoosa_shared::ThoError;
-    use crate::runner::global_ctx::GlobalCtx;
+    use thoosa_shared::traits::RangeSelector;
     // type Selector = Range<[usize; 1]>;
 
     #[derive(Debug)]
@@ -1793,9 +1663,14 @@ mod tests {
     }
 
     impl BorrowRef for BorrowOnlyInput {
-        fn protect(&self, _device: usize) -> thoosa_common::runner::residency::ResidencyLease { thoosa_common::runner::residency::ResidencyLease::default() }
+        fn protect(&self, _device: usize) -> thoosa_common::runner::residency::ResidencyLease {
+            thoosa_common::runner::residency::ResidencyLease::default()
+        }
 
-        type Out<'a> = &'a TestInput where Self: 'a;
+        type Out<'a>
+            = &'a TestInput
+        where
+            Self: 'a;
 
         fn borrow_ref<'o>(&'o self, _to_tho_device_idx: usize) -> impl Future<Output = Result<Self::Out<'o>, ThoError>> + Send
         where
@@ -1803,7 +1678,6 @@ mod tests {
         {
             async move { Ok(&self.inner) }
         }
-
     }
 
     #[tokio::test]
@@ -1812,24 +1686,18 @@ mod tests {
         use crate::runner::syn_stage_runner::SyncStageRunner;
         use thoosa_common::runner::sync_stage::ConsumeResult;
         let global_context = MockGlobalCtx::global_context();
-        let mock = Box::leak(Box::new(mock_global_ctx::build().with_runner(
-            SyncStageRunner::new_with_reset_hook(8, 1, Arc::new(|_| Box::pin(async { Ok(()) })))
-        ).finish()));
+        let mock = Box::leak(Box::new(mock_global_ctx::build().with_runner(SyncStageRunner::new_with_reset_hook(8, 1, Arc::new(|_| Box::pin(async { Ok(()) })))).finish()));
         global_context.expect().return_const(&*mock);
         let (task, _) = mock_runnable([]);
-        let run_ctx = crate::runner::common::mock_run_ctx::build()
-            .with_id(0).with_device_idx(1).with_max_other_parallel(0).with_branch(1).finish();
+        let run_ctx = crate::runner::common::mock_run_ctx::build().with_id(0).with_device_idx(1).with_max_other_parallel(0).with_branch(1).finish();
         let adjusters: Vec<Adjusters<NoInputAdjuster, NoStageAdjuster, NoRunCtxAdjuster>> = Vec::new();
         // An outer synchronization error means consume succeeded and its input
         // cannot be replayed. Preserve that error instead of exhausting adjusters.
-        let error = super::run_with_runner_consume(
-            &adjusters, Arc::new(task), TestInput::new(1), run_ctx, NoContexts,
-            |_, _, _: Option<()>, device_idx, _, retry| async move {
-                super::oom_executor(device_idx).submit_consume(0, async {
-                    Err::<ConsumeResult<TestInput, TestOutput>, _>(ThoError::oom().context("consume synchronization"))
-                }, retry).await
-            },
-        ).await.unwrap_err();
+        let error = super::run_with_runner_consume(&adjusters, Arc::new(task), TestInput::new(1), run_ctx, NoContexts, |_, _, _: Option<()>, device_idx, _, retry| async move {
+            super::oom_executor(device_idx).submit_consume(0, async { Err::<ConsumeResult<TestInput, TestOutput>, _>(ThoError::oom().context("consume synchronization")) }, retry).await
+        })
+        .await
+        .unwrap_err();
         assert!(error.is_oom());
         assert!(format!("{error:?}").contains("consume synchronization"));
         // Leaving the retry chain must release the exclusive OOM reservation.
@@ -1846,9 +1714,7 @@ mod tests {
         let mut adapter = super::ConsumeRunnerRetryAdapter {
             leases: Default::default(),
             input: Some(input),
-            runner: |_: Arc<super::mock_runnable::MockRunnable>, input, _: Option<()>, _, _, _| async move {
-                Ok(ConsumeResult::Failed { input, error: ThoError::oom() })
-            },
+            runner: |_: Arc<super::mock_runnable::MockRunnable>, input, _: Option<()>, _, _, _| async move { Ok(ConsumeResult::Failed { input, error: ThoError::oom() }) },
         };
         let run_ctx = crate::runner::common::mock_run_ctx::build().finish();
         let error = adapter.run(Arc::new(task), None, 1, run_ctx, None).await.unwrap_err();
@@ -1863,29 +1729,23 @@ mod tests {
         use crate::runner::syn_stage_runner::SyncStageRunner;
         tokio::time::timeout(std::time::Duration::from_secs(3), async {
             let global_context = MockGlobalCtx::global_context();
-            let mock = Box::leak(Box::new(mock_global_ctx::build().with_runner(
-                SyncStageRunner::new_with_reset_hook(8, 1, Arc::new(|_| Box::pin(async { Ok(()) })))
-            ).finish()));
+            let mock = Box::leak(Box::new(mock_global_ctx::build().with_runner(SyncStageRunner::new_with_reset_hook(8, 1, Arc::new(|_| Box::pin(async { Ok(()) })))).finish()));
             global_context.expect().return_const(&*mock);
             let (task, _) = mock_runnable([]);
-            let run_ctx = crate::runner::common::mock_run_ctx::build()
-                .with_id(0).with_device_idx(1).with_max_other_parallel(0).with_branch(1).finish();
+            let run_ctx = crate::runner::common::mock_run_ctx::build().with_id(0).with_device_idx(1).with_max_other_parallel(0).with_branch(1).finish();
             let (returned, received) = tokio::sync::oneshot::channel();
             let returned = Arc::new(Mutex::new(Some(returned)));
             let adjusters: Vec<Adjusters<NoInputAdjuster, NoStageAdjuster, NoRunCtxAdjuster>> = Vec::new();
             // Exercise the actual OOM runner while its adapter is waiting after
             // a completed exclusive OOM attempt (like asynchronous input burping).
-            let mut run = Box::pin(super::run_with_runner(
-                &adjusters, Arc::new(task), Arc::new(()), run_ctx, NoContexts,
-                move |_, _, _: Option<()>, device_idx, _, retry| {
-                    let returned = Arc::clone(&returned);
-                    async move {
-                        let _ = super::oom_executor(device_idx).submit(0, async { Err::<TestOutput, _>(ThoError::oom()) }, retry).await;
-                        returned.lock().unwrap().take().unwrap().send(()).unwrap();
-                        std::future::pending::<Result<TestOutput, ThoError>>().await
-                    }
-                },
-            ));
+            let mut run = Box::pin(super::run_with_runner(&adjusters, Arc::new(task), Arc::new(()), run_ctx, NoContexts, move |_, _, _: Option<()>, device_idx, _, retry| {
+                let returned = Arc::clone(&returned);
+                async move {
+                    let _ = super::oom_executor(device_idx).submit(0, async { Err::<TestOutput, _>(ThoError::oom()) }, retry).await;
+                    returned.lock().unwrap().take().unwrap().send(()).unwrap();
+                    std::future::pending::<Result<TestOutput, ThoError>>().await
+                }
+            }));
             assert!(futures::poll!(run.as_mut()).is_pending());
             // Poll the adapter to its post-attempt await without a timing sleep.
             tokio::select! {
@@ -1897,38 +1757,42 @@ mod tests {
             assert!(matches!(run.await.unwrap_err().what(), ThoError::CudaBeingRecovered));
             executor.cuda_gate().unwrap().wait_for_pause_to_finish(ticket).await.unwrap();
             executor.submit(0, async { Ok(()) }, None).await.unwrap();
-        }).await.expect("an old OOM chain must unwind instead of surviving recovery");
+        })
+        .await
+        .expect("an old OOM chain must unwind instead of surviving recovery");
     }
 
     #[tokio::test]
     async fn test_cancelling_retry_runner_before_oom_releases_executor() {
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
         let (task, _) = mock_runnable([]);
-        let run_ctx = crate::runner::common::mock_run_ctx::build()
-            .with_id(0).with_device_idx(1).with_max_other_parallel(0).with_branch(1).finish();
+        let run_ctx = crate::runner::common::mock_run_ctx::build().with_id(0).with_device_idx(1).with_max_other_parallel(0).with_branch(1).finish();
         let started = Arc::new(tokio::sync::Notify::new());
         let release = Arc::new(tokio::sync::Notify::new());
         let adjusters: Vec<Adjusters<NoInputAdjuster, NoStageAdjuster, NoRunCtxAdjuster>> = Vec::new();
         // Exercise the actual retry runner's ownership, rather than creating a
         // scope in the test: the first error has not reached the OOM handler yet.
-        let mut run = Box::pin(super::run_with_runner(
-            &adjusters, Arc::new(task), Arc::new(()), run_ctx, NoContexts,
-            {
+        let mut run = Box::pin(super::run_with_runner(&adjusters, Arc::new(task), Arc::new(()), run_ctx, NoContexts, {
+            let started = Arc::clone(&started);
+            let release = Arc::clone(&release);
+            move |_, _, _: Option<()>, device_idx, _, retry| {
                 let started = Arc::clone(&started);
                 let release = Arc::clone(&release);
-                move |_, _, _: Option<()>, device_idx, _, retry| {
-                    let started = Arc::clone(&started);
-                    let release = Arc::clone(&release);
-                    async move {
-                        super::oom_executor(device_idx).submit(0, async move {
-                            started.notify_one();
-                            release.notified().await;
-                            Err::<TestOutput, _>(ThoError::oom())
-                        }, retry).await
-                    }
+                async move {
+                    super::oom_executor(device_idx)
+                        .submit(
+                            0,
+                            async move {
+                                started.notify_one();
+                                release.notified().await;
+                                Err::<TestOutput, _>(ThoError::oom())
+                            },
+                            retry,
+                        )
+                        .await
                 }
-            },
-        ));
+            }
+        }));
         assert!(futures::poll!(run.as_mut()).is_pending());
         started.notified().await;
         drop(run);
@@ -1944,7 +1808,11 @@ mod tests {
         let (adjuster, adjust_calls) = mock_context_adjuster(1);
         let handler = OOMHandler::<NoInputAdjuster, NoStageAdjuster, _, ()>::new(vec![Adjusters::RunContext(run_ctx_adjuster(adjuster))], None);
         let ctx = crate::runner::common::mock_run_ctx::build().with_id(0).with_device_idx(1).with_max_other_parallel(1).with_branch(1).finish();
-        let error = handler.run(&Arc::new(task), Arc::new(BorrowOnlyInput::new(TestInput::new(1))), ctx, WithRunCtxContext::new(super::MockRunCtxContext::new())).await.unwrap_err().context("motif training");
+        let error = handler
+            .run(&Arc::new(task), Arc::new(BorrowOnlyInput::new(TestInput::new(1))), ctx, WithRunCtxContext::new(super::MockRunCtxContext::new()))
+            .await
+            .unwrap_err()
+            .context("motif training");
         assert_eq!(error.data_error_kind(), Some(thoosa_shared::DataErrorKind::OOMHandlingFailed));
         assert!(!error.is_retryable_oom());
         assert_eq!(task_calls.load(Ordering::SeqCst), 2);
@@ -1972,24 +1840,13 @@ mod tests {
     async fn test_no_input_adjuster_accepts_borrow_ref_only_input() {
         let (task, task_calls) = mock_runnable([Ok(TestOutput::new(12.))]);
         let oom_handler = OOMHandler::<NoInputAdjuster, NoStageAdjuster, NoRunCtxAdjuster, ()>::new(vec![], None);
-        let ctx_mock = crate::runner::common::mock_run_ctx::build()
-            .with_device_idx(0)
-            .finish();
+        let ctx_mock = crate::runner::common::mock_run_ctx::build().with_device_idx(0).finish();
 
-        let out: TestOutput = oom_handler
-            .run(
-                &Arc::new(task),
-                Arc::new(BorrowOnlyInput::new(TestInput::new(1))),
-                ctx_mock,
-                NoContexts,
-            )
-            .await
-            .unwrap();
+        let out: TestOutput = oom_handler.run(&Arc::new(task), Arc::new(BorrowOnlyInput::new(TestInput::new(1))), ctx_mock, NoContexts).await.unwrap();
 
         assert_eq!(12., out.v.0);
         assert_eq!(1, task_calls.load(Ordering::SeqCst));
     }
-
 
     #[tokio::test]
     async fn test_input_task_context_once() {
@@ -2016,27 +1873,15 @@ mod tests {
         ]);
 
         let (adjusted_task, adjusted_calls) = mock_runnable([
-            Err(ThoError::oom()), //task adjuster
-            Ok(TestOutput::new(111.)),                    //ctx adjuster
+            Err(ThoError::oom()),      //task adjuster
+            Ok(TestOutput::new(111.)), //ctx adjuster
         ]);
 
         let (task_adj, task_adj_calls) = mock_task_adjuster([adjusted_task]);
 
-        let ctx_mock = crate::runner::common::mock_run_ctx::build()
-            .with_id(0)
-            .with_device_idx(1)
-            .with_max_other_parallel(1)
-            .with_branch(4)
-            .finish();
+        let ctx_mock = crate::runner::common::mock_run_ctx::build().with_id(0).with_device_idx(1).with_max_other_parallel(1).with_branch(4).finish();
 
-        let oom_handler = OOMHandler::new(
-            vec![
-                Adjusters::Input(input_adjuster(input_adj)),
-                Adjusters::Stage(task_adjuster(task_adj)),
-                Adjusters::RunContext(run_ctx_adjuster(ctx_adj)),
-            ],
-            None,
-        );
+        let oom_handler = OOMHandler::new(vec![Adjusters::Input(input_adjuster(input_adj)), Adjusters::Stage(task_adjuster(task_adj)), Adjusters::RunContext(run_ctx_adjuster(ctx_adj))], None);
 
         let out: TestOutput = oom_handler
             .run(
@@ -2044,11 +1889,7 @@ mod tests {
                 Arc::new(DevicesWrap::wrap_cpu(TestInput::new(100))),
                 ctx_mock,
                 Contexts::new(
-                    super::mock_input_context::build()
-                        .with_partial_output(TestOutput::new(111.))
-                        .with_all_done(&[true])
-                        .with_build_final_output(TestOutput::new(111.))
-                        .finish(),
+                    super::mock_input_context::build().with_partial_output(TestOutput::new(111.)).with_all_done(&[true]).with_build_final_output(TestOutput::new(111.)).finish(),
                     super::MockRunnableContext::new(),
                     super::MockRunCtxContext::new(),
                 ),
@@ -2077,22 +1918,9 @@ mod tests {
         let adjusters: Vec<Adjusters<NoInputAdjuster, _, NoRunCtxAdjuster>> = vec![Adjusters::Stage(task_adjuster(task_adj))];
         let oom_handler: OOMHandler<'_, 'static, _, _, _, RangeSelector> = OOMHandler::new(adjusters, None);
 
-        let ctx_mock = crate::runner::common::mock_run_ctx::build()
-            .with_id(0)
-            .with_device_idx(1)
-            .with_max_other_parallel(1)
-            .with_branch(4)
-            .finish();
+        let ctx_mock = crate::runner::common::mock_run_ctx::build().with_id(0).with_device_idx(1).with_max_other_parallel(1).with_branch(4).finish();
 
-        let out: TestOutput = oom_handler
-            .run(
-                &Arc::new(init_task),
-                Arc::new(DevicesWrap::wrap_cpu(TestInput::new(1))),
-                ctx_mock,
-                WithRunnableContext::new(super::MockRunnableContext::new()),
-            )
-            .await
-            .unwrap();
+        let out: TestOutput = oom_handler.run(&Arc::new(init_task), Arc::new(DevicesWrap::wrap_cpu(TestInput::new(1))), ctx_mock, WithRunnableContext::new(super::MockRunnableContext::new())).await.unwrap();
         assert_eq!(10., out.v.0);
         assert_eq!(1, task_adj_calls.load(Ordering::SeqCst));
         assert_eq!(1, init_calls.load(Ordering::SeqCst));
@@ -2104,32 +1932,18 @@ mod tests {
         GlobalCtx::init_devices(2).unwrap();
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
-        let (task, task_calls) = mock_runnable([
-            Err(ThoError::oom()),
-            Ok(TestOutput::new(10.)),
-        ]);
+        let (task, task_calls) = mock_runnable([Err(ThoError::oom()), Ok(TestOutput::new(10.))]);
         let (input_adj, input_calls) = mock_input_adjuster([RangeSelector([0]..[1])]);
         let adjusters: Vec<Adjusters<_, NoStageAdjuster, NoRunCtxAdjuster>> = vec![Adjusters::Input(input_adjuster(input_adj))];
         let oom_handler = OOMHandler::new(adjusters, None);
-        let ctx_mock = crate::runner::common::mock_run_ctx::build()
-            .with_id(0)
-            .with_device_idx(1)
-            .with_max_other_parallel(1)
-            .with_branch(4)
-            .finish();
+        let ctx_mock = crate::runner::common::mock_run_ctx::build().with_id(0).with_device_idx(1).with_max_other_parallel(1).with_branch(4).finish();
 
         let out = oom_handler
             .run(
                 &Arc::new(task),
                 Arc::new(DevicesWrap::wrap_cpu(TestInput::new(1))),
                 ctx_mock,
-                WithInputContext::new(
-                    super::mock_input_context::build()
-                        .with_partial_output(TestOutput::new(10.))
-                        .with_all_done(&[true])
-                        .with_build_final_output(TestOutput::new(10.))
-                        .finish(),
-                ),
+                WithInputContext::new(super::mock_input_context::build().with_partial_output(TestOutput::new(10.)).with_all_done(&[true]).with_build_final_output(TestOutput::new(10.)).finish()),
             )
             .await
             .unwrap();
@@ -2143,31 +1957,15 @@ mod tests {
         GlobalCtx::init_devices(2).unwrap();
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
-        let (task, task_calls) = mock_runnable([
-            Err(ThoError::oom()),
-            Ok(TestOutput::new(10.)),
-        ]);
+        let (task, task_calls) = mock_runnable([Err(ThoError::oom()), Ok(TestOutput::new(10.))]);
         let (ctx_adj, ctx_adj_calls) = mock_context_adjuster(1);
 
         let adjusters: Vec<Adjusters<NoInputAdjuster, NoStageAdjuster, _>> = vec![Adjusters::RunContext(run_ctx_adjuster(ctx_adj))];
         let oom_handler: OOMHandler<'_, 'static, _, _, _, RangeSelector> = OOMHandler::new(adjusters, None);
 
-        let ctx_mock = crate::runner::common::mock_run_ctx::build()
-            .with_id(0)
-            .with_device_idx(1)
-            .with_max_other_parallel(1)
-            .with_branch(1)
-            .finish();
+        let ctx_mock = crate::runner::common::mock_run_ctx::build().with_id(0).with_device_idx(1).with_max_other_parallel(1).with_branch(1).finish();
 
-        let out = oom_handler
-            .run(
-                &Arc::new(task),
-                Arc::new(DevicesWrap::wrap_cpu(TestInput::new(1))),
-                ctx_mock,
-                WithRunCtxContext::new(super::MockRunCtxContext::new()),
-            )
-            .await
-            .unwrap();
+        let out = oom_handler.run(&Arc::new(task), Arc::new(DevicesWrap::wrap_cpu(TestInput::new(1))), ctx_mock, WithRunCtxContext::new(super::MockRunCtxContext::new())).await.unwrap();
         assert_eq!(10., out.v.0);
         assert_eq!(1, ctx_adj_calls.load(Ordering::SeqCst));
         assert_eq!(2, task_calls.load(Ordering::SeqCst));
@@ -2178,14 +1976,12 @@ mod tests {
         GlobalCtx::init_devices(2).unwrap();
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
-        let (init_task1, init_calls1) =
-            mock_runnable([Err(ThoError::oom())]);
+        let (init_task1, init_calls1) = mock_runnable([Err(ThoError::oom())]);
         let (final_task1, final_calls1) = mock_runnable([Ok(TestOutput::new(5.))]);
 
         let (task_adj1, task_adj_calls1) = mock_task_adjuster([final_task1]);
 
-        let (init_task2, init_calls2) =
-            mock_runnable([Err(ThoError::oom())]);
+        let (init_task2, init_calls2) = mock_runnable([Err(ThoError::oom())]);
         let (final_task2, final_calls2) = mock_runnable([Ok(TestOutput::new(7.))]);
 
         let (task_adj2, task_adj_calls2) = mock_task_adjuster([final_task2]);
@@ -2193,37 +1989,17 @@ mod tests {
         let init_task1_arc = Arc::new(init_task1);
         let input_arc = Arc::new(DevicesWrap::wrap_cpu(TestInput::new(1)));
 
-        let ctx_mock_1 = crate::runner::common::mock_run_ctx::build()
-            .with_id(0)
-            .with_device_idx(1)
-            .with_max_other_parallel(1)
-            .with_branch(4)
-            .finish();
-        let ctx_mock_2 = crate::runner::common::mock_run_ctx::build()
-            .with_id(0)
-            .with_device_idx(1)
-            .with_max_other_parallel(1)
-            .with_branch(4)
-            .finish();
+        let ctx_mock_1 = crate::runner::common::mock_run_ctx::build().with_id(0).with_device_idx(1).with_max_other_parallel(1).with_branch(4).finish();
+        let ctx_mock_2 = crate::runner::common::mock_run_ctx::build().with_id(0).with_device_idx(1).with_max_other_parallel(1).with_branch(4).finish();
 
         let adjusters1: Vec<Adjusters<NoInputAdjuster, _, NoRunCtxAdjuster>> = vec![Adjusters::Stage(task_adjuster(task_adj1))];
         let oom1: OOMHandler<'_, 'static, _, _, _, RangeSelector> = OOMHandler::new(adjusters1, None);
-        let h1 = oom1.run(
-            &init_task1_arc,
-            Arc::clone(&input_arc),
-            ctx_mock_1,
-            WithRunnableContext::new(super::MockRunnableContext::new()),
-        );
+        let h1 = oom1.run(&init_task1_arc, Arc::clone(&input_arc), ctx_mock_1, WithRunnableContext::new(super::MockRunnableContext::new()));
         let init_task2_arc = Arc::new(init_task2);
 
         let adjusters2: Vec<Adjusters<NoInputAdjuster, _, NoRunCtxAdjuster>> = vec![Adjusters::Stage(task_adjuster(task_adj2))];
         let oom2: OOMHandler<'_, 'static, _, _, _, RangeSelector> = OOMHandler::new(adjusters2, None);
-        let h2 = oom2.run(
-            &init_task2_arc,
-            Arc::clone(&input_arc),
-            ctx_mock_2,
-            WithRunnableContext::new(super::MockRunnableContext::new()),
-        );
+        let h2 = oom2.run(&init_task2_arc, Arc::clone(&input_arc), ctx_mock_2, WithRunnableContext::new(super::MockRunnableContext::new()));
         let r1: Result<TestOutput, ThoError> = h1.await;
         let r2: Result<TestOutput, ThoError> = h2.await;
         assert_eq!(5., r1.unwrap().v.0);

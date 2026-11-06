@@ -1,26 +1,19 @@
 use crate::LOG_INIT;
-use crate::perf_logging::{
-    init_log_tracer, perf_log_level, perf_output_filter, set_perf_log_level, PerfLayer,
-    SimplelogLikeEvent,
-};
-use log::{trace, LevelFilter};
+use crate::perf_logging::{PerfLayer, SimplelogLikeEvent, init_log_tracer, perf_log_level, perf_output_filter, set_perf_log_level};
+use log::{LevelFilter, trace};
 use num_traits::{Num, Signed, ToPrimitive};
-use std::{env, fs, io};
+use rand::RngExt;
 use std::fmt::Debug;
 use std::fs::File;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::atomic::Ordering;
+use std::{env, fs, io};
+use thoosa_shared::perf_logging::set_panic_hook;
+use time_series_generator::{generate_sine_wave, generate_triangle_wave};
 use tracing::Level;
 use tracing_subscriber::filter::{DynFilterFn, FilterFn};
-use tracing_subscriber::{
-    fmt,
-    layer::SubscriberExt,
-    Layer,
-};
-use time_series_generator::{generate_sine_wave, generate_triangle_wave};
-use rand::RngExt;
-use thoosa_shared::perf_logging::set_panic_hook;
+use tracing_subscriber::{Layer, fmt, layer::SubscriberExt};
 
 fn level_filter_allows(filter: LevelFilter, level: &Level) -> bool {
     if filter == LevelFilter::Off {
@@ -71,17 +64,13 @@ pub fn init_test_logging() {
     let timer = tracing_subscriber::fmt::time::ChronoLocal::new("%Y-%m-%d %H:%M:%S%.3f".to_string());
     let include_log_fields = false;
 
-    let stdout_layer = fmt::layer()
-        .with_ansi(true)
-        .with_writer(std::io::stdout)
-        .event_format(SimplelogLikeEvent::new(timer.clone(), true, include_log_fields))
-        .with_filter(DynFilterFn::new(|meta, _| {
-            let is_log_record = meta.fields().field("log.target").is_some();
-            if *meta.level() == Level::TRACE && !is_log_record {
-                return false;
-            }
-            level_filter_allows(log::max_level(), meta.level())
-        }));
+    let stdout_layer = fmt::layer().with_ansi(true).with_writer(std::io::stdout).event_format(SimplelogLikeEvent::new(timer.clone(), true, include_log_fields)).with_filter(DynFilterFn::new(|meta, _| {
+        let is_log_record = meta.fields().field("log.target").is_some();
+        if *meta.level() == Level::TRACE && !is_log_record {
+            return false;
+        }
+        level_filter_allows(log::max_level(), meta.level())
+    }));
 
     let perf_layer = fmt::layer()
         .with_ansi(true)
@@ -90,10 +79,7 @@ pub fn init_test_logging() {
         .event_format(SimplelogLikeEvent::new(timer, true, include_log_fields))
         .with_filter(FilterFn::new(perf_output_filter));
 
-    let subscriber = tracing_subscriber::registry()
-        .with(stdout_layer)
-        .with(perf_layer)
-        .with(PerfLayer::new());
+    let subscriber = tracing_subscriber::registry().with(stdout_layer).with(perf_layer).with(PerfLayer::new());
 
     let _ = tracing::subscriber::set_global_default(subscriber);
 
@@ -104,7 +90,6 @@ pub fn init_test_logging() {
         env::set_var("POLARS_FMT_MAX_ROWS", "100");
     }
 }
-
 
 /// Initialize a perf-only tracing subscriber that writes to **stdout**.
 /// Intended for tests (so you can `cargo test -- --nocapture`).
@@ -129,7 +114,6 @@ pub fn maybe_init_perf_tracing_stdout(perf_filter: &str) -> bool {
     true
 }
 
-
 pub fn are_close<T>(a: &[T], b: &[T], p: T) -> bool
 where
     T: Num + Signed + PartialOrd + Copy + ToPrimitive + Debug,
@@ -141,11 +125,7 @@ where
             trace!("0. x={x:?} y={y:?}");
 
             false
-        } else if let (Some(xf), Some(yf), Some(pf)) = (
-            ToPrimitive::to_f64(&x),
-            ToPrimitive::to_f64(&y),
-            ToPrimitive::to_f64(&p),
-        ) {
+        } else if let (Some(xf), Some(yf), Some(pf)) = (ToPrimitive::to_f64(&x), ToPrimitive::to_f64(&y), ToPrimitive::to_f64(&p)) {
             let diff = (xf - yf).abs() / ((xf.abs() + yf.abs()) / 2.);
             trace!("1. x={x:?} y={y:?} diff={diff:?}");
             diff > pf
@@ -168,17 +148,9 @@ mod tests {
 
         assert!(are_close(&vec![1, 2, 3, 4, 5], &vec![2, 3, 4, 5, 6], 1));
 
-        assert!(are_close(
-            &vec![1., 2., 3., 4., 5.],
-            &vec![2., 3., 4., 5., 6.],
-            0.7
-        ));
+        assert!(are_close(&vec![1., 2., 3., 4., 5.], &vec![2., 3., 4., 5., 6.], 0.7));
 
-        assert!(!are_close(
-            &vec![1., 2., 3., 4., 5.],
-            &vec![2., 3., 4., 5., 6.],
-            0.1
-        ));
+        assert!(!are_close(&vec![1., 2., 3., 4., 5.], &vec![2., 3., 4., 5., 6.], 0.1));
 
         assert!(!are_close(&vec![1, 2, 3, 4, 5], &vec![4, 4, 4, 4, 4], 1));
     }
@@ -208,20 +180,13 @@ pub enum TestSignalKind {
 
 pub fn gen_signal(motif_len: usize, motif_kind: &TestSignalKind) -> Vec<f32> {
     match motif_kind {
-        TestSignalKind::Triangle => generate_triangle_wave(motif_len)
-            .into_iter()
-            .map(|v| v as f32)
-            .collect(),
+        TestSignalKind::Triangle => generate_triangle_wave(motif_len).into_iter().map(|v| v as f32).collect(),
 
         TestSignalKind::Sin => generate_sine_wave::<f32>(motif_len),
 
-        TestSignalKind::Pulse => {
-            crate::pulse_v(motif_len as f32 / 2., motif_len as f32 / 4., motif_len as i64, 10.)
-        }
+        TestSignalKind::Pulse => crate::pulse_v(motif_len as f32 / 2., motif_len as f32 / 4., motif_len as i64, 10.),
 
-        TestSignalKind::HarmonicStack => {
-            harmonic_stack(motif_len, 8.0, &[1.0, 0.55, 0.30, 0.18])
-        }
+        TestSignalKind::HarmonicStack => harmonic_stack(motif_len, 8.0, &[1.0, 0.55, 0.30, 0.18]),
 
         TestSignalKind::HarmonicSyllable => {
             let mut x = harmonic_stack(motif_len, 9.0, &[1.0, 0.60, 0.35, 0.20]);
@@ -281,8 +246,7 @@ fn chirp(length: usize, f_start_cycles: f32, f_end_cycles: f32) -> Vec<f32> {
         // Linear frequency sweep.
         // Phase is integral of frequency:
         // phase(t) = 2π * length-normalized-cycles * (f0*t + 0.5*(f1-f0)*t²)
-        let phase = std::f32::consts::TAU
-            * (f_start_cycles * t + 0.5 * (f_end_cycles - f_start_cycles) * t * t);
+        let phase = std::f32::consts::TAU * (f_start_cycles * t + 0.5 * (f_end_cycles - f_start_cycles) * t * t);
 
         out[i] = phase.sin();
     }
@@ -305,11 +269,7 @@ fn trill(length: usize, syllables: usize, f0_cycles_per_syllable: f32) -> Vec<f3
 
     for s in 0..syllables {
         let from = s * syll_len;
-        let to = if s + 1 == syllables {
-            length
-        } else {
-            ((s + 1) * syll_len).min(length)
-        };
+        let to = if s + 1 == syllables { length } else { ((s + 1) * syll_len).min(length) };
 
         let mut syll = harmonic_stack(to - from, f0_cycles_per_syllable, &[1.0, 0.5, 0.25]);
         apply_syllable_envelope(&mut syll);
@@ -340,11 +300,7 @@ fn apply_syllable_envelope(x: &mut [f32]) {
 }
 
 fn normalize_peak(x: &mut [f32], peak: f32) {
-    let max_abs = x
-        .iter()
-        .copied()
-        .map(f32::abs)
-        .fold(0.0f32, f32::max);
+    let max_abs = x.iter().copied().map(f32::abs).fold(0.0f32, f32::max);
 
     if max_abs > 1e-12 {
         let scale = peak / max_abs;
@@ -360,50 +316,24 @@ pub fn random_v(n: u32, amplitude: f32, max_slope: f32) -> Vec<f32> {
     let mut current_value = 0.0;
     let mut prev_value = 0.0;
 
-    let rnd_vals_0 = (0..n)
-        .flat_map(move |_i| {
-            std::iter::repeat(rand::rng().random_range(-max_slope..max_slope)).take(1)
-        })
-        .collect::<Vec<f32>>();
-    let rnd_vals_1 = (0..n / 10)
-        .flat_map(move |_i| {
-            std::iter::repeat(rand::rng().random_range(-max_slope..max_slope)).take(10)
-        })
-        .collect::<Vec<f32>>();
-    let rnd_vals_2 = (0..n / 60)
-        .flat_map(move |_i| {
-            std::iter::repeat(rand::rng().random_range(-max_slope..max_slope)).take(100)
-        })
-        .collect::<Vec<f32>>();
-    let rnd_vals_3 = (0..n / 120)
-        .flat_map(move |_i| {
-            std::iter::repeat(rand::rng().random_range(-max_slope..max_slope)).take(300)
-        })
-        .collect::<Vec<f32>>();
+    let rnd_vals_0 = (0..n).flat_map(move |_i| std::iter::repeat(rand::rng().random_range(-max_slope..max_slope)).take(1)).collect::<Vec<f32>>();
+    let rnd_vals_1 = (0..n / 10).flat_map(move |_i| std::iter::repeat(rand::rng().random_range(-max_slope..max_slope)).take(10)).collect::<Vec<f32>>();
+    let rnd_vals_2 = (0..n / 60).flat_map(move |_i| std::iter::repeat(rand::rng().random_range(-max_slope..max_slope)).take(100)).collect::<Vec<f32>>();
+    let rnd_vals_3 = (0..n / 120).flat_map(move |_i| std::iter::repeat(rand::rng().random_range(-max_slope..max_slope)).take(300)).collect::<Vec<f32>>();
 
-    rnd_vals_0
-        .into_iter()
-        .zip(
-            rnd_vals_1
-                .into_iter()
-                .zip(rnd_vals_2.into_iter().zip(rnd_vals_3.into_iter())),
-        )
-        .for_each(|(r_0, (r_1, (r_2, r_3)))| {
-            // debug!("random_v: r_0={:?}, r_1={:?}, r_2={:?}, r_3={:?}", r_0, r_1, r_2, r_3);
+    rnd_vals_0.into_iter().zip(rnd_vals_1.into_iter().zip(rnd_vals_2.into_iter().zip(rnd_vals_3.into_iter()))).for_each(|(r_0, (r_1, (r_2, r_3)))| {
+        // debug!("random_v: r_0={:?}, r_1={:?}, r_2={:?}, r_3={:?}", r_0, r_1, r_2, r_3);
 
-            current_value = prev_value + 10. * r_0 + r_1 + r_2 + r_3;
-            signal.push(current_value * amplitude);
-            prev_value = current_value;
-        });
+        current_value = prev_value + 10. * r_0 + r_1 + r_2 + r_3;
+        signal.push(current_value * amplitude);
+        prev_value = current_value;
+    });
 
     signal
 }
 
-
-
-pub  fn flag_path(flag: &str) -> PathBuf {
+pub fn flag_path(flag: &str) -> PathBuf {
     std::env::temp_dir().join(flag)
-
 }
 
 /// Create the flag file.
@@ -418,7 +348,7 @@ pub fn is_flag_set(flag: &str) -> io::Result<bool> {
 }
 
 /// Delete the flag file, if it exists.
-pub  fn clear_flag(flag: &str) -> io::Result<()> {
+pub fn clear_flag(flag: &str) -> io::Result<()> {
     match fs::remove_file(flag_path(flag)) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),

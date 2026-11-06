@@ -1,19 +1,13 @@
 use anyhow::Context as _;
-use interprocess::local_socket::{
-    tokio::{prelude::*, Stream},
-    GenericFilePath, GenericNamespaced, Name, ToFsName, ToNsName,
-};
 use chrono::{NaiveDate, NaiveDateTime};
-use std::collections::{HashMap, HashSet};
-use std::io;
-use std::io::IsTerminal;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use clap::Parser;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode};
+use interprocess::local_socket::{
+    GenericFilePath, GenericNamespaced, Name, ToFsName, ToNsName,
+    tokio::{Stream, prelude::*},
+};
 use log::{debug, info, warn};
 use ratatui::Frame;
 use ratatui::Terminal;
@@ -22,18 +16,24 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
-use thoosa_shared::futures_limits::{COPY_D2H, COPY_H2D, ENTRY, FutureLimitProgressEntry};
-use thoosa_shared::collect_futures_eta::{CollectEtaProgressInvocation, CollectEtaProgressState, COLLECT_ETA_PROGRESS_SOCKET_ID};
-use thoosa_shared::device_stats::ThoDeviceStats;
-use thoosa_shared::val::Val;
+use std::collections::{HashMap, HashSet};
+use std::io;
+use std::io::IsTerminal;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use thoosa_motifs::motifs_store::MotifsStore;
+use thoosa_shared::collect_futures_eta::{COLLECT_ETA_PROGRESS_SOCKET_ID, CollectEtaProgressInvocation, CollectEtaProgressState};
+use thoosa_shared::device_stats::ThoDeviceStats;
+use thoosa_shared::futures_limits::{COPY_D2H, COPY_H2D, ENTRY, FutureLimitProgressEntry};
+use thoosa_shared::tracked_await::t;
+use thoosa_shared::val::Val;
 use thoosa_store::{RunConfigEntry, RunConfigFilter, RunMotifEntry, SqlStore};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tracing::Instrument;
-use thoosa_shared::tracked_await::t;
 
 const SEARCH_TYPE_NONE_LABEL: &str = "no value";
 const RUN_ON_DATE_FORMAT: &str = "%Y-%m-%d";
@@ -51,16 +51,9 @@ struct RunTreeNode {
 
 #[derive(Clone, Debug, PartialEq)]
 enum VisibleRunConfigRowKind {
-    RunOnDate {
-        run_on_date: String,
-    },
-    RunConfig {
-        run_config_id: u32,
-    },
-    Motif {
-        run_config_id: u32,
-        motif: RunMotifEntry,
-    },
+    RunOnDate { run_on_date: String },
+    RunConfig { run_config_id: u32 },
+    Motif { run_config_id: u32, motif: RunMotifEntry },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -140,11 +133,7 @@ struct RunConfigSearch {
 
 impl RunConfigSearch {
     fn is_empty(&self) -> bool {
-        self.id.trim().is_empty()
-            && self.run_config_type.is_none()
-            && self.descr.trim().is_empty()
-            && self.run_on_from.trim().is_empty()
-            && self.run_on_to.trim().is_empty()
+        self.id.trim().is_empty() && self.run_config_type.is_none() && self.descr.trim().is_empty() && self.run_on_from.trim().is_empty() && self.run_on_to.trim().is_empty()
     }
 
     fn normalized(&self) -> anyhow::Result<NormalizedRunConfigSearch> {
@@ -174,27 +163,11 @@ impl RunConfigSearch {
         }
 
         [
-            if self.id.trim().is_empty() {
-                None
-            } else {
-                Some(format!("id={}", self.id.trim()))
-            },
+            if self.id.trim().is_empty() { None } else { Some(format!("id={}", self.id.trim())) },
             self.run_config_type.as_ref().map(|value| format!("type={value}")),
-            if self.descr.trim().is_empty() {
-                None
-            } else {
-                Some(format!("descr~{}", self.descr.trim()))
-            },
-            if self.run_on_from.trim().is_empty() {
-                None
-            } else {
-                Some(format!("from={}", self.run_on_from.trim()))
-            },
-            if self.run_on_to.trim().is_empty() {
-                None
-            } else {
-                Some(format!("to={}", self.run_on_to.trim()))
-            },
+            if self.descr.trim().is_empty() { None } else { Some(format!("descr~{}", self.descr.trim())) },
+            if self.run_on_from.trim().is_empty() { None } else { Some(format!("from={}", self.run_on_from.trim())) },
+            if self.run_on_to.trim().is_empty() { None } else { Some(format!("to={}", self.run_on_to.trim())) },
         ]
         .into_iter()
         .flatten()
@@ -447,8 +420,7 @@ impl App {
     }
 
     fn selected_run_entry(&self) -> Option<&RunConfigEntry> {
-        self.selected_run_config_id()
-            .and_then(|run_config_id| self.run_config_tree.get(&run_config_id).map(|node| &node.entry))
+        self.selected_run_config_id().and_then(|run_config_id| self.run_config_tree.get(&run_config_id).map(|node| &node.entry))
     }
 
     fn selected_tree_row(&self) -> Option<&VisibleRunConfigRow> {
@@ -476,15 +448,11 @@ impl App {
     }
 
     fn selected_run_supports_motifs(&self) -> bool {
-        self.selected_run_entry()
-            .map(|entry| run_config_type_supports_motifs(entry.run_config_type.as_str()))
-            .unwrap_or(false)
+        self.selected_run_entry().map(|entry| run_config_type_supports_motifs(entry.run_config_type.as_str())).unwrap_or(false)
     }
 
     fn selected_run_supports_inline_motif_rows(&self) -> bool {
-        self.selected_run_entry()
-            .map(|entry| run_config_type_supports_inline_motif_rows(entry.run_config_type.as_str()))
-            .unwrap_or(false)
+        self.selected_run_entry().map(|entry| run_config_type_supports_inline_motif_rows(entry.run_config_type.as_str())).unwrap_or(false)
     }
 
     fn selected_popup_type(&self) -> Option<String> {
@@ -503,18 +471,11 @@ impl App {
     }
 
     fn selected_search_popup_type(&self) -> Option<String> {
-        if self.search_popup.type_selected_idx == 0 {
-            None
-        } else {
-            self.run_config_types.get(self.search_popup.type_selected_idx - 1).cloned()
-        }
+        if self.search_popup.type_selected_idx == 0 { None } else { self.run_config_types.get(self.search_popup.type_selected_idx - 1).cloned() }
     }
 
     fn selected_view_mode(&self) -> ViewMode {
-        ViewMode::ALL
-            .get(self.view_popup_selected_idx)
-            .copied()
-            .unwrap_or(ViewMode::RunConfigs)
+        ViewMode::ALL.get(self.view_popup_selected_idx).copied().unwrap_or(ViewMode::RunConfigs)
     }
 
     fn sort_order_label(&self) -> &'static str {
@@ -525,11 +486,7 @@ impl App {
     }
 
     fn default_run_configs_area(&self) -> SelectedArea {
-        if self.prefer_right_motifs && self.has_selected_run_motifs() {
-            SelectedArea::RightMotifs
-        } else {
-            SelectedArea::LeftRunConfigs
-        }
+        if self.prefer_right_motifs && self.has_selected_run_motifs() { SelectedArea::RightMotifs } else { SelectedArea::LeftRunConfigs }
     }
 
     fn run_on_date_expanded(&self, run_on_date: &str) -> bool {
@@ -586,11 +543,7 @@ impl App {
     }
 
     fn panel_search_pattern(&self, target: PanelSearchTarget) -> Option<&str> {
-        if self.panel_search.target == Some(target) && !self.panel_search.pattern.is_empty() {
-            Some(self.panel_search.pattern.as_str())
-        } else {
-            None
-        }
+        if self.panel_search.target == Some(target) && !self.panel_search.pattern.is_empty() { Some(self.panel_search.pattern.as_str()) } else { None }
     }
 
     fn panel_search_lines(&self, target: PanelSearchTarget) -> Vec<String> {
@@ -611,11 +564,7 @@ impl App {
         self.panel_search_lines(target)
             .into_iter()
             .enumerate()
-            .flat_map(|(line_idx, line)| {
-                find_case_insensitive_matches(line.as_str(), pattern)
-                    .into_iter()
-                    .map(move |(start, len)| PanelSearchMatch { line_idx, start, len })
-            })
+            .flat_map(|(line_idx, line)| find_case_insensitive_matches(line.as_str(), pattern).into_iter().map(move |(start, len)| PanelSearchMatch { line_idx, start, len }))
             .collect::<Vec<PanelSearchMatch>>()
     }
 
@@ -705,9 +654,7 @@ impl App {
             return;
         }
 
-        self.selected_motif_idx = keep_motif_id
-            .and_then(|motif_id| self.selected_run_motifs.iter().position(|motif| motif.motif_id == motif_id))
-            .unwrap_or(0);
+        self.selected_motif_idx = keep_motif_id.and_then(|motif_id| self.selected_run_motifs.iter().position(|motif| motif.motif_id == motif_id)).unwrap_or(0);
         self.ensure_motif_selection_visible();
     }
 
@@ -858,16 +805,8 @@ impl App {
         }
 
         let page_ids = page.iter().map(|entry| entry.id).collect::<Vec<u32>>();
-        let run_config_ids_with_outputs = if page_ids.is_empty() {
-            vec![]
-        } else {
-            t!(self.store.list_run_config_ids_with_outputs(&page_ids)).await?
-        };
-        let input_pairs = if page_ids.is_empty() {
-            vec![]
-        } else {
-            t!(self.store.list_input_run_config_ids(&page_ids)).await?
-        };
+        let run_config_ids_with_outputs = if page_ids.is_empty() { vec![] } else { t!(self.store.list_run_config_ids_with_outputs(&page_ids)).await? };
+        let input_pairs = if page_ids.is_empty() { vec![] } else { t!(self.store.list_input_run_config_ids(&page_ids)).await? };
 
         self.paged_run_config_offset += page.len();
         self.has_more_paged_run_configs = page.len() == limit;
@@ -892,11 +831,7 @@ impl App {
 
     async fn ensure_run_config_ids_loaded(&mut self, run_config_ids: &[u32], keep_run_config_id: Option<u32>) -> anyhow::Result<bool> {
         let existing_ids = self.all_run_configs.iter().map(|entry| entry.id).collect::<HashSet<u32>>();
-        let missing_ids = run_config_ids
-            .iter()
-            .copied()
-            .filter(|run_config_id| !existing_ids.contains(run_config_id))
-            .collect::<Vec<u32>>();
+        let missing_ids = run_config_ids.iter().copied().filter(|run_config_id| !existing_ids.contains(run_config_id)).collect::<Vec<u32>>();
         if missing_ids.is_empty() {
             return Ok(false);
         }
@@ -931,10 +866,7 @@ impl App {
     }
 
     async fn maybe_load_more_run_configs(&mut self) -> anyhow::Result<bool> {
-        if self.search_filters.is_empty()
-            && self.has_more_paged_run_configs
-            && self.selected_idx + self.main_page_size() >= self.run_configs.len()
-        {
+        if self.search_filters.is_empty() && self.has_more_paged_run_configs && self.selected_idx + self.main_page_size() >= self.run_configs.len() {
             return t!(self.load_next_run_config_page(self.selected_run_config_id())).await;
         }
 
@@ -1243,14 +1175,7 @@ impl App {
     }
 
     fn sync_search_popup_type_selection(&mut self) {
-        self.search_popup.type_selected_idx = self
-            .search_popup
-            .draft
-            .run_config_type
-            .as_ref()
-            .and_then(|selected| self.run_config_types.iter().position(|value| value == selected))
-            .map(|idx| idx + 1)
-            .unwrap_or(0);
+        self.search_popup.type_selected_idx = self.search_popup.draft.run_config_type.as_ref().and_then(|selected| self.run_config_types.iter().position(|value| value == selected)).map(|idx| idx + 1).unwrap_or(0);
     }
 
     async fn refresh_run_config_types(&mut self) -> anyhow::Result<()> {
@@ -1420,22 +1345,9 @@ impl App {
     }
 
     fn rebuild_run_config_tree(&mut self, input_pairs: &[(u32, u32)], outputs_by_run_config_id: &HashMap<u32, Vec<u32>>) {
-        let old_expanded = self
-            .run_config_tree
-            .iter()
-            .map(|(run_config_id, node)| (*run_config_id, node.expanded))
-            .collect::<HashMap<u32, bool>>();
-        let run_on_by_id = self
-            .all_run_configs
-            .iter()
-            .map(|entry| (entry.id, entry.run_on.as_str()))
-            .collect::<HashMap<u32, &str>>();
-        let entries_by_id = self
-            .all_run_configs
-            .iter()
-            .cloned()
-            .map(|entry| (entry.id, entry))
-            .collect::<HashMap<u32, RunConfigEntry>>();
+        let old_expanded = self.run_config_tree.iter().map(|(run_config_id, node)| (*run_config_id, node.expanded)).collect::<HashMap<u32, bool>>();
+        let run_on_by_id = self.all_run_configs.iter().map(|entry| (entry.id, entry.run_on.as_str())).collect::<HashMap<u32, &str>>();
+        let entries_by_id = self.all_run_configs.iter().cloned().map(|entry| (entry.id, entry)).collect::<HashMap<u32, RunConfigEntry>>();
         let mut input_map = HashMap::<u32, HashSet<u32>>::new();
         let mut output_map = HashMap::<u32, HashSet<u32>>::new();
 
@@ -1464,9 +1376,7 @@ impl App {
             .map(|(run_config_id, entry)| {
                 let mut input_run_config_ids = input_map.remove(&run_config_id).unwrap_or_default().into_iter().collect::<Vec<u32>>();
                 let mut output_run_config_ids = output_map.remove(&run_config_id).unwrap_or_default().into_iter().collect::<Vec<u32>>();
-                let children_loaded = outputs_by_run_config_id.contains_key(&run_config_id)
-                    || !self.has_more_paged_run_configs
-                    || (output_run_config_ids.is_empty() && !self.known_run_config_ids_with_outputs.contains(&run_config_id));
+                let children_loaded = outputs_by_run_config_id.contains_key(&run_config_id) || !self.has_more_paged_run_configs || (output_run_config_ids.is_empty() && !self.known_run_config_ids_with_outputs.contains(&run_config_id));
                 let default_expanded = !output_run_config_ids.is_empty();
                 sort_run_config_ids(&mut input_run_config_ids, &run_on_by_id, self.run_on_sort_order);
                 sort_run_config_ids(&mut output_run_config_ids, &run_on_by_id, self.run_on_sort_order);
@@ -1484,14 +1394,7 @@ impl App {
             .collect();
     }
 
-    fn run_visible_with_descendants(
-        &self,
-        run_config_id: u32,
-        filter_active: bool,
-        matching_run_config_ids: &HashSet<u32>,
-        memo: &mut HashMap<u32, bool>,
-        path: &mut HashSet<u32>,
-    ) -> bool {
+    fn run_visible_with_descendants(&self, run_config_id: u32, filter_active: bool, matching_run_config_ids: &HashSet<u32>, memo: &mut HashMap<u32, bool>, path: &mut HashSet<u32>) -> bool {
         if let Some(visible) = memo.get(&run_config_id) {
             return *visible;
         }
@@ -1505,32 +1408,15 @@ impl App {
             || self
                 .run_config_tree
                 .get(&run_config_id)
-                .map(|node| {
-                    node.output_run_config_ids.iter().any(|child_run_config_id| {
-                        self.run_visible_with_descendants(*child_run_config_id, filter_active, matching_run_config_ids, memo, path)
-                    })
-                })
+                .map(|node| node.output_run_config_ids.iter().any(|child_run_config_id| self.run_visible_with_descendants(*child_run_config_id, filter_active, matching_run_config_ids, memo, path)))
                 .unwrap_or(false);
         path.remove(&run_config_id);
         memo.insert(run_config_id, visible);
         visible
     }
 
-    fn append_visible_run_rows(
-        &self,
-        run_config_id: u32,
-        depth: usize,
-        filter_active: bool,
-        matching_run_config_ids: &HashSet<u32>,
-        memo: &mut HashMap<u32, bool>,
-        path: &mut HashSet<u32>,
-        mut appended_run_config_ids: Option<&mut HashSet<u32>>,
-        rows: &mut Vec<VisibleRunConfigRow>,
-    ) {
-        let already_appended = appended_run_config_ids
-            .as_ref()
-            .map(|appended_run_config_ids| appended_run_config_ids.contains(&run_config_id))
-            .unwrap_or(false);
+    fn append_visible_run_rows(&self, run_config_id: u32, depth: usize, filter_active: bool, matching_run_config_ids: &HashSet<u32>, memo: &mut HashMap<u32, bool>, path: &mut HashSet<u32>, mut appended_run_config_ids: Option<&mut HashSet<u32>>, rows: &mut Vec<VisibleRunConfigRow>) {
+        let already_appended = appended_run_config_ids.as_ref().map(|appended_run_config_ids| appended_run_config_ids.contains(&run_config_id)).unwrap_or(false);
         if already_appended || !path.insert(run_config_id) {
             return;
         }
@@ -1550,15 +1436,9 @@ impl App {
         } else {
             vec![]
         };
-        let has_inline_motif_rows = run_config_type_supports_inline_motif_rows(node.entry.run_config_type.as_str())
-            && self.run_motifs_cache.get(&run_config_id).map(|motifs| !motifs.is_empty()).unwrap_or(true);
+        let has_inline_motif_rows = run_config_type_supports_inline_motif_rows(node.entry.run_config_type.as_str()) && self.run_motifs_cache.get(&run_config_id).map(|motifs| !motifs.is_empty()).unwrap_or(true);
 
-        rows.push(VisibleRunConfigRow::run_config(
-            run_config_id,
-            depth,
-            !visible_children.is_empty() || !node.children_loaded || has_inline_motif_rows,
-            node.expanded,
-        ));
+        rows.push(VisibleRunConfigRow::run_config(run_config_id, depth, !visible_children.is_empty() || !node.children_loaded || has_inline_motif_rows, node.expanded));
         if let Some(appended_run_config_ids) = appended_run_config_ids.as_mut() {
             appended_run_config_ids.insert(run_config_id);
         }
@@ -1568,16 +1448,7 @@ impl App {
                 rows.push(VisibleRunConfigRow::motif(run_config_id, motif, depth + 1));
             }
             for child_run_config_id in visible_children {
-                self.append_visible_run_rows(
-                    child_run_config_id,
-                    depth + 1,
-                    filter_active,
-                    matching_run_config_ids,
-                    memo,
-                    path,
-                    appended_run_config_ids.as_deref_mut(),
-                    rows,
-                );
+                self.append_visible_run_rows(child_run_config_id, depth + 1, filter_active, matching_run_config_ids, memo, path, appended_run_config_ids.as_deref_mut(), rows);
             }
         }
 
@@ -1630,28 +1501,14 @@ impl App {
     }
 
     fn rebuild_visible_run_configs(&mut self, keep_run_config_id: Option<u32>) {
-        let keep_run_on_date = if keep_run_config_id.is_none() {
-            self.selected_run_on_date().map(|run_on_date| run_on_date.to_string())
-        } else {
-            None
-        };
+        let keep_run_on_date = if keep_run_config_id.is_none() { self.selected_run_on_date().map(|run_on_date| run_on_date.to_string()) } else { None };
         let filter_active = !self.search_filters.is_empty();
-        let run_on_by_id = self
-            .all_run_configs
-            .iter()
-            .map(|entry| (entry.id, entry.run_on.as_str()))
-            .collect::<HashMap<u32, &str>>();
+        let run_on_by_id = self.all_run_configs.iter().map(|entry| (entry.id, entry.run_on.as_str())).collect::<HashMap<u32, &str>>();
         let matching_run_config_ids = if filter_active {
             self.search_filters
                 .normalized()
                 .ok()
-                .map(|active_search| {
-                    self.run_config_tree
-                        .values()
-                        .filter(|node| active_search.matches(&node.entry))
-                        .map(|node| node.entry.id)
-                        .collect::<HashSet<u32>>()
-                })
+                .map(|active_search| self.run_config_tree.values().filter(|node| active_search.matches(&node.entry)).map(|node| node.entry.id).collect::<HashSet<u32>>())
                 .unwrap_or_default()
         } else {
             HashSet::new()
@@ -1661,11 +1518,7 @@ impl App {
             .run_config_tree
             .iter()
             .filter_map(|(run_config_id, node)| {
-                if node
-                    .input_run_config_ids
-                    .iter()
-                    .all(|input_run_config_id| !self.run_config_tree.contains_key(input_run_config_id))
-                {
+                if node.input_run_config_ids.iter().all(|input_run_config_id| !self.run_config_tree.contains_key(input_run_config_id)) {
                     Some(*run_config_id)
                 } else {
                     None
@@ -1679,43 +1532,16 @@ impl App {
         let mut dedup_run_config_ids = filter_active.then(HashSet::new);
         for run_config_id in root_run_config_ids {
             if self.run_visible_with_descendants(run_config_id, filter_active, &matching_run_config_ids, &mut memo, &mut HashSet::new()) {
-                self.append_visible_run_rows(
-                    run_config_id,
-                    0,
-                    filter_active,
-                    &matching_run_config_ids,
-                    &mut memo,
-                    &mut HashSet::new(),
-                    dedup_run_config_ids.as_mut(),
-                    &mut rows,
-                );
+                self.append_visible_run_rows(run_config_id, 0, filter_active, &matching_run_config_ids, &mut memo, &mut HashSet::new(), dedup_run_config_ids.as_mut(), &mut rows);
             }
         }
 
-        let appended_run_config_ids = dedup_run_config_ids.clone().unwrap_or_else(|| {
-            rows.iter()
-                .filter_map(VisibleRunConfigRow::run_config_id)
-                .collect::<HashSet<u32>>()
-        });
-        let mut remaining_run_config_ids = self
-            .run_config_tree
-            .keys()
-            .filter(|run_config_id| !appended_run_config_ids.contains(run_config_id))
-            .copied()
-            .collect::<Vec<u32>>();
+        let appended_run_config_ids = dedup_run_config_ids.clone().unwrap_or_else(|| rows.iter().filter_map(VisibleRunConfigRow::run_config_id).collect::<HashSet<u32>>());
+        let mut remaining_run_config_ids = self.run_config_tree.keys().filter(|run_config_id| !appended_run_config_ids.contains(run_config_id)).copied().collect::<Vec<u32>>();
         sort_run_config_ids(&mut remaining_run_config_ids, &run_on_by_id, self.run_on_sort_order);
         for run_config_id in remaining_run_config_ids {
             if self.run_visible_with_descendants(run_config_id, filter_active, &matching_run_config_ids, &mut memo, &mut HashSet::new()) {
-                self.append_visible_run_rows(
-                    run_config_id,
-                    0,
-                    filter_active,
-                    &matching_run_config_ids,
-                    &mut memo,
-                    &mut HashSet::new(),
-                    dedup_run_config_ids.as_mut(),
-                    &mut rows,
-                );
+                self.append_visible_run_rows(run_config_id, 0, filter_active, &matching_run_config_ids, &mut memo, &mut HashSet::new(), dedup_run_config_ids.as_mut(), &mut rows);
             }
         }
 
@@ -1764,11 +1590,7 @@ impl App {
         let Some(run_config_id) = self.selected_run_config_id() else {
             return false;
         };
-        let needs_children_load = self
-            .run_config_tree
-            .get(&run_config_id)
-            .map(|node| !node.children_loaded)
-            .unwrap_or(false);
+        let needs_children_load = self.run_config_tree.get(&run_config_id).map(|node| !node.children_loaded).unwrap_or(false);
         if needs_children_load {
             match t!(self.ensure_run_children_loaded(run_config_id, Some(run_config_id))).await {
                 Ok(false) => {
@@ -1808,11 +1630,7 @@ impl App {
         let Some(run_config_id) = self.selected_run_config_id() else {
             return false;
         };
-        let needs_children_load = self
-            .run_config_tree
-            .get(&run_config_id)
-            .map(|node| !node.children_loaded)
-            .unwrap_or(false);
+        let needs_children_load = self.run_config_tree.get(&run_config_id).map(|node| !node.children_loaded).unwrap_or(false);
         if needs_children_load {
             match t!(self.ensure_run_children_loaded(run_config_id, Some(run_config_id))).await {
                 Ok(false) => {
@@ -1955,12 +1773,7 @@ impl App {
                     return;
                 }
 
-                self.type_popup_selected_idx = self
-                    .search_filters
-                    .run_config_type
-                    .as_ref()
-                    .and_then(|active| self.run_config_types.iter().position(|t| t == active))
-                    .unwrap_or(0);
+                self.type_popup_selected_idx = self.search_filters.run_config_type.as_ref().and_then(|active| self.run_config_types.iter().position(|t| t == active)).unwrap_or(0);
 
                 self.selected_area = SelectedArea::TypeFilterPopup;
                 self.status = None;
@@ -1975,21 +1788,16 @@ impl App {
 
     async fn load_filtered_run_configs(&mut self, keep_run_config_id: Option<u32>) -> anyhow::Result<()> {
         let normalized = self.search_filters.normalized()?;
-        let run_configs = t!(self
-            .store
-            .list_run_configs_filtered(RunConfigFilter {
-                id: normalized.id,
-                run_config_type: normalized.run_config_type,
-                descr_substr: if normalized.descr_lower.is_empty() { None } else { Some(normalized.descr_lower) },
-                run_on_from: normalized.run_on_from,
-                run_on_to: normalized.run_on_to,
-            })).await?;
+        let run_configs = t!(self.store.list_run_configs_filtered(RunConfigFilter {
+            id: normalized.id,
+            run_config_type: normalized.run_config_type,
+            descr_substr: if normalized.descr_lower.is_empty() { None } else { Some(normalized.descr_lower) },
+            run_on_from: normalized.run_on_from,
+            run_on_to: normalized.run_on_to,
+        }))
+        .await?;
         let run_config_ids = run_configs.iter().map(|entry| entry.id).collect::<Vec<u32>>();
-        let input_pairs = if run_config_ids.is_empty() {
-            vec![]
-        } else {
-            t!(self.store.list_input_run_config_ids(run_config_ids.as_slice())).await?
-        };
+        let input_pairs = if run_config_ids.is_empty() { vec![] } else { t!(self.store.list_input_run_config_ids(run_config_ids.as_slice())).await? };
 
         self.all_run_configs = run_configs;
         self.loaded_input_pairs = input_pairs;
@@ -2087,10 +1895,7 @@ impl App {
         match t!(self.store.list_run_config_values(run_config_id)).await {
             Ok(values) => {
                 self.status = None;
-                let mut rows = values
-                    .into_iter()
-                    .map(|(name, value)| (name, value_to_string(&value)))
-                    .collect::<Vec<(String, String)>>();
+                let mut rows = values.into_iter().map(|(name, value)| (name, value_to_string(&value))).collect::<Vec<(String, String)>>();
                 rows.sort_by(|a, b| a.0.cmp(&b.0));
                 debug!("refresh_selected_values: run_config_id={} rows={}", run_config_id, rows.len());
                 self.selected_values = rows;
@@ -2123,13 +1928,7 @@ impl App {
         self.pending_plot_open = Some(PendingMotifPlotOpen {
             motif_id,
             started_at: Instant::now(),
-            task: tokio::spawn(async move { t!(open_motif_plot_task(ws_path, motif_id)).await }.instrument(tracing::info_span!(
-                "tui::open_motif_plot",
-                kind = "spawn",
-                file = file!(),
-                line = line!(),
-                task = format!("open motif plot for motif_id={motif_id}"),
-            ))),
+            task: tokio::spawn(async move { t!(open_motif_plot_task(ws_path, motif_id)).await }.instrument(tracing::info_span!("tui::open_motif_plot", kind = "spawn", file = file!(), line = line!(), task = format!("open motif plot for motif_id={motif_id}"),))),
         });
     }
 
@@ -2328,201 +2127,189 @@ async fn run_ui(app: &mut App) -> anyhow::Result<()> {
                             t!(app.refresh_selected_details()).await;
                         }
                     }
-                    SelectedArea::RightMotifs => {
-                        match key.code {
-                            KeyCode::Tab | KeyCode::Left if key.modifiers.is_empty() => {
-                                app.selected_area = SelectedArea::LeftRunConfigs;
-                                app.prefer_right_motifs = false;
-                            }
-                            KeyCode::Enter if key.modifiers.is_empty() => {
-                                app.open_selected_motif_plot();
-                            }
-                            KeyCode::Char('m') if key.modifiers.is_empty() => {
-                                t!(app.toggle_selected_run_motifs_panel()).await;
-                            }
-                            KeyCode::Down | KeyCode::Char('j') if key.modifiers.is_empty() => {
-                                app.move_motif_down(1);
-                            }
-                            KeyCode::Up | KeyCode::Char('k') if key.modifiers.is_empty() => {
-                                app.move_motif_up(1);
-                            }
-                            KeyCode::Char('d') if is_ctrl_char(&key, 'd') => {
-                                app.move_motif_down(app.motif_page_size());
-                            }
-                            KeyCode::Char('u') if is_ctrl_char(&key, 'u') => {
-                                app.move_motif_up(app.motif_page_size());
-                            }
-                            KeyCode::Char('G') if is_unmodified_or_shift(&key) => {
-                                app.move_motif_to_bottom();
-                            }
-                            KeyCode::Char('g') if key.modifiers.is_empty() => {
-                                if app.handle_g_press(SelectedArea::RightMotifs) {
-                                    app.move_motif_to_top();
-                                }
-                            }
-                            KeyCode::Char('n') if key.modifiers.is_empty() => {
-                                app.navigate_panel_search(true);
-                            }
-                            KeyCode::Char('p') if key.modifiers.is_empty() => {
-                                app.navigate_panel_search(false);
-                            }
-                            _ => {}
+                    SelectedArea::RightMotifs => match key.code {
+                        KeyCode::Tab | KeyCode::Left if key.modifiers.is_empty() => {
+                            app.selected_area = SelectedArea::LeftRunConfigs;
+                            app.prefer_right_motifs = false;
                         }
-                    }
+                        KeyCode::Enter if key.modifiers.is_empty() => {
+                            app.open_selected_motif_plot();
+                        }
+                        KeyCode::Char('m') if key.modifiers.is_empty() => {
+                            t!(app.toggle_selected_run_motifs_panel()).await;
+                        }
+                        KeyCode::Down | KeyCode::Char('j') if key.modifiers.is_empty() => {
+                            app.move_motif_down(1);
+                        }
+                        KeyCode::Up | KeyCode::Char('k') if key.modifiers.is_empty() => {
+                            app.move_motif_up(1);
+                        }
+                        KeyCode::Char('d') if is_ctrl_char(&key, 'd') => {
+                            app.move_motif_down(app.motif_page_size());
+                        }
+                        KeyCode::Char('u') if is_ctrl_char(&key, 'u') => {
+                            app.move_motif_up(app.motif_page_size());
+                        }
+                        KeyCode::Char('G') if is_unmodified_or_shift(&key) => {
+                            app.move_motif_to_bottom();
+                        }
+                        KeyCode::Char('g') if key.modifiers.is_empty() => {
+                            if app.handle_g_press(SelectedArea::RightMotifs) {
+                                app.move_motif_to_top();
+                            }
+                        }
+                        KeyCode::Char('n') if key.modifiers.is_empty() => {
+                            app.navigate_panel_search(true);
+                        }
+                        KeyCode::Char('p') if key.modifiers.is_empty() => {
+                            app.navigate_panel_search(false);
+                        }
+                        _ => {}
+                    },
                     SelectedArea::ProgressView => {}
-                    SelectedArea::TypeFilterPopup => {
-                        match key.code {
-                            KeyCode::Esc => {
-                                app.selected_area = app.default_run_configs_area();
-                            }
-                            KeyCode::Enter => {
-                                t!(app.apply_type_filter_from_popup()).await;
-                                app.selected_area = app.default_run_configs_area();
-                                t!(app.refresh_selected_details()).await;
-                            }
-                            KeyCode::Char('T') if is_unmodified_or_shift(&key) => {
-                                t!(app.reset_search_filters()).await;
-                                app.selected_area = app.default_run_configs_area();
-                                t!(app.refresh_selected_details()).await;
-                            }
-                            KeyCode::Down | KeyCode::Char('j') if key.modifiers.is_empty() => {
-                                app.move_popup_down(1);
-                            }
-                            KeyCode::Up | KeyCode::Char('k') if key.modifiers.is_empty() => {
-                                app.move_popup_up(1);
-                            }
-                            KeyCode::Char('d') if is_ctrl_char(&key, 'd') => {
-                                app.move_popup_down(app.popup_page_size());
-                            }
-                            KeyCode::Char('u') if is_ctrl_char(&key, 'u') => {
-                                app.move_popup_up(app.popup_page_size());
-                            }
-                            KeyCode::Char('G') if is_unmodified_or_shift(&key) => {
-                                app.move_popup_to_bottom();
-                            }
-                            KeyCode::Char('g') if key.modifiers.is_empty() => {
-                                if app.handle_g_press(SelectedArea::TypeFilterPopup) {
-                                    app.move_popup_to_top();
-                                }
-                            }
-                            _ => {}
+                    SelectedArea::TypeFilterPopup => match key.code {
+                        KeyCode::Esc => {
+                            app.selected_area = app.default_run_configs_area();
                         }
-                    }
-                    SelectedArea::SearchPopup => {
-                        match key.code {
-                            KeyCode::Esc => {
-                                app.selected_area = app.default_run_configs_area();
+                        KeyCode::Enter => {
+                            t!(app.apply_type_filter_from_popup()).await;
+                            app.selected_area = app.default_run_configs_area();
+                            t!(app.refresh_selected_details()).await;
+                        }
+                        KeyCode::Char('T') if is_unmodified_or_shift(&key) => {
+                            t!(app.reset_search_filters()).await;
+                            app.selected_area = app.default_run_configs_area();
+                            t!(app.refresh_selected_details()).await;
+                        }
+                        KeyCode::Down | KeyCode::Char('j') if key.modifiers.is_empty() => {
+                            app.move_popup_down(1);
+                        }
+                        KeyCode::Up | KeyCode::Char('k') if key.modifiers.is_empty() => {
+                            app.move_popup_up(1);
+                        }
+                        KeyCode::Char('d') if is_ctrl_char(&key, 'd') => {
+                            app.move_popup_down(app.popup_page_size());
+                        }
+                        KeyCode::Char('u') if is_ctrl_char(&key, 'u') => {
+                            app.move_popup_up(app.popup_page_size());
+                        }
+                        KeyCode::Char('G') if is_unmodified_or_shift(&key) => {
+                            app.move_popup_to_bottom();
+                        }
+                        KeyCode::Char('g') if key.modifiers.is_empty() => {
+                            if app.handle_g_press(SelectedArea::TypeFilterPopup) {
+                                app.move_popup_to_top();
                             }
-                            KeyCode::Enter => {
-                                match app.selected_search_popup_row() {
-                                    SearchPopupRow::Field(SearchField::Type) => {
-                                        app.open_search_type_popup();
-                                    }
-                                    SearchPopupRow::Field(_) => {}
-                                    SearchPopupRow::Ok => {
-                                        if t!(app.apply_search_from_popup()).await {
-                                            t!(app.refresh_selected_details()).await;
-                                        }
-                                    }
-                                    SearchPopupRow::Cancel => {
-                                        app.selected_area = app.default_run_configs_area();
-                                    }
-                                }
-                            }
-                            KeyCode::Right | KeyCode::Left if app.selected_search_field() == Some(SearchField::Type) => {
+                        }
+                        _ => {}
+                    },
+                    SelectedArea::SearchPopup => match key.code {
+                        KeyCode::Esc => {
+                            app.selected_area = app.default_run_configs_area();
+                        }
+                        KeyCode::Enter => match app.selected_search_popup_row() {
+                            SearchPopupRow::Field(SearchField::Type) => {
                                 app.open_search_type_popup();
                             }
-                            KeyCode::Backspace => {
-                                app.pop_from_search_popup();
-                            }
-                            KeyCode::Char('r') if is_ctrl_char(&key, 'r') => {
-                                app.reset_search_popup_draft();
-                            }
-                            KeyCode::Down | KeyCode::Char('j') if key.modifiers.is_empty() => {
-                                app.move_search_popup_down(1);
-                            }
-                            KeyCode::Up | KeyCode::Char('k') if key.modifiers.is_empty() => {
-                                app.move_search_popup_up(1);
-                            }
-                            KeyCode::Char('G') if is_unmodified_or_shift(&key) => {
-                                app.move_search_popup_to_bottom();
-                            }
-                            KeyCode::Char('g') if key.modifiers.is_empty() => {
-                                if app.handle_g_press(SelectedArea::SearchPopup) {
-                                    app.move_search_popup_to_top();
+                            SearchPopupRow::Field(_) => {}
+                            SearchPopupRow::Ok => {
+                                if t!(app.apply_search_from_popup()).await {
+                                    t!(app.refresh_selected_details()).await;
                                 }
                             }
-                            KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) && !key.modifiers.contains(KeyModifiers::ALT) => {
-                                app.append_to_search_popup(ch);
+                            SearchPopupRow::Cancel => {
+                                app.selected_area = app.default_run_configs_area();
                             }
-                            _ => {}
+                        },
+                        KeyCode::Right | KeyCode::Left if app.selected_search_field() == Some(SearchField::Type) => {
+                            app.open_search_type_popup();
                         }
-                    }
-                    SelectedArea::SearchTypePopup => {
-                        match key.code {
-                            KeyCode::Esc => {
-                                app.selected_area = SelectedArea::SearchPopup;
-                            }
-                            KeyCode::Enter => {
-                                app.apply_search_type_from_popup();
-                            }
-                            KeyCode::Down | KeyCode::Char('j') if key.modifiers.is_empty() => {
-                                app.move_search_type_popup_down(1);
-                            }
-                            KeyCode::Up | KeyCode::Char('k') if key.modifiers.is_empty() => {
-                                app.move_search_type_popup_up(1);
-                            }
-                            KeyCode::Char('d') if is_ctrl_char(&key, 'd') => {
-                                app.move_search_type_popup_down(app.search_type_popup_page_size());
-                            }
-                            KeyCode::Char('u') if is_ctrl_char(&key, 'u') => {
-                                app.move_search_type_popup_up(app.search_type_popup_page_size());
-                            }
-                            KeyCode::Char('G') if is_unmodified_or_shift(&key) => {
-                                app.move_search_type_popup_to_bottom();
-                            }
-                            KeyCode::Char('g') if key.modifiers.is_empty() => {
-                                if app.handle_g_press(SelectedArea::SearchTypePopup) {
-                                    app.move_search_type_popup_to_top();
-                                }
-                            }
-                            _ => {}
+                        KeyCode::Backspace => {
+                            app.pop_from_search_popup();
                         }
-                    }
-                    SelectedArea::ViewPopup => {
-                        match key.code {
-                            KeyCode::Esc => {
-                                app.selected_area = match app.view_mode {
-                                    ViewMode::RunConfigs => app.default_run_configs_area(),
-                                    ViewMode::Progress => SelectedArea::ProgressView,
-                                };
-                            }
-                            KeyCode::Enter => {
-                                app.apply_view_mode_from_popup();
-                            }
-                            KeyCode::Down | KeyCode::Char('j') if key.modifiers.is_empty() => {
-                                app.move_view_popup_down(1);
-                            }
-                            KeyCode::Up | KeyCode::Char('k') if key.modifiers.is_empty() => {
-                                app.move_view_popup_up(1);
-                            }
-                            KeyCode::Char('d') if is_ctrl_char(&key, 'd') => {
-                                app.move_view_popup_down(app.view_popup_page_size());
-                            }
-                            KeyCode::Char('u') if is_ctrl_char(&key, 'u') => {
-                                app.move_view_popup_up(app.view_popup_page_size());
-                            }
-                            KeyCode::Char('G') if is_unmodified_or_shift(&key) => {
-                                app.move_view_popup_to_bottom();
-                            }
-                            KeyCode::Char('g') if key.modifiers.is_empty() => {
-                                if app.handle_g_press(SelectedArea::ViewPopup) {
-                                    app.move_view_popup_to_top();
-                                }
-                            }
-                            _ => {}
+                        KeyCode::Char('r') if is_ctrl_char(&key, 'r') => {
+                            app.reset_search_popup_draft();
                         }
-                    }
+                        KeyCode::Down | KeyCode::Char('j') if key.modifiers.is_empty() => {
+                            app.move_search_popup_down(1);
+                        }
+                        KeyCode::Up | KeyCode::Char('k') if key.modifiers.is_empty() => {
+                            app.move_search_popup_up(1);
+                        }
+                        KeyCode::Char('G') if is_unmodified_or_shift(&key) => {
+                            app.move_search_popup_to_bottom();
+                        }
+                        KeyCode::Char('g') if key.modifiers.is_empty() => {
+                            if app.handle_g_press(SelectedArea::SearchPopup) {
+                                app.move_search_popup_to_top();
+                            }
+                        }
+                        KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) && !key.modifiers.contains(KeyModifiers::ALT) => {
+                            app.append_to_search_popup(ch);
+                        }
+                        _ => {}
+                    },
+                    SelectedArea::SearchTypePopup => match key.code {
+                        KeyCode::Esc => {
+                            app.selected_area = SelectedArea::SearchPopup;
+                        }
+                        KeyCode::Enter => {
+                            app.apply_search_type_from_popup();
+                        }
+                        KeyCode::Down | KeyCode::Char('j') if key.modifiers.is_empty() => {
+                            app.move_search_type_popup_down(1);
+                        }
+                        KeyCode::Up | KeyCode::Char('k') if key.modifiers.is_empty() => {
+                            app.move_search_type_popup_up(1);
+                        }
+                        KeyCode::Char('d') if is_ctrl_char(&key, 'd') => {
+                            app.move_search_type_popup_down(app.search_type_popup_page_size());
+                        }
+                        KeyCode::Char('u') if is_ctrl_char(&key, 'u') => {
+                            app.move_search_type_popup_up(app.search_type_popup_page_size());
+                        }
+                        KeyCode::Char('G') if is_unmodified_or_shift(&key) => {
+                            app.move_search_type_popup_to_bottom();
+                        }
+                        KeyCode::Char('g') if key.modifiers.is_empty() => {
+                            if app.handle_g_press(SelectedArea::SearchTypePopup) {
+                                app.move_search_type_popup_to_top();
+                            }
+                        }
+                        _ => {}
+                    },
+                    SelectedArea::ViewPopup => match key.code {
+                        KeyCode::Esc => {
+                            app.selected_area = match app.view_mode {
+                                ViewMode::RunConfigs => app.default_run_configs_area(),
+                                ViewMode::Progress => SelectedArea::ProgressView,
+                            };
+                        }
+                        KeyCode::Enter => {
+                            app.apply_view_mode_from_popup();
+                        }
+                        KeyCode::Down | KeyCode::Char('j') if key.modifiers.is_empty() => {
+                            app.move_view_popup_down(1);
+                        }
+                        KeyCode::Up | KeyCode::Char('k') if key.modifiers.is_empty() => {
+                            app.move_view_popup_up(1);
+                        }
+                        KeyCode::Char('d') if is_ctrl_char(&key, 'd') => {
+                            app.move_view_popup_down(app.view_popup_page_size());
+                        }
+                        KeyCode::Char('u') if is_ctrl_char(&key, 'u') => {
+                            app.move_view_popup_up(app.view_popup_page_size());
+                        }
+                        KeyCode::Char('G') if is_unmodified_or_shift(&key) => {
+                            app.move_view_popup_to_bottom();
+                        }
+                        KeyCode::Char('g') if key.modifiers.is_empty() => {
+                            if app.handle_g_press(SelectedArea::ViewPopup) {
+                                app.move_view_popup_to_top();
+                            }
+                        }
+                        _ => {}
+                    },
                 }
             }
         }
@@ -2539,10 +2326,7 @@ async fn run_ui(app: &mut App) -> anyhow::Result<()> {
 }
 
 fn render(frame: &mut Frame<'_>, app: &App) {
-    let outer = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(1)])
-        .split(frame.area());
+    let outer = Layout::default().direction(Direction::Vertical).constraints([Constraint::Min(1), Constraint::Length(1)]).split(frame.area());
 
     match app.view_mode {
         ViewMode::RunConfigs => render_run_configs_view(frame, app, outer[0]),
@@ -2564,16 +2348,10 @@ fn render(frame: &mut Frame<'_>, app: &App) {
 }
 
 fn render_run_configs_view(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    let layout = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(48), Constraint::Percentage(52)])
-        .split(area);
+    let layout = Layout::default().direction(Direction::Horizontal).constraints([Constraint::Percentage(48), Constraint::Percentage(52)]).split(area);
 
     let (left_list_area, left_input_area) = if app.panel_search.input_open {
-        let left_layout = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Min(1), Constraint::Length(3)])
-            .split(layout[0]);
+        let left_layout = Layout::default().direction(Direction::Vertical).constraints([Constraint::Min(1), Constraint::Length(3)]).split(layout[0]);
         (left_layout[0], Some(left_layout[1]))
     } else {
         (layout[0], None)
@@ -2599,10 +2377,7 @@ fn render_run_configs_view(frame: &mut Frame<'_>, app: &App, area: Rect) {
     };
 
     let left_block = Block::default().title(left_title).borders(Borders::ALL);
-    let left_list = List::new(left_items)
-        .block(left_block)
-        .highlight_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
-        .highlight_symbol(">> ");
+    let left_list = List::new(left_items).block(left_block).highlight_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)).highlight_symbol(">> ");
 
     let mut left_state = ListState::default();
     if !app.run_configs.is_empty() {
@@ -2615,25 +2390,15 @@ fn render_run_configs_view(frame: &mut Frame<'_>, app: &App, area: Rect) {
     }
 
     if !app.motif_panel_visible() {
-        let right = Paragraph::new(render_run_value_lines(app).join("\n"))
-            .block(Block::default().title("run_config_values").borders(Borders::ALL))
-            .wrap(Wrap { trim: false });
+        let right = Paragraph::new(render_run_value_lines(app).join("\n")).block(Block::default().title("run_config_values").borders(Borders::ALL)).wrap(Wrap { trim: false });
         frame.render_widget(right, layout[1]);
         return;
     }
 
-    let right_layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(42), Constraint::Percentage(58)])
-        .split(layout[1]);
+    let right_layout = Layout::default().direction(Direction::Vertical).constraints([Constraint::Percentage(42), Constraint::Percentage(58)]).split(layout[1]);
     let motif_window_start = app.motif_list_offset.min(app.selected_run_motifs.len().saturating_sub(1));
     let motif_window_end = (motif_window_start + app.motif_page_size()).min(app.selected_run_motifs.len());
-    let motif_items = build_searchable_list_items(
-        app.selected_run_motifs[motif_window_start..motif_window_end].iter().map(format_run_motif_row).collect::<Vec<String>>(),
-        motif_window_start,
-        app,
-        PanelSearchTarget::Motifs,
-    );
+    let motif_items = build_searchable_list_items(app.selected_run_motifs[motif_window_start..motif_window_end].iter().map(format_run_motif_row).collect::<Vec<String>>(), motif_window_start, app, PanelSearchTarget::Motifs);
     let motif_list = List::new(motif_items)
         .block(Block::default().title(format!("motifs [{}]", app.selected_run_motifs.len())).borders(Borders::ALL))
         .highlight_style(if app.selected_area == SelectedArea::RightMotifs {
@@ -2646,9 +2411,7 @@ fn render_run_configs_view(frame: &mut Frame<'_>, app: &App, area: Rect) {
     motif_state.select(Some(app.selected_motif_idx.min(app.selected_run_motifs.len().saturating_sub(1)).saturating_sub(motif_window_start)));
     frame.render_stateful_widget(motif_list, right_layout[0], &mut motif_state);
 
-    let motif_details = Paragraph::new(render_motif_detail_lines(app).join("\n"))
-        .block(Block::default().title("motif details").borders(Borders::ALL))
-        .wrap(Wrap { trim: false });
+    let motif_details = Paragraph::new(render_motif_detail_lines(app).join("\n")).block(Block::default().title("motif details").borders(Borders::ALL)).wrap(Wrap { trim: false });
     frame.render_widget(motif_details, right_layout[1]);
 }
 
@@ -2675,17 +2438,11 @@ fn format_run_tree_row(app: &App, row: &VisibleRunConfigRow) -> String {
             } else {
                 "•"
             };
-            format!(
-                "{}{} {:>6}  {:<19}  {:<24}  {}",
-                indent, tree_marker, node.entry.id, node.entry.run_on, node.entry.run_config_type, node.entry.descr
-            )
+            format!("{}{} {:>6}  {:<19}  {:<24}  {}", indent, tree_marker, node.entry.id, node.entry.run_on, node.entry.run_config_type, node.entry.descr)
         }
         VisibleRunConfigRowKind::Motif { motif, .. } => {
             let score = motif.score.map(|value| format!("{value:.4}")).unwrap_or_else(|| "-".to_string());
-            format!(
-                "{}• motif {:>8}  ch {:<3}  slices {:<6}  resources {:<6}  score {}",
-                indent, motif.motif_id, motif.channel_id, motif.slices_cnt, motif.resources_cnt, score
-            )
+            format!("{}• motif {:>8}  ch {:<3}  slices {:<6}  resources {:<6}  score {}", indent, motif.motif_id, motif.channel_id, motif.slices_cnt, motif.resources_cnt, score)
         }
     }
 }
@@ -2727,13 +2484,7 @@ fn render_run_value_lines(app: &App) -> Vec<String> {
         let motifs_line = app
             .selected_run_config_id()
             .and_then(|run_config_id| app.run_motifs_cache.get(&run_config_id))
-            .map(|motifs| {
-                if motifs.is_empty() {
-                    "motifs: none".to_string()
-                } else {
-                    "motifs: press m to view".to_string()
-                }
-            })
+            .map(|motifs| if motifs.is_empty() { "motifs: none".to_string() } else { "motifs: press m to view".to_string() })
             .unwrap_or_else(|| "motifs: press m to load".to_string());
         right_lines.push(motifs_line);
         right_lines.push(String::new());
@@ -2757,14 +2508,8 @@ fn motif_counts_loaded(motif: &RunMotifEntry) -> bool {
 
 fn format_run_motif_row(motif: &RunMotifEntry) -> String {
     match motif.score {
-        Some(score) => format!(
-            "{:>8}  ch {:<2}  score {:>8.5}  slices {:>5}  resources {:>4}",
-            motif.motif_id, motif.channel_id, score, motif.slices_cnt, motif.resources_cnt
-        ),
-        None if motif_counts_loaded(motif) => format!(
-            "{:>8}  ch {:<2}  slices {:>5}  resources {:>4}",
-            motif.motif_id, motif.channel_id, motif.slices_cnt, motif.resources_cnt
-        ),
+        Some(score) => format!("{:>8}  ch {:<2}  score {:>8.5}  slices {:>5}  resources {:>4}", motif.motif_id, motif.channel_id, score, motif.slices_cnt, motif.resources_cnt),
+        None if motif_counts_loaded(motif) => format!("{:>8}  ch {:<2}  slices {:>5}  resources {:>4}", motif.motif_id, motif.channel_id, motif.slices_cnt, motif.resources_cnt),
         None => format!("{:>8}  ch {:<2}", motif.motif_id, motif.channel_id),
     }
 }
@@ -2820,15 +2565,9 @@ fn render_progress_view(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let block = Block::default().title("progress").borders(Borders::ALL);
     let inner = block.inner(area);
     frame.render_widget(block, area);
-    let columns = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(68), Constraint::Percentage(32)])
-        .split(inner);
-    let progress = Paragraph::new(app.progress_lines().join("\n"))
-        .wrap(Wrap { trim: false });
-    let limits = Paragraph::new(app.buffer_limit_lines().join("\n"))
-        .block(Block::default().title("future limits").borders(Borders::LEFT))
-        .wrap(Wrap { trim: false });
+    let columns = Layout::default().direction(Direction::Horizontal).constraints([Constraint::Percentage(68), Constraint::Percentage(32)]).split(inner);
+    let progress = Paragraph::new(app.progress_lines().join("\n")).wrap(Wrap { trim: false });
+    let limits = Paragraph::new(app.buffer_limit_lines().join("\n")).block(Block::default().title("future limits").borders(Borders::LEFT)).wrap(Wrap { trim: false });
     frame.render_widget(progress, columns[0]);
     frame.render_widget(limits, columns[1]);
 }
@@ -2847,10 +2586,7 @@ fn render_status_line(frame: &mut Frame<'_>, app: &App, area: Rect) {
         return;
     }
 
-    let layout = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Min(1), Constraint::Length(right_width)])
-        .split(area);
+    let layout = Layout::default().direction(Direction::Horizontal).constraints([Constraint::Min(1), Constraint::Length(right_width)]).split(area);
     frame.render_widget(Paragraph::new(left), layout[0]);
     frame.render_widget(Paragraph::new(right), layout[1]);
 }
@@ -2860,23 +2596,14 @@ fn render_panel_search_input(frame: &mut Frame<'_>, app: &App, area: Rect) {
         PanelSearchTarget::RunConfigs => "Search run_configs",
         PanelSearchTarget::Motifs => "Search motifs",
     };
-    let value = if app.panel_search.draft.is_empty() {
-        "<pattern>".to_string()
-    } else {
-        app.panel_search.draft.clone()
-    };
-    let input = Paragraph::new(format!("/{value}_"))
-        .block(Block::default().title(title).borders(Borders::ALL));
+    let value = if app.panel_search.draft.is_empty() { "<pattern>".to_string() } else { app.panel_search.draft.clone() };
+    let input = Paragraph::new(format!("/{value}_")).block(Block::default().title(title).borders(Borders::ALL));
     frame.render_widget(input, area);
 }
 
 fn build_searchable_list_items(lines: Vec<String>, line_offset: usize, app: &App, target: PanelSearchTarget) -> Vec<ListItem<'static>> {
     let matches = app.panel_search_matches(target);
-    let active_match = app
-        .panel_search
-        .current_match_idx
-        .filter(|idx| *idx < matches.len())
-        .and_then(|idx| matches.get(idx).copied());
+    let active_match = app.panel_search.current_match_idx.filter(|idx| *idx < matches.len()).and_then(|idx| matches.get(idx).copied());
     let mut matches_by_line = HashMap::<usize, Vec<PanelSearchMatch>>::new();
     for search_match in matches {
         matches_by_line.entry(search_match.line_idx).or_default().push(search_match);
@@ -2961,10 +2688,7 @@ fn status_hint_text(app: &App) -> String {
 
 fn status_right_text(app: &App, max_width: usize) -> String {
     if let Some(pending_plot_open) = &app.pending_plot_open {
-        return truncate_status_right(
-            format!("opening motif {} {}", pending_plot_open.motif_id, endless_progress_bar(pending_plot_open.started_at, 12)).as_str(),
-            max_width,
-        );
+        return truncate_status_right(format!("opening motif {} {}", pending_plot_open.motif_id, endless_progress_bar(pending_plot_open.started_at, 12)).as_str(), max_width);
     }
 
     truncate_status_left(format!("db: {}", app.db_path.display()).as_str(), max_width)
@@ -3009,7 +2733,7 @@ fn endless_progress_bar(started_at: Instant, width: usize) -> String {
         let phase = tick % cycle.max(1);
         if phase <= travel { phase } else { cycle - phase }
     };
-    let mut chars = vec![' ' ; width];
+    let mut chars = vec![' '; width];
     for idx in 0..segment_len {
         chars[offset + idx] = '=';
     }
@@ -3058,10 +2782,7 @@ fn render_search_popup(frame: &mut Frame<'_>, app: &App) {
     let popup_y = area.y + area.height.saturating_sub(popup_h) / 2;
     let popup_rect = Rect::new(popup_x, popup_y, popup_w, popup_h);
 
-    let mut popup_items = SearchField::ALL
-        .iter()
-        .map(|field| ListItem::new(format_search_field_row(*field, &app.search_popup)))
-        .collect::<Vec<ListItem>>();
+    let mut popup_items = SearchField::ALL.iter().map(|field| ListItem::new(format_search_field_row(*field, &app.search_popup))).collect::<Vec<ListItem>>();
     popup_items.push(ListItem::new("[ Ok ]"));
     popup_items.push(ListItem::new("[ Cancel ]"));
 
@@ -3085,16 +2806,12 @@ fn render_search_type_popup(frame: &mut Frame<'_>, app: &App) {
     let popup_y = area.y + area.height.saturating_sub(popup_h) / 2;
     let popup_rect = Rect::new(popup_x, popup_y, popup_w, popup_h);
 
-    let popup_items = std::iter::once(ListItem::new(format!(
-        "{} {}",
-        if app.search_popup.draft.run_config_type.is_none() { "*" } else { " " },
-        SEARCH_TYPE_NONE_LABEL
-    )))
-    .chain(app.run_config_types.iter().map(|value| {
-        let marker = if app.search_popup.draft.run_config_type.as_deref() == Some(value.as_str()) { "*" } else { " " };
-        ListItem::new(format!("{marker} {value}"))
-    }))
-    .collect::<Vec<ListItem>>();
+    let popup_items = std::iter::once(ListItem::new(format!("{} {}", if app.search_popup.draft.run_config_type.is_none() { "*" } else { " " }, SEARCH_TYPE_NONE_LABEL)))
+        .chain(app.run_config_types.iter().map(|value| {
+            let marker = if app.search_popup.draft.run_config_type.as_deref() == Some(value.as_str()) { "*" } else { " " };
+            ListItem::new(format!("{marker} {value}"))
+        }))
+        .collect::<Vec<ListItem>>();
 
     let popup = List::new(popup_items)
         .block(Block::default().title("Select filter type (Enter choose, Esc cancel)").borders(Borders::ALL))
@@ -3144,26 +2861,13 @@ fn popup_height(term_rows: u16, items_count: usize) -> u16 {
 
 fn sort_run_config_ids(run_config_ids: &mut Vec<u32>, run_on_by_id: &HashMap<u32, &str>, sort_order: SortOrder) {
     match sort_order {
-        SortOrder::Asc => run_config_ids.sort_by(|a, b| {
-            run_on_by_id
-                .get(a)
-                .cmp(&run_on_by_id.get(b))
-                .then_with(|| a.cmp(b))
-        }),
-        SortOrder::Desc => run_config_ids.sort_by(|a, b| {
-            run_on_by_id
-                .get(b)
-                .cmp(&run_on_by_id.get(a))
-                .then_with(|| a.cmp(b))
-        }),
+        SortOrder::Asc => run_config_ids.sort_by(|a, b| run_on_by_id.get(a).cmp(&run_on_by_id.get(b)).then_with(|| a.cmp(b))),
+        SortOrder::Desc => run_config_ids.sort_by(|a, b| run_on_by_id.get(b).cmp(&run_on_by_id.get(a)).then_with(|| a.cmp(b))),
     }
 }
 
 fn run_config_type_supports_motifs(run_config_type: &str) -> bool {
-    matches!(
-        run_config_type,
-        "find_motifs" | "select_motifs" | "FindMotifsRunConfig" | "SelectMotifsRunConfig"
-    )
+    matches!(run_config_type, "find_motifs" | "select_motifs" | "FindMotifsRunConfig" | "SelectMotifsRunConfig")
 }
 
 fn run_config_type_supports_inline_motif_rows(run_config_type: &str) -> bool {
@@ -3194,11 +2898,7 @@ fn format_progress_bytes(bytes: i64) -> String {
         unit_idx += 1;
     }
 
-    if unit_idx == 0 {
-        format!("{sign}{} {}", value as u64, UNITS[unit_idx])
-    } else {
-        format!("{sign}{value:.1} {}", UNITS[unit_idx])
-    }
+    if unit_idx == 0 { format!("{sign}{} {}", value as u64, UNITS[unit_idx]) } else { format!("{sign}{value:.1} {}", UNITS[unit_idx]) }
 }
 
 fn format_progress_uptime(started_at_unix_ms: u64) -> String {
@@ -3206,10 +2906,7 @@ fn format_progress_uptime(started_at_unix_ms: u64) -> String {
         return "<unknown>".to_string();
     }
 
-    let now_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64;
+    let now_ms = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
     let elapsed = now_ms.saturating_sub(started_at_unix_ms);
     format_duration_short(Duration::from_millis(elapsed))
 }
@@ -3233,11 +2930,7 @@ fn format_duration_short(duration: Duration) -> String {
 }
 
 fn format_search_field_row(field: SearchField, popup: &SearchPopupState) -> String {
-    let is_selected = SearchField::ALL
-        .get(popup.selected_field_idx)
-        .copied()
-        .map(|selected| selected == field)
-        .unwrap_or(false);
+    let is_selected = SearchField::ALL.get(popup.selected_field_idx).copied().map(|selected| selected == field).unwrap_or(false);
 
     let raw_value = match field {
         SearchField::Id => search_text_value(&popup.draft.id, "<digits only>", is_selected),
@@ -3253,20 +2946,12 @@ fn format_search_field_row(field: SearchField, popup: &SearchPopupState) -> Stri
 fn search_text_value(value: &str, placeholder: &str, is_selected: bool) -> String {
     let trimmed = value.trim();
     let base = if trimmed.is_empty() { placeholder } else { trimmed };
-    if is_selected {
-        format!("{base}_")
-    } else {
-        base.to_string()
-    }
+    if is_selected { format!("{base}_") } else { base.to_string() }
 }
 
 fn display_search_text(value: &str, default: &str) -> String {
     let trimmed = value.trim();
-    if trimmed.is_empty() {
-        default.to_string()
-    } else {
-        trimmed.to_string()
-    }
+    if trimmed.is_empty() { default.to_string() } else { trimmed.to_string() }
 }
 
 fn normalize_for_case_insensitive_search(text: &str) -> (Vec<char>, Vec<usize>) {
@@ -3323,10 +3008,7 @@ fn parse_run_config_id_filter(value: &str) -> anyhow::Result<Option<u32>> {
         anyhow::bail!("id must contain digits only");
     }
 
-    Ok(trimmed
-        .parse::<u32>()
-        .context("invalid id")
-        .map(Some)?)
+    Ok(trimmed.parse::<u32>().context("invalid id").map(Some)?)
 }
 
 fn run_on_date_label(run_on: &str) -> String {
@@ -3344,11 +3026,7 @@ fn normalize_run_on_filter(value: &str, end_of_day: bool) -> anyhow::Result<Opti
     }
 
     if let Ok(date) = NaiveDate::parse_from_str(trimmed, RUN_ON_DATE_FORMAT) {
-        let Some(date_time) = date.and_hms_opt(
-            if end_of_day { 23 } else { 0 },
-            if end_of_day { 59 } else { 0 },
-            if end_of_day { 59 } else { 0 },
-        ) else {
+        let Some(date_time) = date.and_hms_opt(if end_of_day { 23 } else { 0 }, if end_of_day { 59 } else { 0 }, if end_of_day { 59 } else { 0 }) else {
             anyhow::bail!("invalid run_on date");
         };
         return Ok(Some(date_time.format(RUN_ON_DATETIME_FORMAT).to_string()));
@@ -3450,15 +3128,12 @@ fn drain_progress_events(app: &mut App, rx: &mut mpsc::UnboundedReceiver<Progres
 }
 
 fn spawn_progress_client(socket_id: String, tx: mpsc::UnboundedSender<ProgressClientEvent>) -> JoinHandle<()> {
-    tokio::spawn(async move {
-        t!(run_progress_client(socket_id, tx)).await;
-    }.instrument(tracing::info_span!(
-        "tui::progress_client",
-        kind = "spawn",
-        file = file!(),
-        line = line!(),
-        task = "receive progress socket events",
-    )))
+    tokio::spawn(
+        async move {
+            t!(run_progress_client(socket_id, tx)).await;
+        }
+        .instrument(tracing::info_span!("tui::progress_client", kind = "spawn", file = file!(), line = line!(), task = "receive progress socket events",)),
+    )
 }
 
 async fn run_progress_client(socket_id: String, tx: mpsc::UnboundedSender<ProgressClientEvent>) {
@@ -3492,11 +3167,7 @@ async fn run_progress_client(socket_id: String, tx: mpsc::UnboundedSender<Progre
     }
 }
 
-async fn read_progress_stream(
-    stream: Stream,
-    tx: &mpsc::UnboundedSender<ProgressClientEvent>,
-    last_status: &mut Option<String>,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+async fn read_progress_stream(stream: Stream, tx: &mpsc::UnboundedSender<ProgressClientEvent>, last_status: &mut Option<String>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut lines = BufReader::new(stream).lines();
     while let Some(line) = t!(lines.next_line()).await? {
         let snapshot: CollectEtaProgressState = serde_json::from_str(&line)?;
@@ -3508,11 +3179,7 @@ async fn read_progress_stream(
     Ok(())
 }
 
-fn send_progress_status(
-    tx: &mpsc::UnboundedSender<ProgressClientEvent>,
-    last_status: &mut Option<String>,
-    status: String,
-) -> bool {
+fn send_progress_status(tx: &mpsc::UnboundedSender<ProgressClientEvent>, last_status: &mut Option<String>, status: String) -> bool {
     if last_status.as_deref() == Some(status.as_str()) {
         return true;
     }
@@ -3547,39 +3214,23 @@ fn progress_socket_names(socket_id: &str) -> io::Result<Vec<Name<'static>>> {
 }
 
 fn cargo_workspace_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")))
-        .to_path_buf()
+    Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR"))).to_path_buf()
 }
 
 fn release_plot_binary_candidates() -> Vec<PathBuf> {
     let workspace_root = cargo_workspace_root();
-    vec![
-        workspace_root.join(format!("target/x86_64-unknown-linux-gnu/release/{DEFAULT_PLOT_PROJECT}")),
-        workspace_root.join(format!("target/release/{DEFAULT_PLOT_PROJECT}")),
-    ]
+    vec![workspace_root.join(format!("target/x86_64-unknown-linux-gnu/release/{DEFAULT_PLOT_PROJECT}")), workspace_root.join(format!("target/release/{DEFAULT_PLOT_PROJECT}"))]
 }
 
 fn plot_command(ws_path: &Path, motif_id: u32, print_to_stdout: bool) -> Command {
-    let mut command = release_plot_binary_candidates()
-        .into_iter()
-        .find(|candidate| candidate.exists())
-        .map(|candidate| Command::new(candidate))
-        .unwrap_or_else(|| {
-            let mut cargo_command = Command::new("cargo");
-            cargo_command.current_dir(cargo_workspace_root());
-            cargo_command.args(["run", "--release", "-p", DEFAULT_PLOT_PROJECT, "--"]);
-            cargo_command
-        });
+    let mut command = release_plot_binary_candidates().into_iter().find(|candidate| candidate.exists()).map(|candidate| Command::new(candidate)).unwrap_or_else(|| {
+        let mut cargo_command = Command::new("cargo");
+        cargo_command.current_dir(cargo_workspace_root());
+        cargo_command.args(["run", "--release", "-p", DEFAULT_PLOT_PROJECT, "--"]);
+        cargo_command
+    });
 
-    command.args([
-        "--term-logger-level",
-        "ERROR",
-        "--write-logger-level",
-        "ERROR",
-        "--ws-path",
-    ]);
+    command.args(["--term-logger-level", "ERROR", "--write-logger-level", "ERROR", "--ws-path"]);
     command.arg(ws_path);
     command.args(["plot-data", "--data-by"]);
     command.arg(format!("motif_id:{motif_id}"));
@@ -3590,9 +3241,7 @@ fn plot_command(ws_path: &Path, motif_id: u32, print_to_stdout: bool) -> Command
 }
 
 async fn resolve_motif_plot_target(ws_path: &Path, motif_id: u32) -> anyhow::Result<PathBuf> {
-    let output = t!(plot_command(ws_path, motif_id, true)
-        .output()).await
-        .context("run motif plot command")?;
+    let output = t!(plot_command(ws_path, motif_id, true).output()).await.context("run motif plot command")?;
     if !output.status.success() {
         anyhow::bail!("{}", command_output_error(&output.stdout, &output.stderr));
     }
@@ -3600,14 +3249,8 @@ async fn resolve_motif_plot_target(ws_path: &Path, motif_id: u32) -> anyhow::Res
 }
 
 async fn generate_motif_plot(ws_path: &Path, motif_id: u32) -> anyhow::Result<()> {
-    let output = t!(plot_command(ws_path, motif_id, false)
-        .output()).await
-        .context("run motif plot command")?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        anyhow::bail!("{}", command_output_error(&output.stdout, &output.stderr))
-    }
+    let output = t!(plot_command(ws_path, motif_id, false).output()).await.context("run motif plot command")?;
+    if output.status.success() { Ok(()) } else { anyhow::bail!("{}", command_output_error(&output.stdout, &output.stderr)) }
 }
 
 async fn open_motif_plot_task(ws_path: PathBuf, motif_id: u32) -> String {
@@ -3730,12 +3373,11 @@ fn run_non_interactive(app: &App) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use interprocess::local_socket::ListenerOptions;
     use std::process;
     use std::sync::atomic::{AtomicU64, Ordering};
-    use interprocess::local_socket::ListenerOptions;
     use thoosa_motifs::motifs_store::MockMotifsStore;
     use tokio::io::AsyncWriteExt;
-
 
     #[test]
     fn test_value_to_string_all_variants() {
@@ -3745,7 +3387,6 @@ mod tests {
         assert_eq!("abc", value_to_string(&Val::Str("abc".to_string())));
         assert_eq!("true", value_to_string(&Val::Bool(true)));
     }
-
 
     #[test]
     fn test_render_run_value_lines_excludes_db_path() {
@@ -3819,7 +3460,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_apply_search_from_popup_filters_visible_rows() ->anyhow::Result<()>{
+    async fn test_apply_search_from_popup_filters_visible_rows() -> anyhow::Result<()> {
         // The TUI displays motif rows, so its test store must include the motif schema and trait boundary.
         let store: Arc<dyn MotifsStore> = Arc::new(SqlStore::in_mem_(vec![thoosa_store::create_tables, thoosa_motifs::motifs_store::create_motif_tables]).await?);
         store.bind_run(store.save_run("test".into()).await?)?;
@@ -3942,7 +3583,6 @@ mod tests {
         assert_eq!(1, app.run_configs.iter().filter(|row| row.run_config_id() == Some(2)).count());
         assert_eq!(1, app.run_configs.iter().filter(|row| row.run_config_id() == Some(3)).count());
     }
-
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_refresh_run_configs_uses_paged_startup_loading() {
@@ -4288,9 +3928,7 @@ mod tests {
     fn test_move_main_to_bottom_updates_offset() {
         let store = Arc::new(MockMotifsStore::new()) as Arc<dyn MotifsStore>;
         let mut app = App::new(store, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
-        app.run_configs = (0..30)
-            .map(|idx| VisibleRunConfigRow::run_config(idx as u32, 0, false, true))
-            .collect();
+        app.run_configs = (0..30).map(|idx| VisibleRunConfigRow::run_config(idx as u32, 0, false, true)).collect();
 
         assert!(app.move_main_to_bottom());
         assert_eq!(app.selected_idx, 29);
@@ -4301,9 +3939,7 @@ mod tests {
     fn test_move_main_up_keeps_offset_until_top_visible_row() {
         let store = Arc::new(MockMotifsStore::new()) as Arc<dyn MotifsStore>;
         let mut app = App::new(store, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
-        app.run_configs = (0..30)
-            .map(|idx| VisibleRunConfigRow::run_config(idx as u32, 0, false, true))
-            .collect();
+        app.run_configs = (0..30).map(|idx| VisibleRunConfigRow::run_config(idx as u32, 0, false, true)).collect();
         app.selected_idx = 15;
         app.main_list_offset = 9;
 
@@ -4466,5 +4102,4 @@ mod tests {
         }
         Err(last_err.unwrap_or_else(|| io::Error::other("no local socket names available")))
     }
-
 }

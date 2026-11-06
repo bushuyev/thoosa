@@ -1,5 +1,5 @@
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use log::debug;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use thoosa_shared::ThoError;
 
 /// Public “area handle”: global bit index (0..n_areas).
@@ -16,7 +16,7 @@ fn area_to_word_mask(area: CacheAreaId) -> Option<(usize, u64)> {
     Some((word, 1u64 << shift))
 }
 
-static CACHE_AREAS_WORDS:usize = 10;
+static CACHE_AREAS_WORDS: usize = 10;
 
 #[derive(Debug)]
 pub struct CacheAreasKeeper {
@@ -83,7 +83,9 @@ impl CacheAreasKeeper {
         }
     }
 
-    pub fn words(&self) -> &[u64] { &self.words }
+    pub fn words(&self) -> &[u64] {
+        &self.words
+    }
 }
 
 impl Default for CacheAreasKeeper {
@@ -94,8 +96,8 @@ impl Default for CacheAreasKeeper {
 
 #[cfg(test)]
 mod cache_area_keeper_tests {
-    use thoosa_shared::ThoError;
     use crate::runner::cache_areas::{CacheAreaId, CacheAreasKeeper};
+    use thoosa_shared::ThoError;
 
     fn alloc_n(k: &mut CacheAreasKeeper, n: usize) -> Result<Vec<CacheAreaId>, ThoError> {
         let mut out = Vec::with_capacity(n);
@@ -211,8 +213,8 @@ mod cache_area_keeper_tests {
         assert!(k.next_available_cache_area().is_err());
 
         // Free one in word0 and one in word1; last dispose sets cursor to that word.
-        k.dispose_cache_area(1);   // word0 bit0
-        k.dispose_cache_area(65);  // word1 bit0 (cursor ends at word1)
+        k.dispose_cache_area(1); // word0 bit0
+        k.dispose_cache_area(65); // word1 bit0 (cursor ends at word1)
 
         // Because cursor points at word1, it reuses 65 first, then 1.
         assert_eq!(k.next_available_cache_area()?, 65);
@@ -222,7 +224,6 @@ mod cache_area_keeper_tests {
     }
 }
 
-
 /// A thing to keep track of cache-areas assigned.
 #[derive(Debug)]
 pub struct CacheArea {
@@ -230,22 +231,17 @@ pub struct CacheArea {
     assigned_count: AtomicU32, // number of set bits across all words
 }
 
-
 impl PartialEq for CacheArea {
     fn eq(&self, other: &Self) -> bool {
         if self.cache_words.len() != other.cache_words.len() {
             return false;
         }
 
-        self.cache_words
-            .iter()
-            .zip(other.cache_words.iter())
-            .all(|(a, b)| a.load(Ordering::Acquire) == b.load(Ordering::Acquire))
+        self.cache_words.iter().zip(other.cache_words.iter()).all(|(a, b)| a.load(Ordering::Acquire) == b.load(Ordering::Acquire))
     }
 }
 
 impl Eq for CacheArea {}
-
 
 impl From<u64> for CacheArea {
     fn from(value: u64) -> Self {
@@ -259,7 +255,6 @@ impl From<u64> for CacheArea {
 
 impl Clone for CacheArea {
     fn clone(&self) -> Self {
-
         let mut v = Vec::with_capacity(self.cache_words.len());
         for w in self.cache_words.iter() {
             v.push(AtomicU64::new(w.load(Ordering::Acquire)));
@@ -335,10 +330,7 @@ impl CacheArea {
 
     /// Snapshot for debugging/tests.
     pub fn snapshot_words(&self) -> Vec<u64> {
-        self.cache_words
-            .iter()
-            .map(|w| w.load(Ordering::Acquire))
-            .collect()
+        self.cache_words.iter().map(|w| w.load(Ordering::Acquire)).collect()
     }
 
     #[inline]
@@ -536,4 +528,3 @@ mod cache_area_tests {
         assert!(!c.contains(u64::MAX));
     }
 }
-

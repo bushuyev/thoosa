@@ -4,8 +4,8 @@ use rand::seq::SliceRandom;
 use rand::{SeedableRng, rngs::StdRng};
 use tch::Tensor;
 use thoosa_named_derive::Named;
-use thoosa_shared::traits::{AsyncStage, OutId, RunCtx, Stage, WithId};
 use thoosa_shared::ThoError;
+use thoosa_shared::traits::{AsyncStage, OutId, RunCtx, Stage, WithId};
 
 use crate as thoosa_common;
 use crate::runner::common::cachable::{Cached, DevicesWrap, SelectRef};
@@ -29,10 +29,7 @@ impl BatchBuilder {
 }
 
 impl OutId for BatchBuilder {
-    fn out_id(
-        &self,
-        input_id: &<Self::In<'static> as WithId>::ID,
-    ) -> <Self::Out as WithId>::ID {
+    fn out_id(&self, input_id: &<Self::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
         ModelTestId(format!("batch_{}", input_id.0).leak())
     }
 }
@@ -44,17 +41,7 @@ impl Stage for BatchBuilder {
 }
 
 impl AsyncStage for BatchBuilder {
-    // type RunInput = Arc<Self::In<'static>>;
-    // type RunOutput = Arc<DevicesWrap<Self::Out>>;
-
-    // fn run_input_id(input: &Self::In<'static>) -> &<<Self as Stage>::In<'static> as WithId>::ID {
-    //     WithId::id(input)
-    // }
-    async fn run(
-        self: Arc<Self>,
-        input: Self::In<'static>,
-        mut ctx: Self::Ctx,
-    ) -> Result<Self::Out, ThoError> {
+    async fn run(self: Arc<Self>, input: Self::In<'static>, mut ctx: Self::Ctx) -> Result<Self::Out, ThoError> {
         let (id_key, files) = (input.id.0.to_string(), input.files.clone());
 
         if files.is_empty() {
@@ -67,10 +54,7 @@ impl AsyncStage for BatchBuilder {
             return Err(ThoError::new("batch_size must be >= 1"));
         }
 
-        let seed: u64 = id_key
-            .as_bytes()
-            .iter()
-            .fold(0u64, |acc, b| acc.wrapping_mul(131).wrapping_add(*b as u64));
+        let seed: u64 = id_key.as_bytes().iter().fold(0u64, |acc, b| acc.wrapping_mul(131).wrapping_add(*b as u64));
         let mut rng = StdRng::seed_from_u64(seed);
         let n_files = files.len();
         let chosen: Vec<usize> = if self.batch_size <= n_files {
@@ -93,9 +77,7 @@ impl AsyncStage for BatchBuilder {
         let mut feats: Vec<Arc<DevicesWrap<ThoTensor<ABData, ModelTestId>>>> = Vec::with_capacity(self.batch_size);
         for &fi in &chosen {
             let (f, lbl) = files[fi];
-            let feat = Arc::clone(&self.loader)
-                .run_cached(f.into(), ctx.branch(false))
-                .await?;
+            let feat = Arc::clone(&self.loader).run_cached(f.into(), ctx.branch(false)).await?;
             feats.push(feat);
             label_vec.push(lbl);
         }
@@ -103,11 +85,10 @@ impl AsyncStage for BatchBuilder {
         let mut rows: Vec<Tensor> = Vec::with_capacity(label_vec.len());
         for (idx, feat) in feats.iter().enumerate() {
             let label = label_vec[idx];
-            let b_t= feat.select_ref(0, None).await?;
+            let b_t = feat.select_ref(0, None).await?;
 
             let t: &Tensor = &*b_t.as_ref().local()?;
             let y = Tensor::full([t.size()[0], 1], label, (t.kind(), t.device()));
-
 
             rows.push(Tensor::cat(&[t.copy(), y], 1));
         }

@@ -5,8 +5,7 @@ use std::{
 };
 
 fn main() {
-    let libtorch = env::var("LIBTORCH")
-        .expect("LIBTORCH must be set, e.g. via .cargo/config.toml");
+    let libtorch = env::var("LIBTORCH").expect("LIBTORCH must be set, e.g. via .cargo/config.toml");
 
     let libtorch = libtorch.trim_end_matches('/');
     // CMake discovers CUDA by default; overrides support alternate installations and cross builds.
@@ -19,7 +18,9 @@ fn main() {
         ("THOOSA_CUDA_DRIVER_LIBRARY", "CUDA_cuda_driver_LIBRARY"),
     ] {
         println!("cargo:rerun-if-env-changed={env_name}");
-        if let Ok(value) = env::var(env_name) { config.define(cmake_name, value); }
+        if let Ok(value) = env::var(env_name) {
+            config.define(cmake_name, value);
+        }
     }
     let dst = config.generator("Ninja").build_target("thoosa_shims").build();
 
@@ -36,28 +37,15 @@ fn main() {
     // 3: target/x86_64-unknown-linux-gnu/release-opt1
     //
     // This works for custom profiles, unlike env::var("PROFILE").
-    let cargo_profile_dir = out_dir
-        .ancestors()
-        .nth(3)
-        .expect("unexpected OUT_DIR layout")
-        .to_path_buf();
+    let cargo_profile_dir = out_dir.ancestors().nth(3).expect("unexpected OUT_DIR layout").to_path_buf();
 
     let cmake_build_dir = dst.join("build");
 
-    copy_file(
-        cmake_build_dir.join("libthoosa_shims.so"),
-        cargo_profile_dir.join("libthoosa_shims.so"),
-    );
+    copy_file(cmake_build_dir.join("libthoosa_shims.so"), cargo_profile_dir.join("libthoosa_shims.so"));
 
-    copy_file(
-        cmake_build_dir.join("compile_commands.json"),
-        cargo_profile_dir.join("compile_commands.json"),
-    );
+    copy_file(cmake_build_dir.join("compile_commands.json"), cargo_profile_dir.join("compile_commands.json"));
 
-    println!(
-        "cargo:rustc-link-search=native={}",
-        cmake_build_dir.display()
-    );
+    println!("cargo:rustc-link-search=native={}", cmake_build_dir.display());
 
     println!("cargo:rustc-link-lib=dylib=thoosa_shims");
 
@@ -88,21 +76,10 @@ fn copy_file(src: impl AsRef<Path>, dst: impl AsRef<Path>) {
     let dst = dst.as_ref();
 
     if let Some(parent) = dst.parent() {
-        fs::create_dir_all(parent).unwrap_or_else(|e| {
-            panic!(
-                "failed to create destination directory {}: {e}",
-                parent.display()
-            )
-        });
+        fs::create_dir_all(parent).unwrap_or_else(|e| panic!("failed to create destination directory {}: {e}", parent.display()));
     }
 
-    fs::copy(src, dst).unwrap_or_else(|e| {
-        panic!(
-            "failed to copy {} -> {}: {e}",
-            src.display(),
-            dst.display()
-        )
-    });
+    fs::copy(src, dst).unwrap_or_else(|e| panic!("failed to copy {} -> {}: {e}", src.display(), dst.display()));
 }
 
 fn rerun_if_changed(path: &str) {

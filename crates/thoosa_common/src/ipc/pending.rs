@@ -1,9 +1,9 @@
-use std::collections::HashMap;
+use super::worker_msg::{CudaWorkerId, CudaWorkerMsgIn, CudaWorkerMsgOut};
 use parking_lot::Mutex;
+use std::collections::HashMap;
+use thoosa_shared::ThoError;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
-use thoosa_shared::ThoError;
-use super::worker_msg::{CudaWorkerId, CudaWorkerMsgIn, CudaWorkerMsgOut};
 
 pub(super) type KeepAlive = Box<dyn Send>;
 type Reply = oneshot::Sender<Result<CudaWorkerMsgOut, ThoError>>;
@@ -28,9 +28,13 @@ impl Drop for State {
         // Quarantine them for process lifetime when exit cannot be established.
         if !self.exited {
             for (_, request) in self.requests.drain() {
-                if let Some(keepalive) = request.keepalive { std::mem::forget(keepalive); }
+                if let Some(keepalive) = request.keepalive {
+                    std::mem::forget(keepalive);
+                }
             }
-            for keepalive in self.retained.drain(..) { std::mem::forget(keepalive); }
+            for keepalive in self.retained.drain(..) {
+                std::mem::forget(keepalive);
+            }
         }
     }
 }
@@ -51,7 +55,11 @@ impl std::fmt::Debug for PendingRequests {
 
 impl PendingRequests {
     pub fn new(worker: CudaWorkerId) -> Self {
-        Self { worker, state: Mutex::new(State::default()), failed: CancellationToken::new() }
+        Self {
+            worker,
+            state: Mutex::new(State::default()),
+            failed: CancellationToken::new(),
+        }
     }
 
     pub fn enqueue(&self, permit: mpsc::Permit<'_, CudaWorkerMsgIn>, request: CudaWorkerMsgIn, reply: Reply, keepalive: Option<KeepAlive>, shutdown: bool) -> Result<(), ThoError> {
@@ -60,8 +68,12 @@ impl PendingRequests {
         if state.exited {
             return Err(ThoError::CudaBeingRecovered);
         }
-        if !shutdown && let Some(error) = &state.closed { return Err(error.clone()); }
-        if state.requests.contains_key(&request.request_id) { return Err(ThoError::new("duplicate worker request identity")); }
+        if !shutdown && let Some(error) = &state.closed {
+            return Err(error.clone());
+        }
+        if state.requests.contains_key(&request.request_id) {
+            return Err(ThoError::new("duplicate worker request identity"));
+        }
         state.requests.insert(request.request_id, Request { reply, keepalive });
         permit.send(request);
         Ok(())
@@ -91,18 +103,24 @@ impl PendingRequests {
 
     pub fn complete(&self, response: CudaWorkerMsgOut) -> Result<(), ThoError> {
         response.worker_id.check(self.worker)?;
-        if let super::worker_msg::OpResult::Failed(error) = &response.status && error.requires_worker_exit() {
+        if let super::worker_msg::OpResult::Failed(error) = &response.status
+            && error.requires_worker_exit()
+        {
             // A failed CUDA synchronization cannot certify that device access
             // to host storage ended. Report promptly, retain storage until exit.
             let request = {
                 let mut state = self.state.lock();
                 state.closed.get_or_insert_with(|| error.clone().into());
                 let mut request = state.requests.remove(&response.request_id);
-                if let Some(keepalive) = request.as_mut().and_then(|request| request.keepalive.take()) { state.retained.push(keepalive); }
+                if let Some(keepalive) = request.as_mut().and_then(|request| request.keepalive.take()) {
+                    state.retained.push(keepalive);
+                }
                 request
             };
             self.failed.cancel();
-            if let Some(request) = request { let _ = request.reply.send(Ok(response)); }
+            if let Some(request) = request {
+                let _ = request.reply.send(Ok(response));
+            }
             return Ok(());
         }
         self.finish_one(response.request_id, Ok(response));
@@ -137,24 +155,30 @@ impl PendingRequests {
             state.closed.get_or_insert(error.clone());
             let mut requests = std::mem::take(&mut state.requests);
             for request in requests.values_mut() {
-                if let Some(keepalive) = request.keepalive.take() { state.retained.push(keepalive); }
+                if let Some(keepalive) = request.keepalive.take() {
+                    state.retained.push(keepalive);
+                }
             }
             requests
         };
         // Cancellation or an unreapable child must not strand request waiters.
         // Their allocations stay retained (and leak on Drop if exit is unknown).
-        for (_, request) in requests { let _ = request.reply.send(Err(error.clone())); }
+        for (_, request) in requests {
+            let _ = request.reply.send(Err(error.clone()));
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::worker_msg::{OpResult, Operation};
     use super::*;
     use std::sync::Arc;
-    use super::super::worker_msg::{Operation, OpResult};
     use thoosa_shared::{CudaAction, CudaDeviceGeneration};
 
-    fn worker() -> CudaWorkerId { CudaWorkerId { device_idx: 1, generation: CudaDeviceGeneration(3) } }
+    fn worker() -> CudaWorkerId {
+        CudaWorkerId { device_idx: 1, generation: CudaDeviceGeneration(3) }
+    }
 
     #[tokio::test]
     async fn test_retirement_closes_registration_and_retains_cancelled_request_storage_until_exit() {
@@ -197,7 +221,13 @@ mod tests {
                 assert!(storage_weak.upgrade().is_some() && request_weak.upgrade().is_some());
                 pending.exited(ThoError::CudaBeingRecovered);
             } else {
-                pending.complete(CudaWorkerMsgOut { worker_id: worker(), request_id: 1, status: OpResult::Ok(None) }).unwrap();
+                pending
+                    .complete(CudaWorkerMsgOut {
+                        worker_id: worker(),
+                        request_id: 1,
+                        status: OpResult::Ok(None),
+                    })
+                    .unwrap();
             }
             assert!(storage_weak.upgrade().is_none() && request_weak.upgrade().is_none());
         }
@@ -212,7 +242,13 @@ mod tests {
         let (reply, response) = oneshot::channel();
         pending.enqueue(tx.reserve().await.unwrap(), CudaWorkerMsgIn::new(worker(), 1, Operation::Debug), reply, Some(Box::new(storage)), false).unwrap();
         // Use the constructor so injected CUDA errors capture their backtrace.
-        pending.complete(CudaWorkerMsgOut { worker_id: worker(), request_id: 1, status: thoosa_shared::tho_error::cuda_error(CudaAction::NeedsRestart, "failed synchronization".into()).into() }).unwrap();
+        pending
+            .complete(CudaWorkerMsgOut {
+                worker_id: worker(),
+                request_id: 1,
+                status: thoosa_shared::tho_error::cuda_error(CudaAction::NeedsRestart, "failed synchronization".into()).into(),
+            })
+            .unwrap();
         assert!(matches!(response.await.unwrap().unwrap().status, OpResult::Failed(_)));
         assert!(pending.failed.is_cancelled());
         assert!(pending.failure().needs_cuda_recovery());
@@ -232,7 +268,13 @@ mod tests {
         // A failed drain is the last-resort transport failure, even though both
         // underlying errors are recoverable in isolation. DMA may still be live.
         let error = crate::cuda_copier::complete_cuda_stream(Err(ThoError::oom()), || Err(ThoError::oom())).result.unwrap_err();
-        pending.complete(CudaWorkerMsgOut { worker_id: worker(), request_id: 1, status: error.into() }).unwrap();
+        pending
+            .complete(CudaWorkerMsgOut {
+                worker_id: worker(),
+                request_id: 1,
+                status: error.into(),
+            })
+            .unwrap();
         assert!(matches!(response.await.unwrap().unwrap().status, OpResult::Failed(_)));
         assert!(pending.failed.is_cancelled());
         assert!(pending.failure().is_cuda_recovery_failed() && !pending.failure().needs_cuda_recovery());

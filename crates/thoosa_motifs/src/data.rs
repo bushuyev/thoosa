@@ -1,8 +1,8 @@
-use anyhow::Context as _;
-use thoosa_common::tch_error::tch_result;
 use crate::motifs_store::MotifsStore;
+use anyhow::Context as _;
 use std::marker::PhantomData;
 use std::path::Path;
+use thoosa_common::tch_error::tch_result;
 
 use log::debug;
 use polars::prelude::*;
@@ -47,57 +47,21 @@ pub fn series_to_tensor(s: &Series) -> anyhow::Result<Tensor> {
     Ok(match s.dtype() {
         // DataType::UInt8 => {}
         // DataType::UInt16 => {}
-        DataType::UInt32 => Tensor::f_from_slice(
-            s.u32()?
-                .to_vec()
-                .iter()
-                .map(|v| v.unwrap_or_default() as i32)
-                .collect::<Vec<i32>>()
-                .as_slice(),
-        )?,
-        DataType::UInt64 => Tensor::f_from_slice(
-            s.i64()?
-                .to_vec()
-                .iter()
-                .map(|v| v.unwrap_or_default() as i32)
-                .collect::<Vec<i32>>()
-                .as_slice(),
-        )?,
+        DataType::UInt32 => Tensor::f_from_slice(s.u32()?.to_vec().iter().map(|v| v.unwrap_or_default() as i32).collect::<Vec<i32>>().as_slice())?,
+        DataType::UInt64 => Tensor::f_from_slice(s.i64()?.to_vec().iter().map(|v| v.unwrap_or_default() as i32).collect::<Vec<i32>>().as_slice())?,
         // DataType::Int8 => {}
         // DataType::Int16 => {}
-        DataType::Int32 => Tensor::f_from_slice(
-            s.u32()?
-                .to_vec()
-                .iter()
-                .map(|v| v.unwrap_or_default() as i32)
-                .collect::<Vec<i32>>()
-                .as_slice(),
-        )?,
+        DataType::Int32 => Tensor::f_from_slice(s.u32()?.to_vec().iter().map(|v| v.unwrap_or_default() as i32).collect::<Vec<i32>>().as_slice())?,
         // DataType::Int64 => {
         //     // tensors.push(Tensor::from_slice(s.i64()?.to_vec().iter().map(|v| v.unwrap_or_default()).collect::<Vec<i64>>().as_slice()));
         // }
-        DataType::Float32 => Tensor::f_from_slice(
-            s.f32()?
-                .to_vec()
-                .iter()
-                .map(|v| v.unwrap_or_default())
-                .collect::<Vec<f32>>()
-                .as_slice(),
-        )?,
-        DataType::Float64 => Tensor::f_from_slice(
-            s.f64()?
-                .to_vec()
-                .iter()
-                .map(|v| v.unwrap_or_default() as f32)
-                .collect::<Vec<f32>>()
-                .as_slice(),
-        )?,
+        DataType::Float32 => Tensor::f_from_slice(s.f32()?.to_vec().iter().map(|v| v.unwrap_or_default()).collect::<Vec<f32>>().as_slice())?,
+        DataType::Float64 => Tensor::f_from_slice(s.f64()?.to_vec().iter().map(|v| v.unwrap_or_default() as f32).collect::<Vec<f32>>().as_slice())?,
         _ => {
             todo!()
         }
     })
 }
-
 
 #[allow(dead_code)]
 fn split_frame_by_offsets<I>(mut df: DataFrame, offsets_sec: I) -> PolarsResult<Vec<DataFrame>>
@@ -106,17 +70,10 @@ where
 {
     let shape = df.shape();
     let it_1 = offsets_sec.clone().into_iter();
-    let mut it_2 = offsets_sec
-        .into_iter()
-        .chain(std::iter::once(shape.0 as i64));
+    let mut it_2 = offsets_sec.into_iter().chain(std::iter::once(shape.0 as i64));
     it_2.next();
 
-    let ids = it_2
-        .zip(it_1)
-        .map(|(v2, v1)| v2 - v1)
-        .enumerate()
-        .flat_map(|(i, frag)| std::iter::repeat(i as i64).take(frag as usize))
-        .collect::<Vec<i64>>();
+    let ids = it_2.zip(it_1).map(|(v2, v1)| v2 - v1).enumerate().flat_map(|(i, frag)| std::iter::repeat(i as i64).take(frag as usize)).collect::<Vec<i64>>();
 
     assert!(ids.len() > 1);
 
@@ -125,18 +82,13 @@ where
     df.partition_by::<_, &str>(["frag_id"], false)
 }
 
-pub async fn load_to_logits_tensors(
-    group: &str,
-    store: Arc<dyn MotifsStore>,
-) -> anyhow::Result<Vec<(Resource, Vec<f32>)>> {
-    Ok(t!(store
-        .list_resource_random_in_group(group)).await.with_context(|| format!("loading resources in group {group}"))?
+pub async fn load_to_logits_tensors(group: &str, store: Arc<dyn MotifsStore>) -> anyhow::Result<Vec<(Resource, Vec<f32>)>> {
+    Ok(t!(store.list_resource_random_in_group(group))
+        .await
+        .with_context(|| format!("loading resources in group {group}"))?
         .into_iter()
         .map(move |(resource_id, labels_p)| {
-            debug!(
-                "load_to_logits_tensors: resourceId={resource_id:?} labels_p={:?}",
-                labels_p
-            );
+            debug!("load_to_logits_tensors: resourceId={resource_id:?} labels_p={:?}", labels_p);
             (
                 resource_id,
                 labels_p, //Box::new(Tensor::from_slice(labels_p.as_slice()).to_device(*device))
@@ -145,18 +97,10 @@ pub async fn load_to_logits_tensors(
         .collect())
 }
 
-pub fn parquet_to_tensor_by_path(
-    path: impl AsRef<Path>,
-    device: Device,
-) -> anyhow::Result<Tensor> {
+pub fn parquet_to_tensor_by_path(path: impl AsRef<Path>, device: Device) -> anyhow::Result<Tensor> {
     let df = read_parquet_to_df(path)?;
 
-    let tensor = Tensor::f_vstack(
-        &df.columns()
-            .into_iter()
-            .map(|s| series_to_tensor(s.as_series().context("Parquet column is not a materialized series")?))
-            .collect::<anyhow::Result<Vec<Tensor>>>()?,
-    )?;
+    let tensor = Tensor::f_vstack(&df.columns().into_iter().map(|s| series_to_tensor(s.as_series().context("Parquet column is not a materialized series")?)).collect::<anyhow::Result<Vec<Tensor>>>()?)?;
     Ok(tensor.f_set_requires_grad(false)?.f_to_device(device)?)
 }
 
@@ -165,7 +109,8 @@ pub fn read_parquet_to_df(path: impl AsRef<Path>) -> anyhow::Result<DataFrame> {
 
     let df = LazyFrame::scan_parquet(
         //TODO read_parallel?
-        PlRefPath::try_from_path(path.as_ref())?, scan_conf,
+        PlRefPath::try_from_path(path.as_ref())?,
+        scan_conf,
     )?;
 
     df.collect().with_context(|| format!("reading Parquet file {}", path.as_ref().display()))
@@ -198,15 +143,8 @@ pub fn save_tensor(columns: &[&str], ids: Vec<String>, t: &Tensor, path: &str) -
     Ok(())
 }
 
-pub async fn labeled_tensors_by_descr<'a>(
-    label: &String,
-    resource_set_descr: &String,
-    store: Arc<dyn MotifsStore>,
-) -> anyhow::Result<Vec<(i64, Vec<Resource>)>> {
-    debug!(
-        "labeled_tensors_by_descr: label={:?} resource_set_descr={:?}",
-        label, resource_set_descr
-    );
+pub async fn labeled_tensors_by_descr<'a>(label: &String, resource_set_descr: &String, store: Arc<dyn MotifsStore>) -> anyhow::Result<Vec<(i64, Vec<Resource>)>> {
+    debug!("labeled_tensors_by_descr: label={:?} resource_set_descr={:?}", label, resource_set_descr);
 
     let store_lock = store;
 
@@ -215,14 +153,16 @@ pub async fn labeled_tensors_by_descr<'a>(
             1,
             store_lock
                 .list_resource_set_resources_by_descr(resource_set_descr)
-                .instrument(tracing::debug_span!("labeled_tensors_by_descr/1", file = file!(), line = line!())).await
+                .instrument(tracing::debug_span!("labeled_tensors_by_descr/1", file = file!(), line = line!()))
+                .await
                 .with_context(|| format!("loading resource set {resource_set_descr}"))?,
         ),
         (
             0,
             store_lock
                 .list_resource_random_not_labeled(label.as_str(), 100)
-                .instrument(tracing::debug_span!("labeled_tensors_by_descr/2", file = file!(), line = line!())).await
+                .instrument(tracing::debug_span!("labeled_tensors_by_descr/2", file = file!(), line = line!()))
+                .await
                 .with_context(|| format!("loading resources without label {label}"))?,
         ),
     ])
@@ -230,18 +170,17 @@ pub async fn labeled_tensors_by_descr<'a>(
 
 #[cfg(test)]
 mod data_tests {
+    use crate::data::split_frame_by_offsets;
     use polars::prelude::*;
     use tch::Device::Cpu;
     use tch::Kind::Float;
     use tch::{IndexOp, Tensor};
-    use crate::data::split_frame_by_offsets;
     use thoosa_shared::test_utils::init_test_logging;
 
     #[ctor::ctor]
     fn init() {
         init_test_logging();
     }
-
 
     #[test]
     pub fn test_split_frame_by_offsets() -> anyhow::Result<()> {
@@ -304,20 +243,7 @@ mod data_tests {
 
         let path = "/tmp/sub.csv";
         let ids = vec!["a111".to_string(), "b222".to_string(), "c333".to_string()];
-        super::save_tensor(
-            &[
-                "eeg_id",
-                "seizure_vote",
-                "lpd_vote",
-                "gpd_vote",
-                "lrda_vote",
-                "grda_vote",
-                "other_vote",
-            ],
-            ids.clone(),
-            &t,
-            path,
-        )?;
+        super::save_tensor(&["eeg_id", "seizure_vote", "lpd_vote", "gpd_vote", "lrda_vote", "grda_vote", "other_vote"], ids.clone(), &t, path)?;
 
         let lf = LazyCsvReader::new(path.into()).finish().unwrap().collect()?;
         let mut checked = 0;
@@ -329,13 +255,7 @@ mod data_tests {
                 }
             } else {
                 for (row_i, v) in column.f64()?.iter().enumerate() {
-                    assert_eq!(
-                        format!(
-                            "{:.3}",
-                            t.i((row_i as i64, column_i as i64 - 1)).double_value(&[])
-                        ),
-                        format!("{:.3}", v.unwrap())
-                    );
+                    assert_eq!(format!("{:.3}", t.i((row_i as i64, column_i as i64 - 1)).double_value(&[])), format!("{:.3}", v.unwrap()));
                     checked += 1;
                 }
             }

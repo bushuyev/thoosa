@@ -9,7 +9,6 @@ const RUN_CONFIG_ATTR: &'static str = "run_config";
 // Used on enum variants to define the fallback when no variant selection can be inferred.
 const RUN_CONFIG_DEFAULT_ATTR: &'static str = "run_config_default";
 
-
 /// Derives run-config helper types for Thoosa.
 ///
 /// This macro generates `{TargetStruct}RangeOrValue`, where every field marked
@@ -23,10 +22,7 @@ const RUN_CONFIG_DEFAULT_ATTR: &'static str = "run_config_default";
 ///
 /// `run_config_opt`/`run_config_grid` sources are generated accordingly and expose
 /// `opt_run_configs()` / `grid_run_configs()` helpers.
-#[proc_macro_derive(
-    ThoosaRunConfig,
-    attributes(run_config, run_config_opt, run_config_grid, run_config_default, config_scalar)
-)]
+#[proc_macro_derive(ThoosaRunConfig, attributes(run_config, run_config_opt, run_config_grid, run_config_default, config_scalar))]
 pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
     let ast = parse_macro_input!(input as DeriveInput);
     thoosa_args_derive_impl(ast).into()
@@ -52,7 +48,6 @@ fn display_pattern(variant: &TokenStream2) -> TokenStream2 {
 }
 
 fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
-
     let target_struct_ident = &ast.ident;
     let target_struct_name = &ast.ident.to_string();
 
@@ -110,7 +105,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
         syn::Data::Struct(data_struct) => {
             match &data_struct.fields {
                 syn::Fields::Named(named_fields) => {
-                    let  token_streams = named_fields.named.iter().fold(TokenStreams::new(), |mut a, field| {
+                    let token_streams = named_fields.named.iter().fold(TokenStreams::new(), |mut a, field| {
                         let field_ident = field.ident.as_ref().unwrap();
                         let camel_field_ident = Ident::new(&thoosa_shared::snake_to_camel(&field_ident.to_string()), fields_enum_ident.span());
                         let field_type = field.ty.clone();
@@ -118,7 +113,8 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                         //eprintln!("field_type={}", field_type.to_token_stream());
 
                         if has_attr(field, RUN_CONFIG_ATTR) {
-                            if let Some(inner_ty) = get_option_inner_ty(&field_type) {//is Option
+                            if let Some(inner_ty) = get_option_inner_ty(&field_type) {
+                                //is Option
                                 if let Some(vec_inner_ty) = get_vec_inner_ty(&inner_ty) {
                                     a.has_vec_indexes = true;
                                     let _vec_inner_ty_str = vec_inner_ty.to_token_stream().to_string();
@@ -153,7 +149,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                                             }
                                         });
 
-                                        a.builder_assignments.push(quote!{
+                                        a.builder_assignments.push(quote! {
                                             #field_ident: {
                                                 if self.#field_ident.is_empty() {
                                                     None
@@ -200,7 +196,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                                         });
 
                                         let field_ident_str = field_ident.to_string();
-                                        a.builder_assignments.push(quote!{
+                                        a.builder_assignments.push(quote! {
                                             #field_ident: {
                                                 if self.#field_ident.is_empty() {
                                                     None
@@ -225,7 +221,6 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                                     });
                                     a.field_names.push(field_ident.to_string());
 
-
                                     a.range_or_value_add_calls.push(quote! {
                                         if let Some(v) = self.#field_ident.as_ref(){
                                             thoosa_shared::add_range_or_value::<#inner_ty, P>(append(#fields_enum_ident::#camel_field_ident), v, const_params, grid_params, opt_params);
@@ -243,10 +238,9 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                                         }
                                     });
 
-                                    a.builder_assignments.push(quote!{
+                                    a.builder_assignments.push(quote! {
                                         #field_ident: self.#field_ident,
                                     });
-
                                 } else {
                                     let field_type_range_or_value = Ident::new(&format!("{}RangeOrValue", inner_ty.to_token_stream().to_string()), camel_field_ident.span());
 
@@ -286,7 +280,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                                         }
                                     });
 
-                                    a.builder_assignments.push(quote!{
+                                    a.builder_assignments.push(quote! {
                                         #field_ident: self.#field_ident.as_ref().map(|b|b.build()).transpose()?,
                                     });
                                 }
@@ -323,7 +317,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                                         });
 
                                         let _expect_msg = format!("no {}", field_ident);
-                                        a.builder_assignments.push(quote!{
+                                        a.builder_assignments.push(quote! {
                                             #field_ident: {
                                                 // assert!(!self.#field_ident.is_empty(), #expect_msg); - tmp fix for empty SelectMotifsRunConfig motif_criteria in bird_clef
                                                 let mut v = Vec::with_capacity(self.#field_ident.len());
@@ -366,7 +360,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
 
                                         let _expect_msg = format!("no {}", field_ident);
                                         let field_ident_str = field_ident.to_string();
-                                        a.builder_assignments.push(quote!{
+                                        a.builder_assignments.push(quote! {
                                             #field_ident: {
                                                 // assert!(!self.#field_ident.is_empty(), #expect_msg); - tmp fix for empty SelectMotifsRunConfig motif_criteria in bird_clef
                                                 let mut v = Vec::with_capacity(self.#field_ident.len());
@@ -403,10 +397,9 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                                     });
                                     let expect_msg = format!("no {}", field_ident);
 
-                                    a.builder_assignments.push(quote!{
+                                    a.builder_assignments.push(quote! {
                                         #field_ident: thoosa_shared::anyhow::Context::context(self.#field_ident, #expect_msg)?,
                                     });
-
                                 } else {
                                     let field_type_range_or_value = Ident::new(&format!("{}RangeOrValue", field_type.to_token_stream().to_string()), camel_field_ident.span());
 
@@ -435,13 +428,11 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                                         }
                                     });
 
-                                    a.builder_assignments.push(quote!{
+                                    a.builder_assignments.push(quote! {
                                         #field_ident: self.#field_ident.build()?,
                                     });
                                 }
-
                             }
-
                         } else {
                             a.range_or_value_fields.push(quote! {
                                 pub #field_ident: #field_type,
@@ -451,8 +442,8 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                             });
                             a.field_names.push(field_ident.to_string());
 
-
-                            if let Some(inner_ty) = get_option_inner_ty(&field_type) { //is Option
+                            if let Some(inner_ty) = get_option_inner_ty(&field_type) {
+                                //is Option
                                 a.builder_fields.push(quote! {
                                     #field_ident:#field_type,
                                 });
@@ -475,10 +466,9 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                                 });
 
                                 // keep for clearer error in expect below
-                                a.builder_assignments.push(quote!{
+                                a.builder_assignments.push(quote! {
                                     #field_ident: self.#field_ident.clone(),
                                 });
-
                             } else {
                                 a.builder_fields.push(quote! {
                                     #field_ident:Option<#field_type>,
@@ -499,11 +489,10 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
 
                                 let expect_msg = format!("no {}", field_ident);
 
-                                a.builder_assignments.push(quote!{
+                                a.builder_assignments.push(quote! {
                                     #field_ident: thoosa_shared::anyhow::Context::context(self.#field_ident.clone(), #expect_msg)?,
                                 });
                             }
-
                         }
 
                         a
@@ -570,18 +559,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                 }
                 _ => {
                     println!("unnamed fields");
-                    (
-                        quote! {},
-                        quote! {},
-                        quote! {},
-                        quote! {},
-                        quote! {},
-                        quote! {},
-                        quote! {},
-                        quote! {},
-                        quote! {},
-                        quote! {},
-                    )
+                    (quote! {}, quote! {}, quote! {}, quote! {}, quote! {}, quote! {}, quote! {}, quote! {}, quote! {}, quote! {})
                 }
             }
         }
@@ -590,10 +568,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
             // When a variant's inner config emits no params (e.g., empty struct or all Option=None),
             // we emit a synthetic marker field (<Variant>__Selected) to force a path and lock the variant.
             // This prevents falling back to the default variant when a specific enum variant was chosen.
-            let builder_enum_field = Ident::new(
-                &thoosa_shared::camel_to_snake(&builder_enum_ident.to_string()),
-                data_enum.variants.span(),
-            );
+            let builder_enum_field = Ident::new(&thoosa_shared::camel_to_snake(&builder_enum_ident.to_string()), data_enum.variants.span());
             let mut default_variant: Option<(Ident, syn::Type)> = None;
             let mut default_variant_error: Option<syn::Error> = None;
             let mut token_streams = TokenStreams::new();
@@ -603,33 +578,24 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                 if let syn::Fields::Unnamed(fields) = &variant.fields {
                     if fields.unnamed.len() == 1 {
                         let ty = &fields.unnamed.first().expect("no config type").ty;
-                        if variant
-                            .attrs
-                            .iter()
-                            .any(|attr| attr.path().is_ident(RUN_CONFIG_DEFAULT_ATTR))
-                        {
+                        if variant.attrs.iter().any(|attr| attr.path().is_ident(RUN_CONFIG_DEFAULT_ATTR)) {
                             // Only one default is allowed; it is used when *no* variant was inferred.
                             if default_variant.is_some() {
-                                default_variant_error = Some(syn::Error::new_spanned(
-                                    variant_ident,
-                                    "run_config_default can only be set on one variant",
-                                ));
+                                default_variant_error = Some(syn::Error::new_spanned(variant_ident, "run_config_default can only be set on one variant"));
                             } else {
                                 default_variant = Some((variant_ident.clone(), ty.clone()));
                             }
                         }
 
                         let ty_string = ty.to_token_stream().to_string();
-                        let field_type_range_or_value =
-                            Ident::new(&format!("{}RangeOrValue", ty_string), variant.ident.span());
+                        let field_type_range_or_value = Ident::new(&format!("{}RangeOrValue", ty_string), variant.ident.span());
 
                         token_streams.range_or_value_fields.push(quote! {
                             #variant_ident(#field_type_range_or_value<P>),
 
                         });
 
-                        let field_type_fields =
-                            Ident::new(&format!("{}Fields", ty_string), variant.ident.span());
+                        let field_type_fields = Ident::new(&format!("{}Fields", ty_string), variant.ident.span());
 
                         // Synthetic marker for "this enum variant was chosen" when no fields are emitted.
                         let marker_ident = Ident::new(&format!("{}__Selected", variant_ident), variant.ident.span());
@@ -641,9 +607,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                         token_streams.enum_fields.push(quote! {
                             #marker_ident
                         });
-                        token_streams
-                            .field_names
-                            .push(format!("{}.__selected", variant_ident));
+                        token_streams.field_names.push(format!("{}.__selected", variant_ident));
 
                         token_streams.range_or_value_add_calls.push(quote! {
                             #range_or_value_struct_ident::#variant_ident(v) => {
@@ -668,12 +632,8 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                             }
                         });
 
-                        let field_type_builder =
-                            Ident::new(&format!("{}Builder", ty_string), variant_ident.span());
-                        let field_ident = Ident::new(
-                            &thoosa_shared::camel_to_snake(&variant_ident.to_token_stream().to_string()),
-                            variant.ident.span(),
-                        );
+                        let field_type_builder = Ident::new(&format!("{}Builder", ty_string), variant_ident.span());
+                        let field_ident = Ident::new(&thoosa_shared::camel_to_snake(&variant_ident.to_token_stream().to_string()), variant.ident.span());
                         token_streams.builder_fields.push(quote! {
                             #field_ident:#field_type_builder,
                         });
@@ -682,13 +642,13 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                             #variant_ident,
                         });
 
-                        token_streams.builder_assignments.push(quote!{
+                        token_streams.builder_assignments.push(quote! {
                             Some(#builder_enum_ident::#variant_ident) => {
                                 #target_struct_ident::#variant_ident(self.#field_ident.build()?)
                             }
                         });
 
-                        token_streams.builder_add_val_match_cases.push(quote!{
+                        token_streams.builder_add_val_match_cases.push(quote! {
                             #fields_enum_ident::#variant_ident(sub_path) => {
                                 let prev = self.#builder_enum_field.replace(#builder_enum_ident::#variant_ident);
                                 thoosa_shared::anyhow::ensure!(prev.as_ref().map(|p|p==&#builder_enum_ident::#variant_ident).unwrap_or(true), "mixed fields from {:?} prev={prev:?}, path={path:?} ", #builder_enum_ident::#variant_ident);
@@ -696,7 +656,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                                 self.#field_ident.add_val(sub_path, val)?;
                             }
                         });
-                        token_streams.builder_add_val_match_cases.push(quote!{
+                        token_streams.builder_add_val_match_cases.push(quote! {
                             #fields_enum_ident::#marker_ident => {
                                 let prev = self.#builder_enum_field.replace(#builder_enum_ident::#variant_ident);
                                 thoosa_shared::anyhow::ensure!(prev.as_ref().map(|p|p==&#builder_enum_ident::#variant_ident).unwrap_or(true), "mixed fields from {:?} prev={prev:?}, path={path:?} ", #builder_enum_ident::#variant_ident);
@@ -747,16 +707,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                     #builder_enum_field:Option<#builder_enum_ident>,
             });
 
-            let (
-                range_or_value_fields,
-                enum_fields,
-                field_names,
-                add_range_or_value_calls,
-                builder_fields,
-                builder_enum_variants,
-                builder_assignments,
-                builder_add_val_match_cases,
-            ) = (
+            let (range_or_value_fields, enum_fields, field_names, add_range_or_value_calls, builder_fields, builder_enum_variants, builder_assignments, builder_add_val_match_cases) = (
                 token_streams.range_or_value_fields,
                 token_streams.enum_fields,
                 token_streams.field_names,
@@ -806,29 +757,12 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                 quote! {},
             )
         }
-        _ => (
-            quote! {},
-            quote! {},
-            quote! {},
-            quote! {},
-            quote! {},
-            quote! {},
-            quote! {},
-            quote! {},
-            quote! {},
-            quote! {},
-        ),
+        _ => (quote! {}, quote! {}, quote! {}, quote! {}, quote! {}, quote! {}, quote! {}, quote! {}, quote! {}, quote! {}),
     };
 
-    let has_run_config_opt = ast
-        .attrs
-        .iter()
-        .any(|attr| attr.path().is_ident("run_config_opt"));
+    let has_run_config_opt = ast.attrs.iter().any(|attr| attr.path().is_ident("run_config_opt"));
 
-    let has_run_config_grid = ast
-        .attrs
-        .iter()
-        .any(|attr| attr.path().is_ident("run_config_grid"));
+    let has_run_config_grid = ast.attrs.iter().any(|attr| attr.path().is_ident("run_config_grid"));
 
     let source_impl = if has_run_config_opt {
         quote! {
@@ -1058,7 +992,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
 
 #[cfg(test)]
 mod tests {
-    use super::{thoosa_args_derive_impl};
+    use super::thoosa_args_derive_impl;
     use quote::quote;
 
     #[test]

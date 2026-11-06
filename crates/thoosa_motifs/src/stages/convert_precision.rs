@@ -2,12 +2,7 @@ use clap::ValueEnum;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use thoosa_common::stages::convert_precision::{
-    ConvertPrecisionArgs as CommonConvertPrecisionArgs,
-    ConvertPrecisionBy as CommonConvertPrecisionBy,
-    ConvertPrecisionOutput as CommonConvertPrecisionOutput,
-    ConvertPrecisionStage as CommonConvertPrecisionStage,
-    ConvertedNet as CommonConvertedNet,
-    PrecisionModelType,
+    ConvertPrecisionArgs as CommonConvertPrecisionArgs, ConvertPrecisionBy as CommonConvertPrecisionBy, ConvertPrecisionOutput as CommonConvertPrecisionOutput, ConvertPrecisionStage as CommonConvertPrecisionStage, ConvertedNet as CommonConvertedNet, PrecisionModelType,
 };
 use thoosa_common::ws::NET_WEIGHTS_FILE;
 use thoosa_shared::run_configs::RunConfigId;
@@ -63,18 +58,10 @@ impl PrecisionModelType<dyn MotifsWorkspace> for ConvertPrecisionNetType {
     }
 
     fn run_config_id(self, weights_path: &Path) -> Option<RunConfigId> {
-        let base_path = if weights_path.file_name().and_then(|v| v.to_str()) == Some(NET_WEIGHTS_FILE) {
-            weights_path.parent()?
-        } else {
-            weights_path
-        };
+        let base_path = if weights_path.file_name().and_then(|v| v.to_str()) == Some(NET_WEIGHTS_FILE) { weights_path.parent()? } else { weights_path };
 
         match self {
-            Self::Motifs => base_path
-                .file_stem()
-                .and_then(|v| v.to_str())
-                .and_then(|v| v.rsplit_once('_').map(|(_, run_config_id)| run_config_id).or(Some(v)))
-                .and_then(|v| v.parse::<RunConfigId>().ok()),
+            Self::Motifs => base_path.file_stem().and_then(|v| v.to_str()).and_then(|v| v.rsplit_once('_').map(|(_, run_config_id)| run_config_id).or(Some(v))).and_then(|v| v.parse::<RunConfigId>().ok()),
             Self::Labels | Self::Final => base_path.file_stem().and_then(|v| v.to_str()).and_then(|v| v.parse::<RunConfigId>().ok()),
             Self::All => None,
         }
@@ -89,7 +76,6 @@ pub type ConvertPrecisionStage<C> = CommonConvertPrecisionStage<C, dyn MotifsWor
 
 #[cfg(test)]
 mod tests {
-    use thoosa_common::tch_error::tch_result;
     use super::{ConvertPrecisionArgs, ConvertPrecisionBy, ConvertPrecisionInput, ConvertPrecisionNetType, ConvertPrecisionStage, ConvertPrecisionTarget};
     use crate::train_nets::{FinalNetParams, LabelNetParams, LabelNetTypeParams, final_net, lin_label_node};
     use parking_lot::RwLock;
@@ -103,6 +89,7 @@ mod tests {
     use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::runner::run_ctx::RunCtxImpl;
+    use thoosa_common::tch_error::tch_result;
     use thoosa_common::ws::WsConfigs;
     use thoosa_shared::traits::AsyncStage;
     use thoosa_shared::{ThoError, cdt_for_dir};
@@ -132,12 +119,7 @@ mod tests {
         let ws = Arc::new(RwLock::new(ws_box));
         let args = ConvertPrecisionArgs::new(ConvertPrecisionBy::Path(PathBuf::from("final").join(&net_id)), precision_target);
         let stage = Arc::new(ConvertPrecisionStage::<RunCtxImpl>::new(&ws, args));
-        let output = stage
-            .run(
-                ConvertPrecisionInput::new(),
-                RunCtxImpl::new(0, "convert_precision_test"),
-            )
-            .await?;
+        let output = stage.run(ConvertPrecisionInput::new(), RunCtxImpl::new(0, "convert_precision_test")).await?;
         let output = Arc::into_inner(output).expect("stage output should not be shared");
         assert_eq!(output.converted().len(), 1);
 
@@ -154,7 +136,7 @@ mod tests {
         let test_dir = Path::new("/tmp").join(format!("convert_precision_{}", cdt_for_dir()));
         let ws_box = crate::motifs_ws::new_motifs_workspace(test_dir, WsConfigs::new(2, 100, 100))?;
 
-        let params = LabelNetParams::new(2, LabelNetTypeParams::LinNetParams(LinLenNetParams{ layers: 2, features: 10 }));
+        let params = LabelNetParams::new(2, LabelNetTypeParams::LinNetParams(LinLenNetParams { layers: 2, features: 10 }));
         let mut vs = VarStore::new(Device::Cpu);
         let _: Box<dyn ThoModule<AnyDims, AnyDims>> = lin_label_node(&params)?.build_tch_module(&vs.root())?;
         vs.freeze();
@@ -163,12 +145,7 @@ mod tests {
         let ws = Arc::new(RwLock::new(ws_box));
         let args = ConvertPrecisionArgs::new(ConvertPrecisionBy::Path(PathBuf::from(&net_id)), precision_target);
         let stage = Arc::new(ConvertPrecisionStage::<RunCtxImpl>::new(&ws, args));
-        let output = stage
-            .run(
-                ConvertPrecisionInput::new(),
-                RunCtxImpl::new(0, "convert_precision_test"),
-            )
-            .await?;
+        let output = stage.run(ConvertPrecisionInput::new(), RunCtxImpl::new(0, "convert_precision_test")).await?;
         let output = Arc::into_inner(output).expect("stage output should not be shared");
         assert_eq!(output.converted().len(), 1);
 
@@ -194,23 +171,12 @@ mod tests {
         let weights_path = net_dir.join("weights.safetensors");
         let weight = Tensor::randn([1, 1, 4], (Kind::Float, Device::Cpu));
         let bias = Tensor::zeros([1], (Kind::Float, Device::Cpu));
-        tch_result(Tensor::write_safetensors(
-            &[
-                ("seq_4.motif_0_conv.weight", &weight),
-                ("seq_4.motif_0_conv.bias", &bias),
-            ],
-            &weights_path,
-        ))?;
+        tch_result(Tensor::write_safetensors(&[("seq_4.motif_0_conv.weight", &weight), ("seq_4.motif_0_conv.bias", &bias)], &weights_path))?;
 
         let ws = Arc::new(RwLock::new(ws_box));
         let args = ConvertPrecisionArgs::new(ConvertPrecisionBy::Type(ConvertPrecisionNetType::Motifs), ConvertPrecisionTarget::Fp16);
         let stage = Arc::new(ConvertPrecisionStage::<RunCtxImpl>::new(&ws, args));
-        let output = stage
-            .run(
-                ConvertPrecisionInput::new(),
-                RunCtxImpl::new(0, "convert_precision_names_test"),
-            )
-            .await?;
+        let output = stage.run(ConvertPrecisionInput::new(), RunCtxImpl::new(0, "convert_precision_names_test")).await?;
         let output = Arc::into_inner(output).expect("stage output should not be shared");
         assert_eq!(output.converted().len(), 1);
 

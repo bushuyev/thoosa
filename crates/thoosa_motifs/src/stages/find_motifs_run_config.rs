@@ -23,12 +23,12 @@ use thoosa_cpu_data_derive::CpuData;
 use thoosa_properties_map::{FromHashmap, ToHashmap};
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
+use thoosa_shared::F64BitsKey;
 use thoosa_shared::applicables_runner::Output;
 use thoosa_shared::run_configs::{RunConfig, RunConfigId};
 use thoosa_shared::tracked_await::t;
-use thoosa_shared::traits::{Named};
+use thoosa_shared::traits::Named;
 use thoosa_shared::val::Val;
-use thoosa_shared::F64BitsKey;
 
 //TODO move to find, + nets move out of common
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug)]
@@ -54,7 +54,6 @@ pub struct FindMotifsRunConfig {
     #[in_map]
     pub min_slices: Option<u32>,
 
-
     #[run_config]
     #[in_map]
     pub max_slices: Option<MaxSlices>,
@@ -73,7 +72,7 @@ pub enum FinderKind {
     /// bucket. The resulting kernel bank acts as motif detectors: each kernel is
     /// scanned over a spectrogram to find whether that relative frequency-time
     /// pattern appears anywhere in the signal.
-    Bucket(BucketRunConfig)
+    Bucket(BucketRunConfig),
 }
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Clone, PartialEq, Debug)]
@@ -89,56 +88,38 @@ pub struct CrossLoaderRunConfig {
 
 impl CrossLoaderRunConfig {
     pub fn new(similarity_metric: SimilarityMetric, slices_filter: SlicesFilter) -> Self {
-        Self {
-            similarity_metric,
-            slices_filter,
-        }
+        Self { similarity_metric, slices_filter }
     }
 }
 
 //keys which affect motif statistics - avg distance etc - used to cache random motifs
 #[derive(Debug, Hash, PartialEq, Eq, Clone)]
 pub struct StatsKeys {
-    keys:Vec<StatsKey>
+    keys: Vec<StatsKey>,
 }
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone)]
 pub enum StatsKey {
     Window(u32),
     ComparisonMethod(SimilarityMetric),
-    NotchBandFilterKey{low_hz:F64BitsKey, high_hz:F64BitsKey},
-    BandPassFilter{
-        low_hz: F64BitsKey,
-
-
-        band_hz: F64BitsKey,
-
-        kernel_size: u32,
-    },
-    SavGolFilter {
-        window_len: u32,
-        poly_order: i64,
-        stride: u32,
-        padding: Padding,
-    },
-    MedianFilter {
-        window: u32,
-    },
-    MovingAverageFilter {
-        window: u32,
-    },
+    NotchBandFilterKey { low_hz: F64BitsKey, high_hz: F64BitsKey },
+    BandPassFilter { low_hz: F64BitsKey, band_hz: F64BitsKey, kernel_size: u32 },
+    SavGolFilter { window_len: u32, poly_order: i64, stride: u32, padding: Padding },
+    MedianFilter { window: u32 },
+    MovingAverageFilter { window: u32 },
     Abs {},
-    Rftt {}
+    Rftt {},
 }
 
-impl Named for StatsKeys {//for  CachableIdTr
-
+impl Named for StatsKeys {
+    //for  CachableIdTr
 }
 
 impl From<&NotchBandFilterParams> for StatsKey {
     fn from(value: &NotchBandFilterParams) -> Self {
         StatsKey::NotchBandFilterKey {
-            low_hz: value.low_hz.into(), high_hz: value.high_hz.into()
+            low_hz: value.low_hz.into(),
+            high_hz: value.high_hz.into(),
         }
     }
 }
@@ -166,17 +147,13 @@ impl From<&SavGolFilterParams> for StatsKey {
 
 impl From<&MedianFilterParams> for StatsKey {
     fn from(value: &MedianFilterParams) -> Self {
-        StatsKey::MedianFilter {
-            window: value.window,
-        }
+        StatsKey::MedianFilter { window: value.window }
     }
 }
 
 impl From<&AverageFilterParams> for StatsKey {
     fn from(value: &AverageFilterParams) -> Self {
-        StatsKey::MovingAverageFilter {
-            window: value.window,
-        }
+        StatsKey::MovingAverageFilter { window: value.window }
     }
 }
 
@@ -186,12 +163,10 @@ impl From<&ZNormFilterParams> for StatsKey {
     }
 }
 
-
-
 impl From<&InputFilter> for StatsKey {
     fn from(value: &InputFilter) -> Self {
         match value {
-            InputFilter::NotchBandFilter(filter) =>filter.into(),
+            InputFilter::NotchBandFilter(filter) => filter.into(),
             InputFilter::BandPassFilter(filter) => filter.into(),
             InputFilter::SavGolFilter(filter) => filter.into(),
             InputFilter::MedianFilter(filter) => filter.into(),
@@ -201,17 +176,12 @@ impl From<&InputFilter> for StatsKey {
     }
 }
 
-
 impl FindMotifsRunConfig {
-
-    pub fn from_properties_map_with_id(
-        id: RunConfigId,
-        properties: &HashMap<String, Val>,
-    ) -> Result<FindMotifsRunConfig, thoosa_shared::ThoError> {
+    pub fn from_properties_map_with_id(id: RunConfigId, properties: &HashMap<String, Val>) -> Result<FindMotifsRunConfig, thoosa_shared::ThoError> {
         let mut find_motifs_run_config = FindMotifsRunConfig::from_properties_map(None, properties)?;
 
         debug!("FindMotifsRunConfig::from_properties_map_with_id: find_motifs_run_config={find_motifs_run_config:?}");
-        
+
         find_motifs_run_config.set_id(id);
 
         Ok(find_motifs_run_config)
@@ -224,16 +194,7 @@ impl FindMotifsRunConfig {
         };
 
         StatsKeys {
-            keys: std::iter::once(StatsKey::Window(self.window))
-                .chain(comparison_method)
-                .chain(
-                self.freq_filter
-                    .as_deref()
-                    .into_iter()
-                    .flatten()
-                    .map(Into::into),
-
-            ).collect(),
+            keys: std::iter::once(StatsKey::Window(self.window)).chain(comparison_method).chain(self.freq_filter.as_deref().into_iter().flatten().map(Into::into)).collect(),
         }
     }
 
@@ -245,18 +206,20 @@ impl FindMotifsRunConfig {
     }
 
     pub fn new(id: Option<RunConfigId>, step: u32, window: u32, freq_filter: Option<Vec<InputFilter>>, similarity_metric: SimilarityMetric, slices_filter: SlicesFilter, max_slices: Option<MaxSlices>) -> Self {
-        Self { id, step, window, freq_filter, min_slices: Some(2), max_slices, finder_kind: FinderKind::CrossLoader(CrossLoaderRunConfig::new(similarity_metric, slices_filter)) }
+        Self {
+            id,
+            step,
+            window,
+            freq_filter,
+            min_slices: Some(2),
+            max_slices,
+            finder_kind: FinderKind::CrossLoader(CrossLoaderRunConfig::new(similarity_metric, slices_filter)),
+        }
     }
 }
 impl FindMotifsRunConfig {
     //TODO rename to new_with_accumulate_mean
-    pub fn new_with_running_mean(
-        id: Option<u32>,
-        step: u32,
-        window: u32,
-        freq_filter: Option<Vec<InputFilter>>,
-        mean_k: Option<f32>,
-    ) -> Self {
+    pub fn new_with_running_mean(id: Option<u32>, step: u32, window: u32, freq_filter: Option<Vec<InputFilter>>, mean_k: Option<f32>) -> Self {
         Self {
             id,
             step,
@@ -273,14 +236,7 @@ impl FindMotifsRunConfig {
         }
     }
 
-    pub fn new_with_precalculate_stats(
-        id: Option<u32>,
-        step: u32,
-        window: u32,
-        freq_filter: Option<Vec<InputFilter>>,
-        k: f32,
-        slices: u32,
-    ) -> Self {
+    pub fn new_with_precalculate_stats(id: Option<u32>, step: u32, window: u32, freq_filter: Option<Vec<InputFilter>>, k: f32, slices: u32) -> Self {
         Self {
             id,
             step,
@@ -288,13 +244,9 @@ impl FindMotifsRunConfig {
             freq_filter,
             min_slices: Some(2),
             max_slices: None,
-            finder_kind: FinderKind::CrossLoader(CrossLoaderRunConfig::new(
-                SimilarityMetric::default(),
-                SlicesFilter::Precalculate(PrecalculateStats { aggr: Aggr::Mean(MeanAggr { k }), slices}),
-            )),
+            finder_kind: FinderKind::CrossLoader(CrossLoaderRunConfig::new(SimilarityMetric::default(), SlicesFilter::Precalculate(PrecalculateStats { aggr: Aggr::Mean(MeanAggr { k }), slices }))),
         }
     }
-
 
     pub fn window(&self) -> u32 {
         self.window
@@ -305,21 +257,11 @@ impl FindMotifsRunConfig {
     }
 
     pub fn input_len_adjuster(&self) -> Arc<dyn Fn(u32) -> u32 + Send + Sync> {
-        let adjusters = self
-            .freq_filter
-            .as_ref()
-            .map(|filters| {
-                filters
-                    .iter()
-                    .map(|filter| filter.adjust_length())
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
+        let adjusters = self.freq_filter.as_ref().map(|filters| filters.iter().map(|filter| filter.adjust_length()).collect::<Vec<_>>()).unwrap_or_default();
 
         Arc::new(move |len: u32| adjusters.iter().fold(len, |acc, adjust| adjust(acc)))
     }
 }
-
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Debug, PartialEq, Clone, Copy)]
 pub enum Aggr {
@@ -361,27 +303,27 @@ pub struct QuantileAggr {
 pub struct MaxSlicesByResources {
     #[in_map]
     #[run_config]
-    pub k:u32
+    pub k: u32,
 }
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)]
 pub struct MaxSlicesAbs {
     #[in_map]
     #[run_config]
-    pub count:u32
+    pub count: u32,
 }
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)]
-pub enum MaxSlices{//discard motifs which slices counts bigger than
-    ByResourcesCount(MaxSlicesByResources),// K * resources count - if motif has more than k slices in each resource it's probably noise
-    Abs(MaxSlicesAbs) // by exact value - if motif has more than count slices it's garbage
+pub enum MaxSlices {
+    //discard motifs which slices counts bigger than
+    ByResourcesCount(MaxSlicesByResources), // K * resources count - if motif has more than k slices in each resource it's probably noise
+    Abs(MaxSlicesAbs),                      // by exact value - if motif has more than count slices it's garbage
 }
-
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Debug, PartialEq, Clone)]
 pub enum SlicesFilter {
     Accumulate(AccumulateStats),
     Precalculate(PrecalculateStats),
-    ExactS(ExactStats)//same for all motifs
+    ExactS(ExactStats), //same for all motifs
 }
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Debug, PartialEq, Clone)] //PartialEq - for tests
@@ -389,7 +331,6 @@ pub struct AccumulateStats {
     #[in_map]
     #[run_config]
     pub aggr: Aggr,
-
 }
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Debug, PartialEq, Clone)] //PartialEq - for tests
@@ -405,13 +346,10 @@ pub struct PrecalculateStats {
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Debug, PartialEq, Clone)] //PartialEq - for tests
 pub struct ExactStats {
-
-
     #[in_map]
     #[run_config]
     pub euc_dist: f32, //euclidian distance threshold, same for all motifs
 }
-
 
 #[cfg(test)]
 #[allow(unused_imports)]
@@ -421,7 +359,11 @@ mod tests {
     use crate::stages::find_motifs_run_config::MaxSlices::Abs;
     use crate::stages::find_motifs_run_config::SlicesFilter::Precalculate;
     use crate::stages::find_motifs_run_config::StatsKey::Window;
-    use crate::stages::find_motifs_run_config::{AccumulateStats, AccumulateStatsRangeOrValue, AggrRangeOrValue, CrossLoaderRunConfig, CrossLoaderRunConfigRangeOrValue, ExtendMotifsRunConfigRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, FinderKind, FinderKindRangeOrValue, InlierRatioRunConfig, InlierRatioRunConfigRangeOrValue, InputFilterRangeOrValue, MaxSlicesAbs, MeanAggr, MeanAggrRangeOrValue, Metrics, MetricsRangeOrValue, MotifCriterionConstraint, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfig, NormThicknessRunConfigRangeOrValue, PeriodicityAcfRunConfig, PeriodicityAcfRunConfigRangeOrValue, PrecalculateStats, SelectMotifsRunConfig, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue, StatsKey, StatsKeys};
+    use crate::stages::find_motifs_run_config::{
+        AccumulateStats, AccumulateStatsRangeOrValue, AggrRangeOrValue, CrossLoaderRunConfig, CrossLoaderRunConfigRangeOrValue, ExtendMotifsRunConfigRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, FinderKind, FinderKindRangeOrValue, InlierRatioRunConfig,
+        InlierRatioRunConfigRangeOrValue, InputFilterRangeOrValue, MaxSlicesAbs, MeanAggr, MeanAggrRangeOrValue, Metrics, MetricsRangeOrValue, MotifCriterionConstraint, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfig, NormThicknessRunConfigRangeOrValue, PeriodicityAcfRunConfig,
+        PeriodicityAcfRunConfigRangeOrValue, PrecalculateStats, SelectMotifsRunConfig, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue, StatsKey, StatsKeys,
+    };
     use log::debug;
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -434,7 +376,9 @@ mod tests {
     use thoosa_common::stages::freq_filter::FreqFilter;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::transforms::filters::InputFilter::{AverageFilter, BandPassFilter, MedianFilter, NotchBandFilter, SavGolFilter};
-    use thoosa_common::transforms::filters::{AverageFilterParams, AverageFilterParamsRangeOrValue, BandPassFilterParams, BandPassFilterParamsRangeOrValue, InputFilter, MedianFilterParams, MedianFilterParamsRangeOrValue, NotchBandFilterParams, Padding, PaddingRangeOrValue, SavGolFilterParams, ZeroPaddingRangeOrValue};
+    use thoosa_common::transforms::filters::{
+        AverageFilterParams, AverageFilterParamsRangeOrValue, BandPassFilterParams, BandPassFilterParamsRangeOrValue, InputFilter, MedianFilterParams, MedianFilterParamsRangeOrValue, NotchBandFilterParams, Padding, PaddingRangeOrValue, SavGolFilterParams, ZeroPaddingRangeOrValue,
+    };
     use thoosa_common::ws::WsConfigs;
     use thoosa_properties_map::{FromHashmap, ToHashmap};
     use thoosa_run_config_args::GridRunConfigSource;
@@ -454,20 +398,21 @@ mod tests {
             id: None,
             step: 100.into(),
             window: 200.into(),
-            freq_filter: Some(vec![InputFilterRangeOrValue::BandPassFilter(
-                BandPassFilterParamsRangeOrValue {
+            freq_filter: Some(vec![
+                InputFilterRangeOrValue::BandPassFilter(BandPassFilterParamsRangeOrValue {
                     low_hz: 10f64.into(),
                     band_hz: 300f64.into(),
                     kernel_size: 12000u32.into(),
                     stride: 1u32.into(),
                     padding: PaddingRangeOrValue::Zero(ZeroPaddingRangeOrValue::default()),
-                },
-            ), InputFilterRangeOrValue::MedianFilter(MedianFilterParamsRangeOrValue { window: 11u32.into() })]),
+                }),
+                InputFilterRangeOrValue::MedianFilter(MedianFilterParamsRangeOrValue { window: 11u32.into() }),
+            ]),
             finder_kind: FinderKindRangeOrValue::CrossLoader(CrossLoaderRunConfigRangeOrValue {
                 similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
-                slices_filter: SlicesFilterRangeOrValue::Accumulate(
-                    AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: 0.5.into() }) },
-                ),
+                slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue {
+                    aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: 0.5.into() }),
+                }),
             }),
             max_slices: None,
             min_slices: Some(RangeOrValue::Value(2)),
@@ -476,7 +421,7 @@ mod tests {
         let grid = rc.grid_run_configs().expect("FindMotifsRunConfigRangeOrValue::grid_run_configs should not fail");
         // debug!("grid: {grid:?}");
 
-        let run_configs:Vec<FindMotifsRunConfig> = grid.to_run_configs().expect("valid test grid");
+        let run_configs: Vec<FindMotifsRunConfig> = grid.to_run_configs().expect("valid test grid");
         assert_eq!(run_configs.len(), 1);
         assert_eq!(run_configs[0].step, 100);
         assert_eq!(run_configs[0].window, 200);
@@ -489,7 +434,6 @@ mod tests {
         for v in map {
             println!("{:?}", v);
         }
-
     }
 
     #[test]
@@ -528,7 +472,12 @@ mod tests {
             None,
             100,
             100,
-            Some(vec![SavGolFilter(SavGolFilterParams { window_len: 11, poly_order: 3, stride: 1, padding: Padding::replicate() })]),
+            Some(vec![SavGolFilter(SavGolFilterParams {
+                window_len: 11,
+                poly_order: 3,
+                stride: 1,
+                padding: Padding::replicate(),
+            })]),
             None,
         );
         let adjust = config.input_len_adjuster();
@@ -537,26 +486,14 @@ mod tests {
 
     #[test]
     fn test_input_len_adjuster_median() {
-        let config = FindMotifsRunConfig::new_with_running_mean(
-            None,
-            100,
-            100,
-            Some(vec![MedianFilter(MedianFilterParams { window: 11 })]),
-            None,
-        );
+        let config = FindMotifsRunConfig::new_with_running_mean(None, 100, 100, Some(vec![MedianFilter(MedianFilterParams { window: 11 })]), None);
         let adjust = config.input_len_adjuster();
         assert_eq!(989, adjust(1000));
     }
 
     #[test]
     fn test_input_len_adjuster_moving_average() {
-        let config = FindMotifsRunConfig::new_with_running_mean(
-            None,
-            100,
-            100,
-            Some(vec![AverageFilter(AverageFilterParams { window: 11, step: 1 })]),
-            None,
-        );
+        let config = FindMotifsRunConfig::new_with_running_mean(None, 100, 100, Some(vec![AverageFilter(AverageFilterParams { window: 11, step: 1 })]), None);
         let adjust = config.input_len_adjuster();
         assert_eq!(989, adjust(1000));
     }
@@ -571,7 +508,10 @@ mod tests {
                     min: RangeOrValue::Range { range: 0.4..0.6, step: Some((0.1, 1)) },
                 },
                 MotifCriterionConstraintRangeOrValue {
-                    metric: MetricsRangeOrValue::InlierRatio(InlierRatioRunConfigRangeOrValue { k: RangeOrValue::Value(3.0), eps: RangeOrValue::Value(1e-8) }),
+                    metric: MetricsRangeOrValue::InlierRatio(InlierRatioRunConfigRangeOrValue {
+                        k: RangeOrValue::Value(3.0),
+                        eps: RangeOrValue::Value(1e-8),
+                    }),
                     min: RangeOrValue::Value(Metrics::DEFAULT_CRITERION_MIN),
                 },
             ],
@@ -589,30 +529,21 @@ mod tests {
     }
 
     #[test]
-    fn test_to_stats_keys(){
-        let run_config = FindMotifsRunConfig { id: Some(246), step: 100, window: 1000, freq_filter: Some(vec![BandPassFilter(BandPassFilterParams { low_hz: 20.0, band_hz: 2.0, kernel_size: 10, stride: 10, padding: Padding::zero() }), NotchBandFilter(NotchBandFilterParams { low_hz: 59.0, high_hz: 62.0 })]), min_slices: Some(2), max_slices: Some(Abs(MaxSlicesAbs { count: 1000 })), finder_kind: FinderKind::CrossLoader(CrossLoaderRunConfig::new(SimilarityMetric::default(), Precalculate(PrecalculateStats { aggr: Mean(MeanAggr { k: 0.09006707 }), slices: 1000 }))) };
-
-        let keys = run_config.to_stats_keys();
-        
-        assert_eq!(
-            keys,
-            StatsKeys { keys: vec![
-                StatsKey::Window(1000),
-                StatsKey::ComparisonMethod(SimilarityMetric::default()),
-                StatsKey::BandPassFilter { low_hz: F64BitsKey(4626322717216342016), band_hz: F64BitsKey(4611686018427387904), kernel_size: 10 },
-                StatsKey::NotchBandFilterKey { low_hz: F64BitsKey(4633500329122463744), high_hz: F64BitsKey(4633922541587529728) }
-            ] }
-        );
-
-    }
-
-    #[test]
-    fn test_to_stats_keys_with_savgol() {
+    fn test_to_stats_keys() {
         let run_config = FindMotifsRunConfig {
             id: Some(246),
             step: 100,
             window: 1000,
-            freq_filter: Some(vec![SavGolFilter(SavGolFilterParams { window_len: 11, poly_order: 2, stride: 1, padding: Padding::reflect() })]),
+            freq_filter: Some(vec![
+                BandPassFilter(BandPassFilterParams {
+                    low_hz: 20.0,
+                    band_hz: 2.0,
+                    kernel_size: 10,
+                    stride: 10,
+                    padding: Padding::zero(),
+                }),
+                NotchBandFilter(NotchBandFilterParams { low_hz: 59.0, high_hz: 62.0 }),
+            ]),
             min_slices: Some(2),
             max_slices: Some(Abs(MaxSlicesAbs { count: 1000 })),
             finder_kind: FinderKind::CrossLoader(CrossLoaderRunConfig::new(SimilarityMetric::default(), Precalculate(PrecalculateStats { aggr: Mean(MeanAggr { k: 0.09006707 }), slices: 1000 }))),
@@ -626,7 +557,51 @@ mod tests {
                 keys: vec![
                     StatsKey::Window(1000),
                     StatsKey::ComparisonMethod(SimilarityMetric::default()),
-                    StatsKey::SavGolFilter { window_len: 11, poly_order: 2, stride: 1, padding: Padding::reflect() },
+                    StatsKey::BandPassFilter {
+                        low_hz: F64BitsKey(4626322717216342016),
+                        band_hz: F64BitsKey(4611686018427387904),
+                        kernel_size: 10
+                    },
+                    StatsKey::NotchBandFilterKey {
+                        low_hz: F64BitsKey(4633500329122463744),
+                        high_hz: F64BitsKey(4633922541587529728)
+                    }
+                ]
+            }
+        );
+    }
+
+    #[test]
+    fn test_to_stats_keys_with_savgol() {
+        let run_config = FindMotifsRunConfig {
+            id: Some(246),
+            step: 100,
+            window: 1000,
+            freq_filter: Some(vec![SavGolFilter(SavGolFilterParams {
+                window_len: 11,
+                poly_order: 2,
+                stride: 1,
+                padding: Padding::reflect(),
+            })]),
+            min_slices: Some(2),
+            max_slices: Some(Abs(MaxSlicesAbs { count: 1000 })),
+            finder_kind: FinderKind::CrossLoader(CrossLoaderRunConfig::new(SimilarityMetric::default(), Precalculate(PrecalculateStats { aggr: Mean(MeanAggr { k: 0.09006707 }), slices: 1000 }))),
+        };
+
+        let keys = run_config.to_stats_keys();
+
+        assert_eq!(
+            keys,
+            StatsKeys {
+                keys: vec![
+                    StatsKey::Window(1000),
+                    StatsKey::ComparisonMethod(SimilarityMetric::default()),
+                    StatsKey::SavGolFilter {
+                        window_len: 11,
+                        poly_order: 2,
+                        stride: 1,
+                        padding: Padding::reflect()
+                    },
                 ]
             }
         );
@@ -649,11 +624,7 @@ mod tests {
         assert_eq!(
             keys,
             StatsKeys {
-                keys: vec![
-                    StatsKey::Window(1000),
-                    StatsKey::ComparisonMethod(SimilarityMetric::default()),
-                    StatsKey::MedianFilter { window: 11 },
-                ]
+                keys: vec![StatsKey::Window(1000), StatsKey::ComparisonMethod(SimilarityMetric::default()), StatsKey::MedianFilter { window: 11 },]
             }
         );
     }
@@ -675,11 +646,7 @@ mod tests {
         assert_eq!(
             keys,
             StatsKeys {
-                keys: vec![
-                    StatsKey::Window(1000),
-                    StatsKey::ComparisonMethod(SimilarityMetric::default()),
-                    StatsKey::MovingAverageFilter { window: 11 },
-                ]
+                keys: vec![StatsKey::Window(1000), StatsKey::ComparisonMethod(SimilarityMetric::default()), StatsKey::MovingAverageFilter { window: 11 },]
             }
         );
     }
@@ -717,8 +684,8 @@ mod tests {
             },
             MotifCriterionConstraint {
                 metric: Metrics::PeriodicityAcf(crate::stages::find_motifs_run_config::PeriodicityAcfRunConfig {
-                    struct_lag_max: 1./64.0,
-                    lag_min: 1./32.0,
+                    struct_lag_max: 1. / 64.0,
+                    lag_min: 1. / 32.0,
                     lag_max: 0.5,
                     struct0: 0.2,
                     peak_good: 0.25,
@@ -744,14 +711,14 @@ mod tests {
     fn test_motif_criteria_periodicity_acf_roundtrips_properties() {
         let criteria = vec![MotifCriterionConstraint {
             metric: Metrics::PeriodicityAcf(crate::stages::find_motifs_run_config::PeriodicityAcfRunConfig {
-                    struct_lag_max: 1./64.,
-                    lag_min: 1./32.,
-                    lag_max: 0.5,
-                    struct0: 0.2,
-                    peak_good: 0.25,
-                    peak_bad: 0.65,
-                    eps: 1e-8,
-                }),
+                struct_lag_max: 1. / 64.,
+                lag_min: 1. / 32.,
+                lag_max: 0.5,
+                struct0: 0.2,
+                peak_good: 0.25,
+                peak_bad: 0.65,
+                eps: 1e-8,
+            }),
             min: Metrics::DEFAULT_CRITERION_MIN,
         }];
 
@@ -826,15 +793,7 @@ mod tests {
 
         let periodicity = crate::stages::find_motifs_run_config::PeriodicityAcfRunConfig::default();
         assert_eq!(
-            (
-                periodicity.struct_lag_max,
-                periodicity.lag_min,
-                periodicity.lag_max,
-                periodicity.struct0,
-                periodicity.peak_good,
-                periodicity.peak_bad,
-                periodicity.eps,
-            ),
+            (periodicity.struct_lag_max, periodicity.lag_min, periodicity.lag_max, periodicity.struct0, periodicity.peak_good, periodicity.peak_bad, periodicity.eps,),
             (1.0 / 64.0, 1.0 / 32.0, 0.5, 0.2, 0.25, 0.65, 1e-8),
         );
         assert_eq!(crate::stages::find_motifs_run_config::PeriodicityAcfRunConfig::default().struct_lag_max, periodicity.struct_lag_max);
@@ -875,21 +834,16 @@ mod tests {
         GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
-
         let bf = FreqFilter::new(&filter_configs, WsConfigs::new(20, 10000, 100), 0, 0).await?;
 
         let mut ctx = RunCtxImpl::new(1, "test");
 
         let size = [20, 12800];
-        let r = bf.run(
-            Arc::new(DevicesWrap::wrap(ThoTensor::new(SynKey::new([mono_key!("test", "test")]), Tensor::rand(&size, FLOAT_CPU))?)),
-            ctx.branch(false)
-        ).await?;
+        let r = bf.run(Arc::new(DevicesWrap::wrap(ThoTensor::new(SynKey::new([mono_key!("test", "test")]), Tensor::rand(&size, FLOAT_CPU))?)), ctx.branch(false)).await?;
 
         let find_motifs_run_config = FindMotifsRunConfig::new_with_running_mean(None, 10, 100, Some(filter_configs), None);
 
         let adjuster = find_motifs_run_config.input_len_adjuster();
-
 
         let ThoDataRef::ReadLocked(rr) = BorrowRef::borrow_ref(&r, 0).await? else {
             panic!("no result");
@@ -898,40 +852,30 @@ mod tests {
         assert_eq!(rr.size()[0], size[0]);
         assert_eq!(rr.size()[1] as u32, adjuster(size[1] as u32));
 
-
         Ok(())
     }
 
     #[tokio::test]
     async fn test_band_pass() -> Result<(), ThoError> {
-        let filter_configs = vec![
-
-            InputFilter::BandPassFilter(BandPassFilterParams{
-                low_hz: 0.0,
-                band_hz: 100.0,
-                kernel_size: 859,
-                stride: 10,
-                padding: Padding::zero(),
-            }),
-        ];
-
+        let filter_configs = vec![InputFilter::BandPassFilter(BandPassFilterParams {
+            low_hz: 0.0,
+            band_hz: 100.0,
+            kernel_size: 859,
+            stride: 10,
+            padding: Padding::zero(),
+        })];
 
         run_freq_filter(filter_configs).await
     }
 
     #[tokio::test]
-    async fn test_savitzky_golay() ->Result<(), ThoError> {
-
-        let filter_configs = vec![
-
-            InputFilter::SavGolFilter(SavGolFilterParams {
-                window_len: 11,
-                poly_order: 2,
-                stride: 1,
-                padding: Padding::reflect(),
-            }),
-        ];
-
+    async fn test_savitzky_golay() -> Result<(), ThoError> {
+        let filter_configs = vec![InputFilter::SavGolFilter(SavGolFilterParams {
+            window_len: 11,
+            poly_order: 2,
+            stride: 1,
+            padding: Padding::reflect(),
+        })];
 
         run_freq_filter(filter_configs).await
     }
@@ -956,16 +900,12 @@ impl Default for ExtendMotifsConfig {
 }
 
 impl ToHashmap for ExtendMotifsConfig {
-    fn to_properties_iter(&self, parent: Option<String>) -> Box<dyn Iterator<Item=(String, thoosa_shared::val::Val)>> {
+    fn to_properties_iter(&self, parent: Option<String>) -> Box<dyn Iterator<Item = (String, thoosa_shared::val::Val)>> {
         let prefix = parent.unwrap_or("ExtendMotifsConfig::".to_string());
         Box::new(
-            self
-                .slices_selector_metric
+            self.slices_selector_metric
                 .to_properties_iter(Some(thoosa_shared::conc_str(&prefix, "slices_selector_metric.")))
-                .chain(
-                    self.slices_selector_aggr
-                        .to_properties_iter(Some(thoosa_shared::conc_str(&prefix, "slices_selector_aggr."))),
-                ),
+                .chain(self.slices_selector_aggr.to_properties_iter(Some(thoosa_shared::conc_str(&prefix, "slices_selector_aggr.")))),
         )
     }
 }
@@ -1001,10 +941,8 @@ const DEFAULT_PERIODICITY_STRUCT0: f64 = 0.2;
 const DEFAULT_PERIODICITY_PEAK_GOOD: f64 = 0.25;
 const DEFAULT_PERIODICITY_PEAK_BAD: f64 = 0.65;
 
-
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
 pub struct NormThicknessRunConfig {
-
     #[in_map]
     #[run_config]
     pub eps: f64,
@@ -1071,7 +1009,12 @@ pub struct InterestingAmp01RunConfig {
 
 impl Default for InterestingAmp01RunConfig {
     fn default() -> Self {
-        Self { q_lo: DEFAULT_INTERESTING_Q_LO, q_hi: DEFAULT_INTERESTING_Q_HI, a0: DEFAULT_INTERESTING_SCALE, eps: DEFAULT_METRIC_EPS }
+        Self {
+            q_lo: DEFAULT_INTERESTING_Q_LO,
+            q_hi: DEFAULT_INTERESTING_Q_HI,
+            a0: DEFAULT_INTERESTING_SCALE,
+            eps: DEFAULT_METRIC_EPS,
+        }
     }
 }
 
@@ -1096,7 +1039,12 @@ pub struct InterestingTvNorm01RunConfig {
 
 impl Default for InterestingTvNorm01RunConfig {
     fn default() -> Self {
-        Self { amp_q_lo: DEFAULT_INTERESTING_Q_LO, amp_q_hi: DEFAULT_INTERESTING_Q_HI, tv0: DEFAULT_INTERESTING_SCALE, eps: DEFAULT_METRIC_EPS }
+        Self {
+            amp_q_lo: DEFAULT_INTERESTING_Q_LO,
+            amp_q_hi: DEFAULT_INTERESTING_Q_HI,
+            tv0: DEFAULT_INTERESTING_SCALE,
+            eps: DEFAULT_METRIC_EPS,
+        }
     }
 }
 
@@ -1121,7 +1069,12 @@ pub struct InterestingCurvatureNorm01RunConfig {
 
 impl Default for InterestingCurvatureNorm01RunConfig {
     fn default() -> Self {
-        Self { amp_q_lo: DEFAULT_INTERESTING_Q_LO, amp_q_hi: DEFAULT_INTERESTING_Q_HI, curv0: DEFAULT_INTERESTING_SCALE, eps: DEFAULT_METRIC_EPS }
+        Self {
+            amp_q_lo: DEFAULT_INTERESTING_Q_LO,
+            amp_q_hi: DEFAULT_INTERESTING_Q_HI,
+            curv0: DEFAULT_INTERESTING_SCALE,
+            eps: DEFAULT_METRIC_EPS,
+        }
     }
 }
 
@@ -1185,7 +1138,11 @@ pub struct InterestingEntropyGauss01RunConfig {
 
 impl Default for InterestingEntropyGauss01RunConfig {
     fn default() -> Self {
-        Self { h0: DEFAULT_ENTROPY_GAUSS_H0, sigma: DEFAULT_ENTROPY_GAUSS_SIGMA, eps: DEFAULT_METRIC_EPS }
+        Self {
+            h0: DEFAULT_ENTROPY_GAUSS_H0,
+            sigma: DEFAULT_ENTROPY_GAUSS_SIGMA,
+            eps: DEFAULT_METRIC_EPS,
+        }
     }
 }
 
@@ -1206,7 +1163,11 @@ pub struct InterestingEntropyBand01RunConfig {
 
 impl Default for InterestingEntropyBand01RunConfig {
     fn default() -> Self {
-        Self { h_min: DEFAULT_ENTROPY_BAND_MIN, h_max: DEFAULT_ENTROPY_BAND_MAX, eps: DEFAULT_METRIC_EPS }
+        Self {
+            h_min: DEFAULT_ENTROPY_BAND_MIN,
+            h_max: DEFAULT_ENTROPY_BAND_MAX,
+            eps: DEFAULT_METRIC_EPS,
+        }
     }
 }
 
@@ -1255,7 +1216,6 @@ impl Default for PeriodicityAcfRunConfig {
     }
 }
 
-
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, CpuData)]
 #[cpu_data(shallow)]
 pub struct EucDistMetric {
@@ -1270,7 +1230,10 @@ pub struct EucDistMetric {
 
 impl Default for EucDistMetric {
     fn default() -> Self {
-        Self { z_normalize: false, aggr: Aggr::Mean(MeanAggr { k: 1.0 }) }
+        Self {
+            z_normalize: false,
+            aggr: Aggr::Mean(MeanAggr { k: 1.0 }),
+        }
     }
 }
 
@@ -1391,12 +1354,7 @@ impl Metrics {
         Self::INTERESTING_TURNING_POINTS_RATIO_MIN_KEY,
         Self::INTERESTING_BAND_ENERGY_RATIO_01_MIN_KEY,
     ];
-    pub const EXTRA_CONSTRAINT_KEYS: [&'static str; 4] = [
-        Self::INTERESTING_ENTROPY_GAUSS_01_MIN_KEY,
-        Self::INTERESTING_ENTROPY_BAND_01_MIN_KEY,
-        Self::PERIODICITY_ACF_MIN_KEY,
-        Self::ENERGY_MIN_KEY,
-    ];
+    pub const EXTRA_CONSTRAINT_KEYS: [&'static str; 4] = [Self::INTERESTING_ENTROPY_GAUSS_01_MIN_KEY, Self::INTERESTING_ENTROPY_BAND_01_MIN_KEY, Self::PERIODICITY_ACF_MIN_KEY, Self::ENERGY_MIN_KEY];
 
     pub fn all() -> Vec<Self> {
         vec![
@@ -1450,19 +1408,11 @@ impl Metrics {
     }
 
     pub fn optimizer_constraints(_criteria: &[MotifCriterionConstraint]) -> HashMap<String, f32> {
-        Self::CONSTRAINT_KEYS
-            .into_iter()
-            .chain(Self::EXTRA_CONSTRAINT_KEYS)
-            .map(|key| (key.to_string(), 0.0))
-            .collect()
+        Self::CONSTRAINT_KEYS.into_iter().chain(Self::EXTRA_CONSTRAINT_KEYS).map(|key| (key.to_string(), 0.0)).collect()
     }
 
     pub fn failed_constraint_metrics(_criteria: &[MotifCriterionConstraint]) -> HashMap<String, f32> {
-        Self::CONSTRAINT_KEYS
-            .into_iter()
-            .chain(Self::EXTRA_CONSTRAINT_KEYS)
-            .map(|key| (key.to_string(), 1.0))
-            .collect()
+        Self::CONSTRAINT_KEYS.into_iter().chain(Self::EXTRA_CONSTRAINT_KEYS).map(|key| (key.to_string(), 1.0)).collect()
     }
 }
 
@@ -1480,9 +1430,7 @@ pub struct MotifCriterionConstraint {
 
 impl MotifCriterionConstraint {
     pub fn key(&self) -> Result<&'static str, thoosa_shared::ThoError> {
-        self.metric
-            .constraint_key()
-            .ok_or_else(|| thoosa_shared::ThoError::new(format!("MotifCriterionConstraint::key: metric {:?} is not a selectable constraint", self.metric)))
+        self.metric.constraint_key().ok_or_else(|| thoosa_shared::ThoError::new(format!("MotifCriterionConstraint::key: metric {:?} is not a selectable constraint", self.metric)))
     }
 }
 
@@ -1504,7 +1452,11 @@ pub struct ExtendMotifsRunConfig {
 
 impl ExtendMotifsRunConfig {
     pub fn new(id: Option<RunConfigId>) -> Self {
-        Self { id, extend_config: ExtendMotifsConfig::default(), extend_max_slices: None }
+        Self {
+            id,
+            extend_config: ExtendMotifsConfig::default(),
+            extend_max_slices: None,
+        }
     }
 }
 
@@ -1528,7 +1480,6 @@ impl SelectMotifsRunConfig {
     pub fn new(id: Option<RunConfigId>) -> Self {
         Self::new_with_fields(id, vec![])
     }
-
 }
 
 #[derive(Debug, Clone, CpuData)]
@@ -1540,11 +1491,7 @@ pub struct SelectMotifsRunResult {
 }
 
 impl SelectMotifsRunResult {
-    pub fn new(
-        run_config: SelectMotifsRunConfig,
-        selected_motif_ids_scores: Vec<(u32, f64)>,
-        constraint_metrics: Option<HashMap<String, f32>>,
-    ) -> Self {
+    pub fn new(run_config: SelectMotifsRunConfig, selected_motif_ids_scores: Vec<(u32, f64)>, constraint_metrics: Option<HashMap<String, f32>>) -> Self {
         Self {
             run_config,
             selected_motif_ids_scores,
@@ -1563,15 +1510,9 @@ pub struct SelectMotifsSavableResult {
 
 impl Output for SelectMotifsSavableResult {}
 
-
-
 impl SelectMotifsSavableResult {
-    pub fn new(
-        run_results: Vec<SelectMotifsRunResult>,
-    ) -> Self {
-        Self {
-            run_results,
-        }
+    pub fn new(run_results: Vec<SelectMotifsRunResult>) -> Self {
+        Self { run_results }
     }
 
     //to be used from opt FindAndSelectMotifsStage
@@ -1598,18 +1539,9 @@ impl SavableResult for SelectMotifsSavableResult {
     type Workspace = dyn crate::motifs_ws::MotifsWorkspace;
     type R = u32;
 
-    async fn save(
-        &mut self,
-        store: &Arc<dyn MotifsStore>,
-        ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
-        p: Self::P<'_>
-    ) -> anyhow::Result<u32> {
-
+    async fn save(&mut self, store: &Arc<dyn MotifsStore>, ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, p: Self::P<'_>) -> anyhow::Result<u32> {
         for run_result in &self.run_results {
-            t!(store.save_selected_motifs(
-                run_result.run_config.id.expect("should be pre saved in run_grid"),
-                run_result.selected_motif_ids_scores.clone()
-            )).await?;
+            t!(store.save_selected_motifs(run_result.run_config.id.expect("should be pre saved in run_grid"), run_result.selected_motif_ids_scores.clone())).await?;
         }
 
         //RunConfig is pre saved in run_grid

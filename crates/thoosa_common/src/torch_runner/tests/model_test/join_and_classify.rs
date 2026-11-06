@@ -39,10 +39,7 @@ impl JoinAndClassifyStage {
 }
 
 impl OutId for JoinAndClassifyStage {
-    fn out_id(
-        &self,
-        input_id: &<Self::In<'static> as WithId>::ID,
-    ) -> <Self::Out as WithId>::ID {
+    fn out_id(&self, input_id: &<Self::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
         self.clf.out_id(input_id)
     }
 }
@@ -60,58 +57,25 @@ impl AsyncStage for JoinAndClassifyStage {
     // fn run_input_id(input: &Self::In<'static>) -> &<<Self as Stage>::In<'static> as WithId>::ID {
     //     WithId::id(input)
     // }
-    async fn run(
-        self: Arc<Self>,
-        input: Self::In<'static>,
-        mut ctx: Self::Ctx,
-    ) -> Result<Self::Out, ThoError> {
+    async fn run(self: Arc<Self>, input: Self::In<'static>, mut ctx: Self::Ctx) -> Result<Self::Out, ThoError> {
         let device_idx = ctx.tho_device_idx();
-        let batched = Arc::clone(&self.batch_builder)
-            .run_cached(input.clone(), ctx.branch(false))
-            .await?;
+        let batched = Arc::clone(&self.batch_builder).run_cached(input.clone(), ctx.branch(false)).await?;
 
         let out_id = self.clf.out_id(batched.id());
         let _out_key = Arc::new(out_id.clone()) as Arc<dyn CachableIdTr>;
         let size = *batched.size();
-        let min_split_len = ABMetrics {
-            dim_0: 32,
-            dim_1: 0,
-        };
+        let min_split_len = ABMetrics { dim_0: 32, dim_1: 0 };
 
-        let output_builder = SingleDimTensorOutputBuilder::<ModelTestId, ClsOut>::new(
-            out_id,
-            1,
-            &[1, 1],
-            if GlobalCtx::global().is_ipc() {
-                (Kind::Float, tch::Device::Cpu)
-            } else {
-                (Kind::Float, ThoDevice::from(device_idx).deref().clone())
-            },
-            BuildAs::Sum,
-        )?;
-        let output_builder = if GlobalCtx::global().is_ipc() {
-            output_builder.copy_partial_outputs_to_device(0)
-        } else {
-            output_builder
-        };
+        let output_builder = SingleDimTensorOutputBuilder::<ModelTestId, ClsOut>::new(out_id, 1, &[1, 1], if GlobalCtx::global().is_ipc() { (Kind::Float, tch::Device::Cpu) } else { (Kind::Float, ThoDevice::from(device_idx).deref().clone()) }, BuildAs::Sum)?;
+        let output_builder = if GlobalCtx::global().is_ipc() { output_builder.copy_partial_outputs_to_device(0) } else { output_builder };
 
         let adjusters: Vec<Adjusters<_, NoStageAdjuster, _>> = vec![
             Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(*MaxParallelStep::SLOW))),
-            Adjusters::Input(input_adjuster(SplitsAdjuster::<ABRange, ABMetrics>::new(
-                min_split_len,
-            ))),
+            Adjusters::Input(input_adjuster(SplitsAdjuster::<ABRange, ABMetrics>::new(min_split_len))),
         ];
         let result = OOMHandler::new(adjusters, None)
-        .run(
-            &self.clf,
-            batched,
-            ctx,
-            WithRunCtxContext::with_rest(
-                MaxParallelAdjustContextImpl::new(),
-                WithInputContext::new(SplitsAdjusterContextImpl::new(size, output_builder)),
-            ),
-        )
-        .await?;
+            .run(&self.clf, batched, ctx, WithRunCtxContext::with_rest(MaxParallelAdjustContextImpl::new(), WithInputContext::new(SplitsAdjusterContextImpl::new(size, output_builder))))
+            .await?;
 
         Ok(Arc::new(DevicesWrap::wrap(result)))
     }

@@ -19,7 +19,6 @@ use thoosa_shared::traits::{AsyncStage, RunCtx, Stage};
 use thoosa_shared::{FuturesOrdering, ThoError, collect_futures_with_progress, recurse_files};
 use thoosa_store::{TRAIN_LABEL_NETS_RUN_CONFIG_TYPE, TrainedNetEntry};
 
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PurgeDate(String);
 
@@ -45,11 +44,7 @@ impl FromStr for PurgeDate {
 
 fn validate_purge_date(date: &str) -> anyhow::Result<()> {
     let bytes = date.as_bytes();
-    if bytes.len() == 10
-        && bytes[4] == b'-'
-        && bytes[7] == b'-'
-        && bytes.iter().enumerate().all(|(idx, byte)| idx == 4 || idx == 7 || byte.is_ascii_digit())
-    {
+    if bytes.len() == 10 && bytes[4] == b'-' && bytes[7] == b'-' && bytes.iter().enumerate().all(|(idx, byte)| idx == 4 || idx == 7 || byte.is_ascii_digit()) {
         Ok(())
     } else {
         anyhow::bail!("date must be YYYY-MM-DD")
@@ -67,9 +62,7 @@ impl FromStr for PurgeLabelModelsBy {
 
     fn from_str(v: &str) -> Result<Self, Self::Err> {
         let value = v.trim().trim_matches(|ch| ch == '\'' || ch == '"');
-        let (kind, raw_value) = value
-            .split_once(':')
-            .ok_or_else(|| anyhow::anyhow!("unexpected label purge selector {v:?}; expected date:YYYY-MM-DD or loss:<value>"))?;
+        let (kind, raw_value) = value.split_once(':').ok_or_else(|| anyhow::anyhow!("unexpected label purge selector {v:?}; expected date:YYYY-MM-DD or loss:<value>"))?;
         match kind.trim().to_ascii_lowercase().as_str() {
             "date" | "run_on" | "before" => Ok(Self::Date(PurgeDate::from_str(raw_value)?)),
             "loss" => Ok(Self::Loss(raw_value.trim().parse::<f32>().with_context(|| format!("bad loss value {raw_value:?}"))?)),
@@ -131,12 +124,11 @@ impl PurgeModelsArgs {
 
 #[derive(Debug, Clone, CpuData)]
 #[cpu_data(shallow)]
-pub struct PurgeModelsInput {
-}
+pub struct PurgeModelsInput {}
 
 impl PurgeModelsInput {
     pub fn new() -> Self {
-        Self {  }
+        Self {}
     }
 }
 
@@ -177,7 +169,6 @@ impl PurgeModelsOutput {
 impl Data for PurgeModelsOutput {
     type Metrics = ();
 
-
     fn size(&self) -> Self::Metrics {
         ()
     }
@@ -192,7 +183,6 @@ impl Data for PurgeModelsOutput {
 }
 
 impl Output for PurgeModelsOutput {}
-
 
 #[derive(Debug)]
 pub struct PurgeModelsStage<C>
@@ -247,32 +237,18 @@ where
             return Ok(Arc::new(PurgeModelsOutput::new(vec![])));
         }
 
-        let ids_to_delete = entries
-            .iter()
-            .filter(|entry| entry.remove_from_store)
-            .filter_map(|entry| entry.net_id)
-            .collect::<Vec<_>>();
-        let futures = entries.into_iter().map(|entry| {
-            async move {
-                Ok::<_, ThoError>(t!(tokio::task::spawn_blocking(move || {
-                    tracing::info_span!(
-                        "purge_models::purge_entry",
-                        kind = "spawn_blocking",
-                        file = file!(),
-                        line = line!(),
-                        task = "purge selected model entry",
-                    ).in_scope(|| purge_entry(entry))
-                })).await.context("join purge models worker")??)
-            }
+        let ids_to_delete = entries.iter().filter(|entry| entry.remove_from_store).filter_map(|entry| entry.net_id).collect::<Vec<_>>();
+        let futures = entries.into_iter().map(|entry| async move {
+            Ok::<_, ThoError>(
+                t!(tokio::task::spawn_blocking(move || {
+                    tracing::info_span!("purge_models::purge_entry", kind = "spawn_blocking", file = file!(), line = line!(), task = "purge selected model entry",).in_scope(|| purge_entry(entry))
+                }))
+                .await
+                .context("join purge models worker")??,
+            )
         });
 
-        let purged = t!(collect_futures_with_progress(
-            futures,
-            entries_len,
-            FuturesOrdering::Unordered,
-            thoosa_shared::CollectionErrorPolicy::Propagate,
-            "PurgeModelsStage::run",
-        )).await?;
+        let purged = t!(collect_futures_with_progress(futures, entries_len, FuturesOrdering::Unordered, thoosa_shared::CollectionErrorPolicy::Propagate, "PurgeModelsStage::run",)).await?;
 
         if purged.len() != entries_len {
             return Err(ThoError::new(format!("PurgeModelsStage::run: purged {} of {entries_len} models", purged.len())));
@@ -342,11 +318,7 @@ fn purge_lost_entries(roots: &ModelRoots, stored_entries: Vec<TrainedNetEntry>) 
     let stored_net_paths = stored_entries.into_iter().map(|entry| entry.net_path).collect::<HashSet<_>>();
     let mut entries = Vec::new();
     for net_type in [PurgeModelType::Motifs, PurgeModelType::Labels, PurgeModelType::Final] {
-        entries.extend(
-            disk_entries_for_type(roots, net_type)?
-                .into_iter()
-                .filter(|entry| !stored_net_paths.contains(&entry.net_path)),
-        );
+        entries.extend(disk_entries_for_type(roots, net_type)?.into_iter().filter(|entry| !stored_net_paths.contains(&entry.net_path)));
     }
     Ok(entries)
 }
@@ -433,7 +405,9 @@ fn remove_disk_path(path: &Path) -> anyhow::Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::{PurgeDate, PurgeLabelModelsBy, PurgeMode, PurgeModelType, PurgeModelsArgs, PurgeModelsInput, PurgeModelsStage};
+    use crate::cli::{MotifAppCommands, MotifCommands};
     use crate::motifs_store::{MotifsStore, create_motif_tables};
+    use crate::stages::train_label_nets::TrainLabelNetRunConfig;
     use crate::train_nets::TrainMotifNetRunConfig;
     use clap::Parser;
     use parking_lot::RwLock;
@@ -445,9 +419,7 @@ mod tests {
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::runner::run_ctx::RunCtxImpl;
     use thoosa_common::ws::{NET_PARAMS_FILE, NET_WEIGHTS_FILE, WsConfigs};
-    use crate::cli::{MotifAppCommands, MotifCommands};
-    use crate::stages::train_label_nets::TrainLabelNetRunConfig;
-    use thoosa_shared::run_configs::{RunConfig};
+    use thoosa_shared::run_configs::RunConfig;
     use thoosa_shared::traits::AsyncStage;
     use thoosa_shared::{ThoError, cdt_for_dir};
     use thoosa_store::{SqlStore, TrainedNetsBy};
@@ -457,9 +429,7 @@ mod tests {
     pub struct MotifAppArgs {
         #[command(flatten)]
         pub common_args: CommonArgs<MotifAppCommands>,
-
     }
-
 
     #[test]
     fn test_purge_models_command_parses() {
@@ -606,26 +576,14 @@ mod tests {
     async fn test_ws_store(name: &str) -> Result<(Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, Arc<dyn MotifsStore>), ThoError> {
         let test_dir = Path::new("/tmp").join(format!("{name}_{}", cdt_for_dir()));
         let ws = Arc::new(RwLock::new(crate::motifs_ws::new_motifs_workspace(test_dir, WsConfigs::new(2, 100, 100))?));
-        let store: Arc<dyn MotifsStore> = Arc::new(SqlStore::in_mem_(vec![
-            thoosa_store::create_tables,
-            create_motif_tables
-        ]).await?);
+        let store: Arc<dyn MotifsStore> = Arc::new(SqlStore::in_mem_(vec![thoosa_store::create_tables, create_motif_tables]).await?);
         store.bind_run(store.save_run("test".into()).await?)?;
         Ok((ws, store))
     }
 
-    async fn run_stage(
-        ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
-        store: &Arc<dyn MotifsStore>,
-        purge_mode: PurgeMode,
-    ) -> Result<super::PurgeModelsOutput, ThoError> {
+    async fn run_stage(ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, store: &Arc<dyn MotifsStore>, purge_mode: PurgeMode) -> Result<super::PurgeModelsOutput, ThoError> {
         let stage = Arc::new(PurgeModelsStage::<RunCtxImpl>::new(ws, store, PurgeModelsArgs::new(purge_mode)));
-        let output = stage
-            .run(
-                PurgeModelsInput::new(),
-                RunCtxImpl::new(0, "purge_models_test"),
-            )
-            .await?;
+        let output = stage.run(PurgeModelsInput::new(), RunCtxImpl::new(0, "purge_models_test")).await?;
         Ok(Arc::into_inner(output).expect("stage output should not be shared"))
     }
 

@@ -1,8 +1,7 @@
 use std::fmt::Debug;
 
-use serde::de::DeserializeOwned;
 use serde::Serialize;
-
+use serde::de::DeserializeOwned;
 
 pub trait IpcCodec: Debug + Send + Sync + 'static {
     fn encode<T>(value: &T) -> anyhow::Result<Vec<u8>>
@@ -32,5 +31,3 @@ impl IpcCodec for JsonIpcCodec {
         Ok(serde_json::from_slice(bytes)?)
     }
 }
-
-

@@ -1,8 +1,8 @@
 #![allow(non_camel_case_types, non_snake_case)]
 
-use anyhow::Context as _;
 use crate::dims::{AnyDims, Dims};
 use crate::nets::batches::BatchLengths;
+use anyhow::Context as _;
 // use crate::{data, utils};
 use crate::nets::builder::SeqBuilder;
 use crate::nets::builder::{Node, clc_avg_pool1d_out, clc_conv1d_out, clc_max_pool1d_out};
@@ -18,9 +18,7 @@ use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::sync::Arc;
 use tch::Kind::Float;
-use tch::nn::{
-    BatchNorm, BatchNormConfig, Conv, Init, LayerNormConfig, LinearConfig, ModuleT, Path, batch_norm1d,
-};
+use tch::nn::{BatchNorm, BatchNormConfig, Conv, Init, LayerNormConfig, LinearConfig, ModuleT, Path, batch_norm1d};
 use tch::nn::{ConvConfig, Module};
 use tch::{Kind, TchError, Tensor, nn};
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
@@ -38,10 +36,7 @@ pub struct ThoSequential<DI: Dims, DO: Dims> {
 }
 
 impl<DI: Dims, DO: Dims> ThoSequential<DI, DO> {
-    pub fn new(
-        layers: Vec<Box<dyn ThoModule<AnyDims, AnyDims>>>,
-        split_input: Option<(i64, i64)>,
-    ) -> Self {
+    pub fn new(layers: Vec<Box<dyn ThoModule<AnyDims, AnyDims>>>, split_input: Option<(i64, i64)>) -> Self {
         Self {
             layers,
             split_input,
@@ -55,7 +50,8 @@ impl<DI: Dims, DO: Dims> ThoSequential<DI, DO> {
 
         let output_t = self.layers[0].tho_forward(&t.local()?.f_alias()?.into(), lengths.as_deref_mut(), train)?;
 
-        Ok(self.layers
+        Ok(self
+            .layers
             .iter()
             .skip(1)
             .enumerate()
@@ -84,7 +80,7 @@ impl<DI: Dims + Send + Sync + 'static, DO: Dims + Send + Sync + 'static> ThoModu
                 None => self.run_layers(t, lengths.as_deref_mut(), train),
                 Some((dim, num_features)) => {
                     let splits = t.local()?.f_split(num_features, dim)?;
-                    debug!("ThoSequential::tho_forward splits.sizes={:?} num_features={num_features} dim={dim}",splits.iter().map(|t| t.size()).collect::<Vec<_>>());
+                    debug!("ThoSequential::tho_forward splits.sizes={:?} num_features={num_features} dim={dim}", splits.iter().map(|t| t.size()).collect::<Vec<_>>());
 
                     let original_lengths = lengths.as_deref().cloned();
                     let mut updated_lengths: Option<BatchLengths> = None;
@@ -95,19 +91,19 @@ impl<DI: Dims + Send + Sync + 'static, DO: Dims + Send + Sync + 'static> ThoModu
                             .enumerate()
                             .map(|(i, split)| {
                                 if split.size()[dim as usize] == num_features {
-                                    debug!("ThoSequential::tho_forward i={i} split={:?}",split.size());
+                                    debug!("ThoSequential::tho_forward i={i} split={:?}", split.size());
 
                                     let mut lengths_run = original_lengths.as_ref().map(|vals| vals.clone());
                                     let r = self.run_layers(&split.into(), lengths_run.as_mut(), train)?;
                                     if updated_lengths.is_none() {
                                         updated_lengths = lengths_run;
                                     }
-                                    debug!("ThoSequential::tho_forward i={i} r.size()={:?}",r.size());
+                                    debug!("ThoSequential::tho_forward i={i} r.size()={:?}", r.size());
 
                                     Ok(r.into_local()?)
                                 } else {
                                     //TODO ok skipping?
-                                    debug!("ThoSequential::tho_forward skipping i={i} split.size={:?}",split.size());
+                                    debug!("ThoSequential::tho_forward skipping i={i} split.size={:?}", split.size());
 
                                     Err(anyhow::anyhow!("Unexpected split size: {:?} dim={dim}", split.size()))
                                 }
@@ -121,9 +117,9 @@ impl<DI: Dims + Send + Sync + 'static, DO: Dims + Send + Sync + 'static> ThoModu
                         *lengths_out = updated;
                     }
 
-                    let mean_r = split_r.f_mean_dim(1, false, None)?.f_unsqueeze(1)?;//TODO why mean?
+                    let mean_r = split_r.f_mean_dim(1, false, None)?.f_unsqueeze(1)?; //TODO why mean?
 
-                    debug!("ThoSequential::tho_forward split_r.size()={:?} mean_r.size()={:?}",split_r.size(),mean_r.size());
+                    debug!("ThoSequential::tho_forward split_r.size()={:?} mean_r.size()={:?}", split_r.size(), mean_r.size());
 
                     Ok(mean_r.into())
                 }
@@ -151,18 +147,10 @@ impl<DI: Dims, DO: Dims> Debug for ThoParallel<DI, DO> {
 }
 
 impl<DI: Dims, DO: Dims> ThoParallel<DI, DO> {
-    pub fn new(
-        layers: Vec<Box<dyn ThoModule<DI, DO>>>,
-        split: Arc<dyn Fn(&Tensor) -> anyhow::Result<Vec<Tensor>> + Send + Sync>,
-        join: Arc<dyn Fn(Vec<Tensor>) -> anyhow::Result<Tensor> + Send + Sync>,
-    ) -> Self {
+    pub fn new(layers: Vec<Box<dyn ThoModule<DI, DO>>>, split: Arc<dyn Fn(&Tensor) -> anyhow::Result<Vec<Tensor>> + Send + Sync>, join: Arc<dyn Fn(Vec<Tensor>) -> anyhow::Result<Tensor> + Send + Sync>) -> Self {
         assert!(layers.len() > 0, "layers len == 0");
 
-        Self {
-            layers,
-            split,
-            join,
-        }
+        Self { layers, split, join }
     }
 }
 
@@ -215,23 +203,14 @@ impl<DI: Dims, DO: Dims> Debug for Split<DI, DO> {
 }
 
 impl<DI: Dims, DO: Dims> Split<DI, DO> {
-    pub fn new(
-        layer: Box<dyn ThoModule<DI, DO>>,
-        split: Arc<dyn Fn(&Tensor) -> anyhow::Result<Vec<Tensor>> + Send + Sync>,
-        join: Arc<dyn Fn(Vec<Tensor>) -> anyhow::Result<Tensor> + Send + Sync>,
-    ) -> Self {
-
-        Self {
-            layer,
-            split,
-            join,
-        }
+    pub fn new(layer: Box<dyn ThoModule<DI, DO>>, split: Arc<dyn Fn(&Tensor) -> anyhow::Result<Vec<Tensor>> + Send + Sync>, join: Arc<dyn Fn(Vec<Tensor>) -> anyhow::Result<Tensor> + Send + Sync>) -> Self {
+        Self { layer, split, join }
     }
 }
 
 impl<DI: Dims + 'static, DO: Dims + 'static> ThoModule<DI, DO> for Split<DI, DO> {
     fn debug(&self) {
-       self.layer.debug()
+        self.layer.debug()
     }
 
     fn tho_forward(&self, t: &ThoTensor<DI, DebugId>, mut lengths: Option<&mut BatchLengths>, train: bool) -> anyhow::Result<ThoTensor<DO, DebugId>> {
@@ -305,21 +284,13 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for ThoMaxPool1d {
                 *len = clc_max_pool1d_out(*len as u32, self.kernel_size as u32, self.padding as u32, self.dilation as u32, self.stride as u32)? as i64;
             }
         }
-        Ok(t.local()?
-            .f_max_pool1d(
-                self.kernel_size,
-                self.stride,
-                self.padding,
-                self.dilation,
-                self.ceil_mode,
-            )?
-            .into())
+        Ok(t.local()?.f_max_pool1d(self.kernel_size, self.stride, self.padding, self.dilation, self.ceil_mode)?.into())
     }
 }
 
 #[derive(Debug)]
 pub struct AdaptiveMaxPool1d {
-    output_size: u32
+    output_size: u32,
 }
 
 impl AdaptiveMaxPool1d {
@@ -335,15 +306,13 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for AdaptiveMaxPool1d {
                 *len = self.output_size as i64;
             }
         }
-        Ok(t.local()?
-            .f_adaptive_max_pool1d(self.output_size as i64)?
-            .0.into())
+        Ok(t.local()?.f_adaptive_max_pool1d(self.output_size as i64)?.0.into())
     }
 }
 
 #[derive(Debug)]
 pub struct AdaptiveAvgPool1d {
-    output_size: u32
+    output_size: u32,
 }
 
 impl AdaptiveAvgPool1d {
@@ -359,9 +328,7 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for AdaptiveAvgPool1d {
                 *len = self.output_size as i64;
             }
         }
-        Ok(t.local()?
-            .f_adaptive_avg_pool1d(self.output_size as i64)?
-            .into())
+        Ok(t.local()?.f_adaptive_avg_pool1d(self.output_size as i64)?.into())
     }
 }
 
@@ -410,7 +377,10 @@ pub(crate) fn linear_from_path(vs: &Path, in_dim: i64, out_dim: i64, config: Lin
         None
     };
 
-    Ok(nn::Linear { ws: path_var(vs, "weight", &[out_dim, in_dim], config.ws_init)?, bs })
+    Ok(nn::Linear {
+        ws: path_var(vs, "weight", &[out_dim, in_dim], config.ws_init)?,
+        bs,
+    })
 }
 
 pub(crate) fn conv1d_from_path(vs: &Path, in_dim: i64, out_dim: i64, kernel: i64, config: ConvConfig) -> anyhow::Result<nn::Conv1D> {
@@ -462,11 +432,7 @@ fn batch_norm1d_from_path(vs: &Path, num_features: i64, config: BatchNormConfig)
 }
 
 impl ThoBatchNorm1d {
-    pub fn new<'a, P: Borrow<Path<'a>>>(
-        path: P,
-        num_features: u32,
-        config: BatchNormConfig,
-    ) -> anyhow::Result<Self> {
+    pub fn new<'a, P: Borrow<Path<'a>>>(path: P, num_features: u32, config: BatchNormConfig) -> anyhow::Result<Self> {
         debug!("ThoBatchNorm1d::tho_forward: path={:?} num_features={num_features}", path.borrow());
 
         Ok(Self {
@@ -481,7 +447,6 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for ThoBatchNorm1d {
         Ok(self.batch_norm.forward_t(&*t.local()?, train).into())
     }
 }
-
 
 #[derive(Debug)]
 pub struct ThoConv<ND> {
@@ -508,13 +473,13 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for ThoConv<[i64; 1]> {
             }
         }
         debug!("ThoConv::tho_forward lengths={lengths:?}");
-        Ok(panic_to_err!(Ok::<_, ThoError>(self.conv.forward_t(&*t.local()?, train).into()))?)//TODO custom conv for errors
+        Ok(panic_to_err!(Ok::<_, ThoError>(self.conv.forward_t(&*t.local()?, train).into()))?) //TODO custom conv for errors
     }
 }
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for ThoConv<[i64; 2]> {
     fn tho_forward(&self, t: &ThoTensor<DI, DebugId>, _lengths: Option<&mut BatchLengths>, train: bool) -> anyhow::Result<ThoTensor<DO, DebugId>> {
-        Ok(self.conv.forward_t(&*t.local()?, train).into())//TODO custom conv for errors
+        Ok(self.conv.forward_t(&*t.local()?, train).into()) //TODO custom conv for errors
     }
 }
 
@@ -525,14 +490,14 @@ pub struct InitDummy {}
 pub struct TrimmedMean {
     #[in_map]
     #[run_config]
-    trim_frac: f64
+    trim_frac: f64,
 }
 
 #[derive(Serialize, Deserialize, ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug)]
 pub enum InitMode {
     Mean(InitDummy),
     Median(InitDummy),
-    TrimmedMean (TrimmedMean),
+    TrimmedMean(TrimmedMean),
     CenteredMean(InitDummy),
     L2NormalizedMean(InitDummy),
     ZScoreMean(InitDummy),
@@ -540,22 +505,22 @@ pub enum InitMode {
 }
 
 impl InitMode {
-    pub fn list(trim_frac: f64) ->Vec<InitMode> {
+    pub fn list(trim_frac: f64) -> Vec<InitMode> {
         vec![
-            InitMode::Mean(InitDummy{}),
-            InitMode::Median(InitDummy{}),
-            InitMode::TrimmedMean(TrimmedMean{ trim_frac }),
-            CenteredMean(InitDummy{}),
-            L2NormalizedMean(InitDummy{}),
-            ZScoreMean(InitDummy{}),
-            CenteredMean(InitDummy{})
+            InitMode::Mean(InitDummy {}),
+            InitMode::Median(InitDummy {}),
+            InitMode::TrimmedMean(TrimmedMean { trim_frac }),
+            CenteredMean(InitDummy {}),
+            L2NormalizedMean(InitDummy {}),
+            ZScoreMean(InitDummy {}),
+            CenteredMean(InitDummy {}),
         ]
     }
 }
 
 impl Default for InitMode {
     fn default() -> InitMode {
-        InitMode::CenteredMean(InitDummy{})
+        InitMode::CenteredMean(InitDummy {})
     }
 }
 
@@ -574,14 +539,7 @@ pub struct ThoCosineConv1d {
 }
 
 impl ThoCosineConv1d {
-    pub fn new(
-        vs: &Path,
-        l: i64,
-        init: Option<Arc<dyn TensorInitRef>>,
-        init_mode: InitMode,
-        a: f64,
-        b: f64,
-    ) -> anyhow::Result<Self> {
+    pub fn new(vs: &Path, l: i64, init: Option<Arc<dyn TensorInitRef>>, init_mode: InitMode, a: f64, b: f64) -> anyhow::Result<Self> {
         debug!("ThoCosineConv1d::new: l={l}, init_mode={init_mode:?} init={init:?}");
 
         // A copied VarStore already owns the initialized kernel; rebuilding
@@ -631,12 +589,7 @@ impl ThoCosineConv1d {
         let alpha = path_var(vs, "alpha", &[], nn::Init::Const(a))?;
         let beta = path_var(vs, "beta", &[], nn::Init::Const(b))?;
 
-        Ok(Self {
-            kernel,
-            alpha,
-            beta,
-            l,
-        })
+        Ok(Self { kernel, alpha, beta, l })
     }
 
     /// Accept [B, L] or [B, 1, L].
@@ -662,14 +615,11 @@ impl ThoCosineConv1d {
             return Err(anyhow::anyhow!("ThoCosineConv1d::forward: expected input width {}, got {}", self.l, sz[2]));
         }
 
-        debug!("ThoCosineConv1d::forward: self.kernel={:?} self.kernel.isnan={}", self.kernel,  self.kernel.isnan().any());
+        debug!("ThoCosineConv1d::forward: self.kernel={:?} self.kernel.isnan={}", self.kernel, self.kernel.isnan().any());
 
         // Normalize kernel each forward: [1,1,L] / ||kernel||
         let k_sq = self.kernel.f_mul(&self.kernel)?;
-        let k_norm = k_sq
-            .f_sum_dim_intlist(&[1i64, 2i64][..], true, Kind::Float)?
-            .f_sqrt()?
-            .f_clamp_min(1e-12)?;
+        let k_norm = k_sq.f_sum_dim_intlist(&[1i64, 2i64][..], true, Kind::Float)?.f_sqrt()?.f_clamp_min(1e-12)?;
         debug!("ThoCosineConv1d::forward: k_norm={k_norm:?} k_norm.isnan={}", k_norm.isnan().any());
 
         let k_unit = self.kernel.f_div(&k_norm)?;
@@ -677,22 +627,12 @@ impl ThoCosineConv1d {
         debug!("ThoCosineConv1d::forward: k_unit={k_unit:?} k_unit.isnan={}", k_unit.isnan().any());
 
         // Full-width conv -> [B,1,1]
-        let num = x.f_conv1d(
-            &k_unit,
-            Option::<&Tensor>::None,
-            [1],
-            [0],
-            [1],
-            1,
-        )?;
+        let num = x.f_conv1d(&k_unit, Option::<&Tensor>::None, [1], [0], [1], 1)?;
         debug!("ThoCosineConv1d::forward: num={num:?} num.isnan={}", num.isnan().any());
 
         // ||x|| over channel+time -> [B,1,1]
         let x_sq = x.f_mul(&x)?;
-        let x_norm = x_sq
-            .f_sum_dim_intlist(&[1i64, 2i64][..], true, Kind::Float)?
-            .f_sqrt()?
-            .f_clamp_min(1e-12)?;
+        let x_norm = x_sq.f_sum_dim_intlist(&[1i64, 2i64][..], true, Kind::Float)?.f_sqrt()?.f_clamp_min(1e-12)?;
         debug!("ThoCosineConv1d::forward: x_norm={x_norm:?} x_norm.isnan={}", x_norm.isnan().any());
 
         // cosine similarity in [-1, 1]
@@ -700,10 +640,7 @@ impl ThoCosineConv1d {
         debug!("ThoCosineConv1d::forward: score={score:?} score.isnan={}", score.isnan().any());
 
         // logit = alpha * score + beta
-        Ok(score
-            .f_mul(&self.alpha)?
-            .f_add(&self.beta)?
-            .f_squeeze_dim(2)?)// [B,1]
+        Ok(score.f_mul(&self.alpha)?.f_add(&self.beta)?.f_squeeze_dim(2)?) // [B,1]
     }
 
     fn build_prototype(
@@ -713,17 +650,11 @@ impl ThoCosineConv1d {
         match mode {
             InitMode::Mean(..) => Self::proto_mean(init_slices),
             InitMode::Median(..) => Self::proto_median(init_slices),
-            InitMode::TrimmedMean(TrimmedMean{trim_frac}) => {
-                Self::proto_trimmed_mean(init_slices, trim_frac)
-            }
+            InitMode::TrimmedMean(TrimmedMean { trim_frac }) => Self::proto_trimmed_mean(init_slices, trim_frac),
             InitMode::CenteredMean(..) => Self::init_proto_centered_mean(init_slices),
-            InitMode::L2NormalizedMean(..) => {
-                Self::proto_l2_normalized_mean(init_slices)
-            }
+            InitMode::L2NormalizedMean(..) => Self::proto_l2_normalized_mean(init_slices),
             InitMode::ZScoreMean(..) => Self::proto_zscore_mean(init_slices),
-            InitMode::CenteredL2NormalizedMean(..) => {
-                Self::proto_centered_l2_normalized_mean(init_slices)
-            }
+            InitMode::CenteredL2NormalizedMean(..) => Self::proto_centered_l2_normalized_mean(init_slices),
         }
     }
 
@@ -757,29 +688,18 @@ impl ThoCosineConv1d {
         Ok(values)
     }
 
-    fn proto_trimmed_mean(
-        init_slices: &Tensor,
-        trim_frac: f64,
-    ) -> Result<Tensor, TchError> {
+    fn proto_trimmed_mean(init_slices: &Tensor, trim_frac: f64) -> Result<Tensor, TchError> {
         let sz = init_slices.size();
         let n = sz[0];
 
         if !(0.0..0.5).contains(&trim_frac) {
-            return Err(TchError::Torch(
-                format!("trim_frac must be in [0.0, 0.5), got {trim_frac}").into(),
-            ));
+            return Err(TchError::Torch(format!("trim_frac must be in [0.0, 0.5), got {trim_frac}").into()));
         }
 
         let trim = ((n as f64) * trim_frac).floor() as i64;
         let keep = n - 2 * trim;
         if keep <= 0 {
-            return Err(TchError::Torch(
-                format!(
-                    "trim_frac={} is too large for number of slices n={}",
-                    trim_frac, n
-                )
-                    .into(),
-            ));
+            return Err(TchError::Torch(format!("trim_frac={} is too large for number of slices n={}", trim_frac, n).into()));
         }
 
         let (sorted, _idx) = init_slices.f_sort(0, false)?;
@@ -795,10 +715,7 @@ impl ThoCosineConv1d {
 
     fn proto_l2_normalized_mean(init_slices: &Tensor) -> Result<Tensor, TchError> {
         let x2 = init_slices.f_mul(init_slices)?;
-        let row_norm = x2
-            .f_sum_dim_intlist(&[1i64][..], true, Kind::Float)?
-            .f_sqrt()?
-            .f_clamp_min(1e-12)?;
+        let row_norm = x2.f_sum_dim_intlist(&[1i64][..], true, Kind::Float)?.f_sqrt()?.f_clamp_min(1e-12)?;
         let normed = init_slices.f_div(&row_norm)?;
         normed.f_mean_dim(&[0i64][..], false, Kind::Float)
     }
@@ -815,17 +732,12 @@ impl ThoCosineConv1d {
         z.f_mean_dim(&[0i64][..], false, Kind::Float)
     }
 
-    fn proto_centered_l2_normalized_mean(
-        init_slices: &Tensor,
-    ) -> Result<Tensor, TchError> {
+    fn proto_centered_l2_normalized_mean(init_slices: &Tensor) -> Result<Tensor, TchError> {
         let row_mean = init_slices.f_mean_dim(&[1i64][..], true, Kind::Float)?;
         let centered = init_slices.f_sub(&row_mean)?;
 
         let c2 = centered.f_mul(&centered)?;
-        let row_norm = c2
-            .f_sum_dim_intlist(&[1i64][..], true, Kind::Float)?
-            .f_sqrt()?
-            .f_clamp_min(1e-12)?;
+        let row_norm = c2.f_sum_dim_intlist(&[1i64][..], true, Kind::Float)?.f_sqrt()?.f_clamp_min(1e-12)?;
 
         let normed = centered.f_div(&row_norm)?;
         normed.f_mean_dim(&[0i64][..], false, Kind::Float)
@@ -834,7 +746,7 @@ impl ThoCosineConv1d {
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for ThoCosineConv1d {
     fn tho_forward(&self, x_in: &ThoTensor<DI, DebugId>, _lengths: Option<&mut BatchLengths>, _train: bool) -> anyhow::Result<ThoTensor<DO, DebugId>> {
-       Ok(self.forward(&*x_in.local()?)?.into())
+        Ok(self.forward(&*x_in.local()?)?.into())
     }
 }
 
@@ -940,14 +852,8 @@ impl ThoSharpeningHead1d {
 
     fn morph_opening1d(x: &Tensor, kernel: i64) -> anyhow::Result<Tensor> {
         let (pad_left, pad_right) = Self::same_pad(kernel);
-        let erode = x
-            .f_neg()?
-            .f_pad([pad_left, pad_right], "replicate", 0.0)?
-            .f_max_pool1d(kernel, 1, 0, 1, false)?
-            .f_neg()?;
-        Ok(erode
-            .f_pad([pad_left, pad_right], "replicate", 0.0)?
-            .f_max_pool1d(kernel, 1, 0, 1, false)?)
+        let erode = x.f_neg()?.f_pad([pad_left, pad_right], "replicate", 0.0)?.f_max_pool1d(kernel, 1, 0, 1, false)?.f_neg()?;
+        Ok(erode.f_pad([pad_left, pad_right], "replicate", 0.0)?.f_max_pool1d(kernel, 1, 0, 1, false)?)
     }
 
     pub fn forward_with_thp(&self, sims: &Tensor) -> anyhow::Result<(Tensor, Tensor)> {
@@ -1010,15 +916,7 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for ThoAvgPool1d {
                 *len = clc_avg_pool1d_out(*len as u32, self.kernel_size as u32, self.padding as u32, self.stride as u32) as i64;
             }
         }
-        Ok(t.local()?
-            .f_avg_pool1d(
-                self.kernel_size,
-                self.stride,
-                self.padding,
-                self.ceil_mode,
-                self.count_include_pad,
-            )?
-            .into())
+        Ok(t.local()?.f_avg_pool1d(self.kernel_size, self.stride, self.padding, self.ceil_mode, self.count_include_pad)?.into())
     }
 }
 
@@ -1038,9 +936,6 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for ThoDropout {
         Ok(t.local()?.f_dropout(self.p, train)?.into())
     }
 }
-
-
-
 
 pub trait ThoModuleDowncast {
     fn as_any(&self) -> &dyn Any;
@@ -1070,13 +965,11 @@ pub trait ThoModule<DI: Dims, DO: Dims>: Debug + Send + ThoModuleDowncast {
 
     fn tho_forward(&self, t: &ThoTensor<DI, DebugId>, lengths: Option<&mut BatchLengths>, train: bool) -> anyhow::Result<ThoTensor<DO, DebugId>>;
 
-    fn quantize(&mut self) {
-
-    }
+    fn quantize(&mut self) {}
 }
 
 pub type Fp = fn(&Tensor) -> anyhow::Result<Tensor>;
-pub type LossFp = fn(&Tensor, &Tensor) -> anyhow::Result<Tensor>;//TODO add RC as param and make loss function net-specific
+pub type LossFp = fn(&Tensor, &Tensor) -> anyhow::Result<Tensor>; //TODO add RC as param and make loss function net-specific
 
 pub struct ThoFuncModule {
     func: Fp,
@@ -1096,7 +989,7 @@ impl ThoFuncModule {
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for ThoFuncModule {
     fn tho_forward(&self, t: &ThoTensor<DI, DebugId>, _lengths: Option<&mut BatchLengths>, _train: bool) -> anyhow::Result<ThoTensor<DO, DebugId>> {
-        (self.func)(&*t.local()?).map(|t|t.into())
+        (self.func)(&*t.local()?).map(|t| t.into())
     }
 }
 
@@ -1105,7 +998,6 @@ pub struct ThoClosureModule {
     //TODO Tensor->ThoTensor
     func: Arc<Box<dyn Fn(&Tensor, Option<&BatchLengths>) -> anyhow::Result<Tensor> + Send + Sync>>,
 }
-
 
 impl ThoClosureModule {
     /// Captures shared by the module must be safe to move and share between threads.
@@ -1133,10 +1025,7 @@ impl Debug for ThoClosureModule {
 
 impl<DI: Dims + Send + Sync, DO: Dims + Send + Sync> ThoModule<DI, DO> for ThoClosureModule {
     fn tho_forward(&self, t: &ThoTensor<DI, DebugId>, lengths: Option<&mut BatchLengths>, _train: bool) -> anyhow::Result<ThoTensor<DO, DebugId>> {
-        (self.func)(
-            &*t.local()?,
-            lengths.as_deref()
-        ).map(|v|v.into())
+        (self.func)(&*t.local()?, lengths.as_deref()).map(|v| v.into())
     }
 }
 
@@ -1147,79 +1036,69 @@ pub struct ThoLinear<DI: Dims, DO: Dims> {
     _pd_di: PhantomData<DI>,
     _pd_do: PhantomData<DO>,
 
-    quantized:Option<FastQuantizedLinear>,
+    quantized: Option<FastQuantizedLinear>,
 
     #[cfg(any(debug_assertions, tho_debug))]
     descr: String,
 }
 
-
-
 impl<DI, DO> ThoLinear<DI, DO>
 where
     DI: Dims + Send + Sync + 'static,
-    DO: Dims + Send + Sync + 'static
+    DO: Dims + Send + Sync + 'static,
 {
-    pub fn new(
-        ws: Tensor, bs: Option<Tensor>, _pd_di: PhantomData<DI>, _pd_do: PhantomData<DO>,
-        #[cfg(any(debug_assertions, tho_debug))]
-        descr: String
-    ) -> Self {
-
+    pub fn new(ws: Tensor, bs: Option<Tensor>, _pd_di: PhantomData<DI>, _pd_do: PhantomData<DO>, #[cfg(any(debug_assertions, tho_debug))] descr: String) -> Self {
         Self {
             quantized: None,
-            ws, bs, _pd_di, _pd_do,
+            ws,
+            bs,
+            _pd_di,
+            _pd_do,
 
             #[cfg(any(debug_assertions, tho_debug))]
-            descr
+            descr,
         }
     }
 }
 
-
 impl<DI, DO> ThoModule<DI, DO> for ThoLinear<DI, DO>
 where
     DI: Dims + Send + Sync + 'static,
-    DO: Dims + Send + Sync + 'static
+    DO: Dims + Send + Sync + 'static,
 {
     fn debug(&self) {
-        debug!("ThoModule for MyLinear::debug: ws.device={:?} bs.device={:?}",self.ws.device(),self.bs.as_ref().map(|bs| bs.device()));
+        debug!("ThoModule for MyLinear::debug: ws.device={:?} bs.device={:?}", self.ws.device(), self.bs.as_ref().map(|bs| bs.device()));
     }
 
-    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="MyLinear::tho_forward"))]
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "MyLinear::tho_forward"))]
     fn tho_forward(&self, in_t: &ThoTensor<DI, DebugId>, _lengths: Option<&mut BatchLengths>, _train: bool) -> anyhow::Result<ThoTensor<DO, DebugId>> {
         #[cfg(any(debug_assertions, tho_debug))]
         {
             debug!("Module for MyLinear::forward: descr={} in_t={in_t:?} self.ws={:?} self.bs={:?}", self.descr, self.ws, self.bs);
-            debug!("Module for MyLinear::forward: devices ws={:?} bs={:?} t={:?}",self.ws.device(),self.bs.as_ref().map(|bs| bs.device()),in_t.tho_device_idx());
-            debug!("Module for MyLinear::forward: sizes ws={:?} bs={:?} t={:?}",self.ws.size(),self.bs.as_ref().map(|bs| bs.size()),in_t.size());
+            debug!("Module for MyLinear::forward: devices ws={:?} bs={:?} t={:?}", self.ws.device(), self.bs.as_ref().map(|bs| bs.device()), in_t.tho_device_idx());
+            debug!("Module for MyLinear::forward: sizes ws={:?} bs={:?} t={:?}", self.ws.size(), self.bs.as_ref().map(|bs| bs.size()), in_t.size());
         }
         match &self.quantized {
-            None => {
-                match in_t.local()?.f_linear(&self.ws, self.bs.as_ref()) {
-                    Ok(t) => Ok(t.into()),
-                    Err(e) => {
-                        error!("ThoLinear::tho_forward: {:?}", e);
-                        #[cfg(any(debug_assertions, tho_debug))]
-                        error!("ThoLinear::tho_forward: failed layer descr: {} ", self.descr);
+            None => match in_t.local()?.f_linear(&self.ws, self.bs.as_ref()) {
+                Ok(t) => Ok(t.into()),
+                Err(e) => {
+                    error!("ThoLinear::tho_forward: {:?}", e);
+                    #[cfg(any(debug_assertions, tho_debug))]
+                    error!("ThoLinear::tho_forward: failed layer descr: {} ", self.descr);
 
-                        Err(e.into())
-                    }
+                    Err(e.into())
                 }
-            }
-            Some(quantized) => {
+            },
+            Some(quantized) => match quantized.try_forward(&in_t.local()?.to_kind(in_t.local()?.kind())) {
+                Ok(t) => Ok(t.into()),
+                Err(e) => {
+                    error!("ThoLinear::tho_forward, quantized: {:?}", e);
+                    #[cfg(any(debug_assertions, tho_debug))]
+                    error!("ThoLinear::tho_forward: failed layer descr: {} ", self.descr);
 
-                match quantized.try_forward(&in_t.local()?.to_kind(in_t.local()?.kind())) {
-                    Ok(t) => Ok(t.into()),
-                    Err(e) => {
-                        error!("ThoLinear::tho_forward, quantized: {:?}", e);
-                        #[cfg(any(debug_assertions, tho_debug))]
-                        error!("ThoLinear::tho_forward: failed layer descr: {} ", self.descr);
-
-                        Err(e.into())
-                    }
+                    Err(e.into())
                 }
-            }
+            },
         }
     }
 
@@ -1229,23 +1108,11 @@ where
 
         debug!("MyLinear::new: ws={:?} ws_fl={ws_fl:?} bs={:?} bs_fl={bs_fl:?} ", self.ws, self.bs);
 
-        self.quantized =  Some(
-            FastQuantizedLinear::from_float_weights(
-                &ws_fl,
-                bs_fl.as_ref()
-            ).expect("can't quantize")
-        );
+        self.quantized = Some(FastQuantizedLinear::from_float_weights(&ws_fl, bs_fl.as_ref()).expect("can't quantize"));
     }
 }
 
-pub fn my_linear<'a, T: Borrow<Path<'a>>, DI: Dims + 'static, DO: Dims + 'static>(
-    path: T,
-    in_dim: i64,
-    out_dim: i64,
-    c: LinearConfig,
-    #[cfg(any(debug_assertions, tho_debug))]
-    descr: String,
-) -> anyhow::Result<ThoLinear<DI, DO>> {
+pub fn my_linear<'a, T: Borrow<Path<'a>>, DI: Dims + 'static, DO: Dims + 'static>(path: T, in_dim: i64, out_dim: i64, c: LinearConfig, #[cfg(any(debug_assertions, tho_debug))] descr: String) -> anyhow::Result<ThoLinear<DI, DO>> {
     assert!(in_dim > 0);
     assert!(out_dim > 0);
 
@@ -1261,21 +1128,15 @@ pub fn my_linear<'a, T: Borrow<Path<'a>>, DI: Dims + 'static, DO: Dims + 'static
     ))
 }
 
-pub fn configure_dense(
-    num_features: u32,
-    num_blocks: usize,
-    num_layers_in_block: usize,
-    kernel: u32,
-    channels: u32,
-) -> anyhow::Result<Node> {
+pub fn configure_dense(num_features: u32, num_blocks: usize, num_layers_in_block: usize, kernel: u32, channels: u32) -> anyhow::Result<Node> {
     let mut builder = SeqBuilder::new(num_features, None)?;
 
     let dense_block = |b: &mut SeqBuilder| -> anyhow::Result<()> {
         b.n_blocks(
             |b: &mut SeqBuilder, _i| {
-                b.func(|t|Ok(Tensor::f_relu(t)?))?
+                b.func(|t| Ok(Tensor::f_relu(t)?))?
                     .conv_1d("conv", kernel, channels, channels, ConvConfig::default(), None)?
-                    .func(|t|Ok(Tensor::f_relu(t)?))?
+                    .func(|t| Ok(Tensor::f_relu(t)?))?
                     .conv_1d("conv", kernel, channels, channels, ConvConfig::default(), None)?
                     .end()
             },
@@ -1292,9 +1153,9 @@ pub fn configure_dense(
             |b: &mut SeqBuilder, _i| {
                 b.block(dense_block)?
                     .block(|b: &mut SeqBuilder| {
-                        b.func(|t|Ok(Tensor::f_elu(t)?))?
+                        b.func(|t| Ok(Tensor::f_elu(t)?))?
                             .conv_1d("conv", kernel, channels, channels, ConvConfig::default(), None)?
-                            .func(|t|Ok(Tensor::f_elu(t)?))?
+                            .func(|t| Ok(Tensor::f_elu(t)?))?
                             .conv_1d("conv", kernel, channels, channels, ConvConfig::default(), None)?
                             .end()
                     })?
@@ -1303,13 +1164,10 @@ pub fn configure_dense(
             num_blocks,
         )?
         .block(dense_block)?
-        .func(|t|Ok(Tensor::f_relu(t)?))?
+        .func(|t| Ok(Tensor::f_relu(t)?))?
         .avg_pool(7, 3, 0)?
         .dropout(0.5)?
-        .linear_s(
-            6,
-            "todo",
-        )?
+        .linear_s(6, "todo")?
         .end_seq()
 }
 
@@ -1331,7 +1189,6 @@ impl ThoAttnPool1d {
 
         Ok(Self { proj, v })
     }
-
 }
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for ThoAttnPool1d {
@@ -1350,7 +1207,6 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for ThoAttnPool1d {
 
         debug!("MyAttnPool1d::tho_forward: p.size={:?}, t.size={:?}, scores.size={:?}", p.size(), t.size(), scores.size());
 
-
         let scores = if let Some(m) = mask {
             debug!("MyAttnPool1d::tho_forward:  after mask.size={:?} ", m.size());
             // set padding to large negative so softmax weight ~0 there
@@ -1361,9 +1217,9 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for ThoAttnPool1d {
 
         debug!("MyAttnPool1d::tho_forward:  after mask scores.size={:?}", scores.size());
 
-        let attn = scores.softmax(-1, Kind::Float);               // [B,T]
+        let attn = scores.softmax(-1, Kind::Float); // [B,T]
         let attn_unsqueezed = attn.unsqueeze(1);
-        debug!("MyAttnPool1d::tho_forward: scores.size={:?} attn.size={:?} h.size={:?}, attn_unsqueezed.size={:?}",scores.size(), attn.size(), h.size(), attn_unsqueezed.size());
+        debug!("MyAttnPool1d::tho_forward: scores.size={:?} attn.size={:?} h.size={:?}, attn_unsqueezed.size={:?}", scores.size(), attn.size(), h.size(), attn_unsqueezed.size());
         let pooled = h.f_mul(&attn_unsqueezed)?.f_sum_dim_intlist(2, false, Kind::Float)?; // [B,C]
 
         debug!("MyAttnPool1d::tho_forward: pooled.size={:?}", pooled.size());
@@ -1373,28 +1229,14 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for ThoAttnPool1d {
 
 fn valid_time_mask(lengths: &[i64], batch: i64, max_l: i64, device: tch::Device) -> anyhow::Result<Tensor> {
     if lengths.len() != batch as usize {
-        return Err(anyhow::anyhow!(format!(
-            "SelfAttention::tho_forward lengths mismatch: batch={batch} lengths.len={}",
-            lengths.len()
-        )));
+        return Err(anyhow::anyhow!(format!("SelfAttention::tho_forward lengths mismatch: batch={batch} lengths.len={}", lengths.len())));
     }
     let pos = Tensor::f_arange(max_l, (Kind::Int64, device))?.f_unsqueeze(0)?;
     let len = Tensor::f_from_slice(lengths)?.f_to_device(device)?.f_view([batch, 1])?;
     Ok(pos.f_lt_tensor(&len)?)
 }
 
-fn self_attention_forward_t(
-    x: Tensor,
-    key_valid: Tensor,
-    w_q: &nn::Linear,
-    w_k: &nn::Linear,
-    w_v: &nn::Linear,
-    w_o: &nn::Linear,
-    n_heads: i64,
-    head_dim: i64,
-    dropout: f64,
-    train: bool,
-) -> anyhow::Result<Tensor> {
+fn self_attention_forward_t(x: Tensor, key_valid: Tensor, w_q: &nn::Linear, w_k: &nn::Linear, w_v: &nn::Linear, w_o: &nn::Linear, n_heads: i64, head_dim: i64, dropout: f64, train: bool) -> anyhow::Result<Tensor> {
     let (b, l, _d) = {
         let s = x.size();
         (s[0], s[1], s[2])
@@ -1404,23 +1246,26 @@ fn self_attention_forward_t(
 
     debug!(
         "SelfAttention::tho_forward: x={:?}, key_valid={:?}, w_q.ws={:?}, w_q.bs={:?}, w_k.ws={:?}, w_k.bs={:?}, w_v.ws={:?}, w_v.bs={:?}, w_o.ws={:?}, w_o.bs={:?}, n_heads={:?}, head_dim={:?}, dropout={:?}",
-        x,key_valid,w_q.ws,w_q.bs.as_ref().map(|v| v),w_k.ws,w_k.bs.as_ref().map(|v| v),w_v.ws,w_v.bs.as_ref().map(|v| v),w_o.ws,w_o.bs.as_ref().map(|v| v),n_heads,head_dim,dropout
+        x,
+        key_valid,
+        w_q.ws,
+        w_q.bs.as_ref().map(|v| v),
+        w_k.ws,
+        w_k.bs.as_ref().map(|v| v),
+        w_v.ws,
+        w_v.bs.as_ref().map(|v| v),
+        w_o.ws,
+        w_o.bs.as_ref().map(|v| v),
+        n_heads,
+        head_dim,
+        dropout
     );
 
-    let q = x
-        .f_linear(&w_q.ws, w_q.bs.as_ref())?
-        .f_view([b, l, n_heads, head_dim])?
-        .f_transpose(1, 2)?;
+    let q = x.f_linear(&w_q.ws, w_q.bs.as_ref())?.f_view([b, l, n_heads, head_dim])?.f_transpose(1, 2)?;
 
-    let k = x
-        .f_linear(&w_k.ws, w_k.bs.as_ref())?
-        .f_view([b, l, n_heads, head_dim])?
-        .f_transpose(1, 2)?;
+    let k = x.f_linear(&w_k.ws, w_k.bs.as_ref())?.f_view([b, l, n_heads, head_dim])?.f_transpose(1, 2)?;
 
-    let v = x
-        .f_linear(&w_v.ws, w_v.bs.as_ref())?
-        .f_view([b, l, n_heads, head_dim])?
-        .f_transpose(1, 2)?;
+    let v = x.f_linear(&w_v.ws, w_v.bs.as_ref())?.f_view([b, l, n_heads, head_dim])?.f_transpose(1, 2)?;
 
     drop(x);
 
@@ -1431,10 +1276,7 @@ fn self_attention_forward_t(
             let mut raw_scores = panic_to_err!(q.f_matmul(&k.f_transpose(-2, -1)?)?.f_div_scalar(scale))?;
 
             let masked_scores = {
-                let invalid_mask = key_valid
-                    .f_logical_not()?
-                    .f_unsqueeze(1)?
-                    .f_unsqueeze(2)?;
+                let invalid_mask = key_valid.f_logical_not()?.f_unsqueeze(1)?.f_unsqueeze(2)?;
 
                 drop(key_valid);
 
@@ -1445,9 +1287,7 @@ fn self_attention_forward_t(
             masked_scores
         };
 
-        let attn = scores
-            .f_softmax(-1, scores.kind())?
-            .f_dropout(dropout, train)?;
+        let attn = scores.f_softmax(-1, scores.kind())?.f_dropout(dropout, train)?;
 
         drop(scores);
         attn
@@ -1456,11 +1296,7 @@ fn self_attention_forward_t(
     drop(q);
     drop(k);
 
-    let y = attn
-        .f_matmul(&v)?
-        .f_transpose(1, 2)?
-        .f_contiguous()?
-        .f_view([b, l, n_heads * head_dim])?;
+    let y = attn.f_matmul(&v)?.f_transpose(1, 2)?.f_contiguous()?.f_view([b, l, n_heads * head_dim])?;
 
     drop(attn);
     drop(v);
@@ -1471,24 +1307,8 @@ fn self_attention_forward_t(
     Ok(out.f_dropout(dropout, train)?)
 }
 
-fn attn_block_forward_t(
-    x: &Tensor,
-    key_valid: Tensor,
-    ln1: &nn::LayerNorm,
-    ln2: &nn::LayerNorm,
-    w_q: &nn::Linear,
-    w_k: &nn::Linear,
-    w_v: &nn::Linear,
-    w_o: &nn::Linear,
-    ff1: &nn::Linear,
-    ff2: &nn::Linear,
-    n_heads: i64,
-    head_dim: i64,
-    dropout: f64,
-    train: bool,
-) -> anyhow::Result<Tensor> {
-
-    debug!("attn_block_forward_t: x.kind={:?} ln1.ws.kind={:?}", x.kind(), ln1.ws.as_ref().map(|ws|ws.kind()));
+fn attn_block_forward_t(x: &Tensor, key_valid: Tensor, ln1: &nn::LayerNorm, ln2: &nn::LayerNorm, w_q: &nn::Linear, w_k: &nn::Linear, w_v: &nn::Linear, w_o: &nn::Linear, ff1: &nn::Linear, ff2: &nn::Linear, n_heads: i64, head_dim: i64, dropout: f64, train: bool) -> anyhow::Result<Tensor> {
+    debug!("attn_block_forward_t: x.kind={:?} ln1.ws.kind={:?}", x.kind(), ln1.ws.as_ref().map(|ws| ws.kind()));
 
     let h = x.f_layer_norm(
         ln1.normalized_shape.as_slice(),
@@ -1496,29 +1316,24 @@ fn attn_block_forward_t(
         ln1.bs.as_ref(), //.map(|v|v.to_kind(Float)),
         1e-5,
         true,
-    )?;//.to_kind(x.kind())
+    )?; //.to_kind(x.kind())
 
-    let x = x.f_add(
-        &self_attention_forward_t(h, key_valid, w_q, w_k, w_v, w_o, n_heads, head_dim, dropout, train)?
-    )?;
+    let x = x.f_add(&self_attention_forward_t(h, key_valid, w_q, w_k, w_v, w_o, n_heads, head_dim, dropout, train)?)?;
 
-    debug!("attn_block_forward_t: x.kind={:?} ln2.ws.kind={:?}", x.kind(), ln2.ws.as_ref().map(|ws|ws.kind()));
+    debug!("attn_block_forward_t: x.kind={:?} ln2.ws.kind={:?}", x.kind(), ln2.ws.as_ref().map(|ws| ws.kind()));
 
-    let f = x.f_layer_norm(//x.to_kind(Float).
+    let f = x.f_layer_norm(
+        //x.to_kind(Float).
         ln2.normalized_shape.as_slice(),
         ln2.ws.as_ref(), //.map(|v|v.to_kind(Float)),//TODO it needs Float only on CPU
         ln2.bs.as_ref(), //.map(|v|v.to_kind(Float)),
         1e-5,
         true,
-    )?;//.to_kind(x.kind())
+    )?; //.to_kind(x.kind())
 
     debug!("attn_block_forward_t: f={f:?}");
 
-    let f = f.f_linear(&ff1.ws, ff1.bs.as_ref())?
-    .f_gelu("none")?
-    .f_dropout(dropout, train)?
-    .f_linear(&ff2.ws, ff2.bs.as_ref())?
-    .f_dropout(dropout, train)?;
+    let f = f.f_linear(&ff1.ws, ff1.bs.as_ref())?.f_gelu("none")?.f_dropout(dropout, train)?.f_linear(&ff2.ws, ff2.bs.as_ref())?.f_dropout(dropout, train)?;
 
     let out = x.f_add(&f)?;
 
@@ -1588,10 +1403,7 @@ fn sinusoidal_positional_encoding(length: i64, d_model: i64, device: tch::Device
     let exponent = Tensor::f_arange(half, (Kind::Float, device))?.f_mul_scalar(-2.0 * 10000_f64.ln() / d_model as f64)?;
     let div_term = exponent.f_exp()?.f_unsqueeze(0)?;
     let angles = pos.f_mul(&div_term)?;
-    Ok(Tensor::f_stack(&[angles.f_sin()?, angles.f_cos()?], -1)?
-        .f_flatten(1, 2)?
-        .f_narrow(1, 0, d_model)?
-        .f_to_kind(kind)?)
+    Ok(Tensor::f_stack(&[angles.f_sin()?, angles.f_cos()?], -1)?.f_flatten(1, 2)?.f_narrow(1, 0, d_model)?.f_to_kind(kind)?)
 }
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for SelfAttention {
@@ -1622,22 +1434,7 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for SelfAttention {
 
         let mask_f = key_valid.f_to_kind(t.local()?.kind())?.f_unsqueeze(-1)?;
         h = h.f_mul(&mask_f)?;
-        h = attn_block_forward_t(
-            &h,
-            key_valid,
-            &self.ln1,
-            &self.ln2,
-            &self.w_q,
-            &self.w_k,
-            &self.w_v,
-            &self.w_o,
-            &self.ff1,
-            &self.ff2,
-            self.n_heads,
-            self.head_size,
-            self.dropout,
-            train,
-        )?;
+        h = attn_block_forward_t(&h, key_valid, &self.ln1, &self.ln2, &self.w_q, &self.w_k, &self.w_v, &self.w_o, &self.ff1, &self.ff2, self.n_heads, self.head_size, self.dropout, train)?;
 
         Ok(h.into())
     }
@@ -1673,9 +1470,7 @@ mod tch_tests {
 
     #[test]
     pub fn test_seq_linear_same_size() -> anyhow::Result<()> {
-        let seq = SeqBuilder::new(2, None)?
-            .linear("todo")?
-            .end_seq()?;
+        let seq = SeqBuilder::new(2, None)?.linear("todo")?.end_seq()?;
 
         let vs = nn::VarStore::new(Device::Cpu);
 
@@ -1712,9 +1507,7 @@ mod tch_tests {
 
     #[test]
     pub fn test_adaptive_avg_pool_1d_builder() -> anyhow::Result<()> {
-        let seq = SeqBuilder::new(20, None)?
-            .adaptive_avg_pool(5, 5)?
-            .end_seq()?;
+        let seq = SeqBuilder::new(20, None)?.adaptive_avg_pool(5, 5)?.end_seq()?;
 
         let vs = nn::VarStore::new(Device::Cpu);
         let net: Box<dyn ThoModule<AnyDims, AnyDims>> = seq.build_tch_module(&vs.root())?;
@@ -1730,31 +1523,14 @@ mod tch_tests {
 
     #[test]
     pub fn test_split_seq() -> anyhow::Result<()> {
+        let res_seq = SeqBuilder::new(10, None)?.linear_s(1, "todo")?.end_seq()?;
 
-        let res_seq = SeqBuilder::new(10, None)?
-            .linear_s(
-                1,
-                "todo",
-            )?
-            .end_seq()?;
-
-        let conv_seq = SeqBuilder::new(10, None)?
-            .conv_1d("conv", 5, 1, 1, ConvConfig::default(), None)?
-            .linear_s(
-                1,
-                "todo",
-            )?
-            .end_seq()?;
+        let conv_seq = SeqBuilder::new(10, None)?.conv_1d("conv", 5, 1, 1, ConvConfig::default(), None)?.linear_s(1, "todo")?.end_seq()?;
 
         let main = SeqBuilder::new(10, None)?
             .split(
                 vec![res_seq, conv_seq],
-                Box::new(|t: &Tensor| {
-                    Ok(vec![
-                        t.i((.., 0, ..)).view((10, 1, 10)),
-                        t.i((.., 1, ..)).view((10, 1, 10)),
-                    ])
-                }),
+                Box::new(|t: &Tensor| Ok(vec![t.i((.., 0, ..)).view((10, 1, 10)), t.i((.., 1, ..)).view((10, 1, 10))])),
                 Box::new(|t: Vec<Tensor>| Ok(Tensor::stack(t.as_slice(), 1).squeeze())),
             )?
             .end_seq()?;
@@ -1763,11 +1539,7 @@ mod tch_tests {
 
         let net: Box<dyn ThoModule<AnyDims, AnyDims>> = main.build_tch_module(&vs.root())?;
 
-        let y_p = net.tho_forward(
-            &Tensor::randn([10, 2, 10], (Kind::Float, Device::Cpu)).into(),
-            None,
-            true,
-        )?;
+        let y_p = net.tho_forward(&Tensor::randn([10, 2, 10], (Kind::Float, Device::Cpu)).into(), None, true)?;
 
         assert_eq!(vec![10, 2], y_p.size());
 
@@ -1778,7 +1550,6 @@ mod tch_tests {
 
         Ok(())
     }
-
 
     #[test]
     pub fn test_sharpening_head_1d_shapes() -> anyhow::Result<()> {
@@ -1795,12 +1566,8 @@ mod tch_tests {
         Ok(())
     }
 
-
     #[allow(dead_code)]
-    fn test_net(
-        vs: &VarStore,
-        num_features: u32,
-    ) -> anyhow::Result<Box<dyn ThoModule<Batch<AnyDims>, AnyDims>>> {
+    fn test_net(vs: &VarStore, num_features: u32) -> anyhow::Result<Box<dyn ThoModule<Batch<AnyDims>, AnyDims>>> {
         SeqBuilder::new(num_features, None)?
             .batch_norm(BatchNormConfig::default(), None)?
             .closure(
@@ -1810,11 +1577,8 @@ mod tch_tests {
                 None,
             )?
             .conv_1d("conv", num_features / 10, 1, 1, ConvConfig::default(), None)?
-            .linear_s(
-                1,
-                "todo",
-            )?
-            .func(|t|Ok(Tensor::f_sigmoid(t)?))?
+            .linear_s(1, "todo")?
+            .func(|t| Ok(Tensor::f_sigmoid(t)?))?
             .end_seq()?
             .build_tch_module(&vs.root())
     }
@@ -1829,16 +1593,12 @@ mod tch_tests {
             let old_index = (new_index as f32 * factor) as usize;
             let remainder = new_index as f32 * factor - old_index as f32;
 
-            debug!(
-                "new_index={}, old_index={} remainder={}",
-                new_index, old_index, remainder
-            );
+            debug!("new_index={}, old_index={} remainder={}", new_index, old_index, remainder);
 
             if old_index == old_length - 1 {
                 stretched_series.push(series[old_index]);
             } else {
-                let value =
-                    series[old_index] * (1.0 - remainder) + series[old_index + 1] * remainder;
+                let value = series[old_index] * (1.0 - remainder) + series[old_index + 1] * remainder;
                 stretched_series.push(value);
             }
         }
@@ -1859,41 +1619,11 @@ mod tch_tests {
         debug!("v_10={:?} x={:?}", v_10, scale_x(v_10.as_slice(), 10));
         debug!("v_20 ={:?} x={:?}", v_20, scale_x(v_20.as_slice(), 10));
 
-        assert!(
-            Tensor::from_slice(scale_x(v_5.as_slice(), 10).as_slice()).allclose(
-                &Tensor::from_slice(&[
-                    0.0, 0.44444445, 0.8888889, 1.3333334, 1.7777778, 2.2222223, 2.6666667,
-                    3.1111112, 3.5555556, 4.0
-                ])
-                .totype(Float),
-                0.02,
-                0.02,
-                true
-            )
-        );
+        assert!(Tensor::from_slice(scale_x(v_5.as_slice(), 10).as_slice()).allclose(&Tensor::from_slice(&[0.0, 0.44444445, 0.8888889, 1.3333334, 1.7777778, 2.2222223, 2.6666667, 3.1111112, 3.5555556, 4.0]).totype(Float), 0.02, 0.02, true));
 
-        assert!(
-            Tensor::from_slice(scale_x(v_10.as_slice(), 10).as_slice()).allclose(
-                &Tensor::from_slice(&[0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0])
-                    .totype(Float),
-                0.02,
-                0.02,
-                true
-            )
-        );
+        assert!(Tensor::from_slice(scale_x(v_10.as_slice(), 10).as_slice()).allclose(&Tensor::from_slice(&[0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0]).totype(Float), 0.02, 0.02, true));
 
-        assert!(
-            Tensor::from_slice(scale_x(v_20.as_slice(), 10).as_slice()).allclose(
-                &Tensor::from_slice(&[
-                    0.0, 2.1111112, 4.2222223, 6.3333335, 8.444445, 10.555555, 12.666667,
-                    14.777779, 16.88889, 19.0
-                ])
-                .totype(Float),
-                0.02,
-                0.02,
-                true
-            )
-        );
+        assert!(Tensor::from_slice(scale_x(v_20.as_slice(), 10).as_slice()).allclose(&Tensor::from_slice(&[0.0, 2.1111112, 4.2222223, 6.3333335, 8.444445, 10.555555, 12.666667, 14.777779, 16.88889, 19.0]).totype(Float), 0.02, 0.02, true));
     }
 
     #[allow(dead_code)]
@@ -1910,17 +1640,9 @@ mod tch_tests {
 
         vs_0.save("/tmp/test.safetensors")?;
 
-        let loaded_module: ThoModuleWithStore<AnyDims, AnyDims> = ThoModuleWithStore::load("".into(),
-                                                                                           |path: &nn::Path| test_node()?.build_tch_module(path),
-                                                                                           "/tmp/test.safetensors".into(),
-                                                                                           Cpu,
-                                                                                           false,
-        )?;
+        let loaded_module: ThoModuleWithStore<AnyDims, AnyDims> = ThoModuleWithStore::load("".into(), |path: &nn::Path| test_node()?.build_tch_module(path), "/tmp/test.safetensors".into(), Cpu, false)?;
 
-        debug!(
-            "loaded variables={:?}",
-            loaded_module.var_store().variables()
-        );
+        debug!("loaded variables={:?}", loaded_module.var_store().variables());
 
         assert_eq!(vs_0.variables(), loaded_module.var_store().variables());
 
@@ -1931,38 +1653,26 @@ mod tch_tests {
                         SeqBuilder::new(123, None)?
                             .batch_norm(BatchNormConfig::default(), None)? //3 weight bias running_var
                             .linear("todo")? //2 weight bias
-                            .func(|t|Ok(Tensor::f_relu(t)?))?
+                            .func(|t| Ok(Tensor::f_relu(t)?))?
                             .linear("todo")? //2 weight bias
-                            .func(|t|Ok(Tensor::f_relu(t)?))?
-                            .linear_s(
-                                1,
-                                "todo",
-                            )? //2 weight bias
+                            .func(|t| Ok(Tensor::f_relu(t)?))?
+                            .linear_s(1, "todo")? //2 weight bias
                             .end_seq()?,
                         SeqBuilder::new(321, None)?
                             .batch_norm(BatchNormConfig::default(), None)? //3 weight bias running_var
                             .linear("todo")? //2 weight bias
-                            .func(|t|Ok(Tensor::f_relu(t)?))?
-                            .linear_s(
-                                1,
-                                "todo",
-                            )? //2 weight bias
+                            .func(|t| Ok(Tensor::f_relu(t)?))?
+                            .linear_s(1, "todo")? //2 weight bias
                             .end_seq()?,
                     ],
                     Box::new(move |t: &Tensor| Ok(vec![t.i((.., 0, ..)), t.i((.., 1, ..))])),
                     Box::new(move |t: Vec<Tensor>| Ok(Tensor::concat(t.as_slice(), 1))),
                 )?
-                .linear_s(
-                    10,
-                    "todo",
-                )? //2 weight bias
+                .linear_s(10, "todo")? //2 weight bias
                 .conv_1d("conv", 3, 1, 2, ConvConfig::default(), None)? //2 weight bias
                 .conv_1d("conv", 5, 1, 2, ConvConfig::default(), None)? //2 weight bias
-                .linear_s(
-                    20,
-                    "todo",
-                )? //2 weight bias
-                .func(|t|Ok(Tensor::f_sigmoid(t)?))?
+                .linear_s(20, "todo")? //2 weight bias
+                .func(|t| Ok(Tensor::f_sigmoid(t)?))?
                 .end_seq()
         }
 
@@ -1970,23 +1680,12 @@ mod tch_tests {
     }
 
     #[test]
-    fn test_valid_time_mask() -> anyhow::Result<()>{
-
-        let mask =valid_time_mask(
-            &[5, 11,3,7],
-            4,
-            11,
-            Cpu
-        )?;
+    fn test_valid_time_mask() -> anyhow::Result<()> {
+        let mask = valid_time_mask(&[5, 11, 3, 7], 4, 11, Cpu)?;
 
         assert_eq!(
             mask,
-            Tensor::from_slice(&[
-                1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0,
-                1, 1, 1, 1, 1, 1, 1, 1, 1, 1 ,1,
-                1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0,
-                1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0
-            ]).view((4, 11)).totype(Bool)
+            Tensor::from_slice(&[1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0]).view((4, 11)).totype(Bool)
         );
 
         Ok(())
@@ -2017,29 +1716,21 @@ mod tch_tests {
     }
 
     fn scalar_f32(v: f64) -> Tensor {
-        Tensor::from_slice(&[v as f32])
-            .to_device(Device::Cpu)
-            .to_kind(Kind::Float)
+        Tensor::from_slice(&[v as f32]).to_device(Device::Cpu).to_kind(Kind::Float)
     }
 
     fn symmetric_i8_scale(t: &Tensor) -> f64 {
         let max_abs = t.abs().max().double_value(&[]);
-        if max_abs == 0.0 || !max_abs.is_finite() {
-            1.0
-        } else {
-            max_abs / 127.0
-        }
+        if max_abs == 0.0 || !max_abs.is_finite() { 1.0 } else { max_abs / 127.0 }
     }
 
     fn scalar_i64(v: i64) -> Tensor {
-        Tensor::from_slice(&[v])
-            .to_device(Device::Cpu)
-            .to_kind(Kind::Int64)
+        Tensor::from_slice(&[v]).to_device(Device::Cpu).to_kind(Kind::Int64)
     }
 
     //TODO https://chatgpt.com/g/g-p-6802177ab924819193b7de5c74c7014c-rust/c/6a0308a4-c734-83eb-9983-9d324d9cda56
     #[test]
-    fn test_quantized_linear() -> anyhow::Result<()>{
+    fn test_quantized_linear() -> anyhow::Result<()> {
         let weight = Tensor::rand(&[3, 100], FLOAT_CPU);
         let bias = Tensor::rand(&[3], FLOAT_CPU);
 
@@ -2047,29 +1738,17 @@ mod tch_tests {
         let weight_zero_point = scalar_i64(0);
 
         let _packed_weight = call_generated_1(|out| unsafe {
-            torch_sys::c_generated::atg__wrapped_linear_prepack(
-                out,
-                as_mut_c_tensor(&weight),
-                as_mut_c_tensor(&weight_scale),
-                as_mut_c_tensor(&weight_zero_point),
-                as_mut_c_tensor(&bias),
-            );
+            torch_sys::c_generated::atg__wrapped_linear_prepack(out, as_mut_c_tensor(&weight), as_mut_c_tensor(&weight_scale), as_mut_c_tensor(&weight_zero_point), as_mut_c_tensor(&bias));
         })?;
-
 
         Ok(())
     }
 
     #[test]
-    fn test_quantized() -> anyhow::Result<()>{
+    fn test_quantized() -> anyhow::Result<()> {
         let vs = nn::VarStore::new(Device::Cpu);
 
-        let linear = nn::linear(
-            vs.root(),
-            1024,
-            512,
-            Default::default(),
-        );
+        let linear = nn::linear(vs.root(), 1024, 512, Default::default());
 
         let qlinear = FastQuantizedLinear::from_float_linear(&linear)?;
 
@@ -2081,10 +1760,7 @@ mod tch_tests {
         // Float reference.
         let y_ref = xs.f_linear(&linear.ws, linear.bs.as_ref())?;
 
-        let max_abs_err = (&y_fast - &y_ref)
-            .abs()
-            .max()
-            .double_value(&[]);
+        let max_abs_err = (&y_fast - &y_ref).abs().max().double_value(&[]);
 
         println!("y_fast.size = {:?}", y_fast.size());
         println!("max_abs_err = {max_abs_err}");
@@ -2098,12 +1774,7 @@ mod tch_tests {
     fn bench_linear() -> Result<(), Box<dyn std::error::Error>> {
         let vs = nn::VarStore::new(Device::Cpu);
 
-        let linear = nn::linear(
-            vs.root(),
-            4096,
-            4096,
-            Default::default(),
-        );
+        let linear = nn::linear(vs.root(), 4096, 4096, Default::default());
 
         let qlinear = FastQuantizedLinear::from_float_linear(&linear)?;
 
@@ -2131,10 +1802,7 @@ mod tch_tests {
 
         println!("float elapsed: {:?}", float_elapsed);
         println!("quant elapsed: {:?}", q_elapsed);
-        println!(
-            "speedup: {:.2}x",
-            float_elapsed.as_secs_f64() / q_elapsed.as_secs_f64()
-        );
+        println!("speedup: {:.2}x", float_elapsed.as_secs_f64() / q_elapsed.as_secs_f64());
 
         Ok(())
     }

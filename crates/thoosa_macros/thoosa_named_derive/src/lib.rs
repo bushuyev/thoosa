@@ -22,7 +22,6 @@ pub fn derive_named(input: TokenStream) -> TokenStream {
                 Err(err) => push_error(&mut error, err),
             }
         }
-
     }
 
     if let Some(err) = error {

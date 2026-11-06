@@ -5,7 +5,7 @@ use tch::Kind;
 use thoosa_shared::ThoError;
 
 use crate::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
-use crate::runner::global_ctx::{GlobalCtx as RealGlobalCtx, GlobalCtx};
+use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
 use crate::runner::run_ctx::RunCtxImpl;
 use crate::runner::test::FailUntil;
@@ -19,7 +19,6 @@ pub(crate) mod common;
 pub(crate) mod join_and_classify;
 pub(crate) mod loader;
 
-
 use crate::ipc::cuda_wokrer::InitFn;
 use classifier::{Classifier, SYNC_CLASSIFIER_ENDPOINT, sync_classifier_endpoint_init};
 use common::{ClsOut, FileListInput, ModelTestId};
@@ -32,110 +31,48 @@ fn init() {
 }
 
 pub(crate) fn sync_model_test_endpoint_inits() -> HashMap<String, InitFn> {
-    HashMap::from([(
-        SYNC_CLASSIFIER_ENDPOINT.to_string(),
-        Box::new(sync_classifier_endpoint_init) as InitFn,
-    )])
+    HashMap::from([(SYNC_CLASSIFIER_ENDPOINT.to_string(), Box::new(sync_classifier_endpoint_init) as InitFn)])
 }
 
-pub(crate) async fn run_model_test_pipeline(
-    ctx_device_idx: usize,
-    check_device_idx: usize,
-    files: Vec<(&'static str, f64)>,
-    input_id: ModelTestId,
-    classifier_id: ModelTestId,
-    batch_size: usize,
-    epochs: i64,
-    fail_until: Vec<FailUntil>,
-    min_accuracy: f64,
-) -> Result<(), ThoError> {
+pub(crate) async fn run_model_test_pipeline(ctx_device_idx: usize, check_device_idx: usize, files: Vec<(&'static str, f64)>, input_id: ModelTestId, classifier_id: ModelTestId, batch_size: usize, epochs: i64, fail_until: Vec<FailUntil>, min_accuracy: f64) -> Result<(), ThoError> {
     let mut ctx = RunCtxImpl::new(ctx_device_idx, "test");
     let loader = Arc::new(ABLoader::new(64, 4, Kind::Float));
-    let clf = Arc::new(Classifier::new(
-        classifier_id,
-        4,
-        epochs,
-        0.1,
-        fail_until,
-        ThoDevice::from(ctx_device_idx),
-    ).await?);
-    let join_and_cls = Arc::new(JoinAndClassifyStage::new(
-        Arc::clone(&loader),
-        Arc::clone(&clf),
-        batch_size,
-    ));
+    let clf = Arc::new(Classifier::new(classifier_id, 4, epochs, 0.1, fail_until, ThoDevice::from(ctx_device_idx)).await?);
+    let join_and_cls = Arc::new(JoinAndClassifyStage::new(Arc::clone(&loader), Arc::clone(&clf), batch_size));
     let input = FileListInput::new(files, input_id);
 
-    let acc: Arc<DevicesWrap<ThoTensor<ClsOut, ModelTestId>>> = Arc::clone(&join_and_cls)
-        .run_cached(input, ctx.branch(false))
-        .await?;
+    let acc: Arc<DevicesWrap<ThoTensor<ClsOut, ModelTestId>>> = Arc::clone(&join_and_cls).run_cached(input, ctx.branch(false)).await?;
 
     let acc_t = BorrowRef::borrow_ref(&acc, check_device_idx).await?;
 
     let v = ClsOut::accuracy(acc_t.as_ref())?;
     assert!(v >= min_accuracy, "training accuracy too low: {v}");
 
-
     Ok(())
 }
 
 #[tokio::test]
 async fn test_ab_loader_and_classifier_cpu() -> Result<(), ThoError> {
-
     GlobalCtx::init_devices(2)?;
     let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
-    run_model_test_pipeline(
-        1,
-        0,
-        vec![("file_0", 1.0), ("file_1", 0.0)],
-        ModelTestId("files_0_1"),
-        ModelTestId("lin_cls"),
-        2,
-        200,
-        vec![FailUntil::Never],
-        0.8,
-    ).await
+    run_model_test_pipeline(1, 0, vec![("file_0", 1.0), ("file_1", 0.0)], ModelTestId("files_0_1"), ModelTestId("lin_cls"), 2, 200, vec![FailUntil::Never], 0.8).await
 }
 
 #[tokio::test]
 async fn test_ab_loader_and_classifier_cpu_many_files() -> Result<(), ThoError> {
-
     GlobalCtx::init_devices(2)?;
     let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
-    run_model_test_pipeline(
-        0,
-        1,
-        vec![
-            ("file_0", 1.0),
-            ("file_1", 0.0),
-            ("file_2", 1.0),
-            ("file_3", 0.0),
-        ],
-        ModelTestId("files_0_1_2_3"),
-        ModelTestId("lin_cls_many"),
-        4,
-        100,
-        vec![FailUntil::Never],
-        0.8,
-    ).await
+    run_model_test_pipeline(0, 1, vec![("file_0", 1.0), ("file_1", 0.0), ("file_2", 1.0), ("file_3", 0.0)], ModelTestId("files_0_1_2_3"), ModelTestId("lin_cls_many"), 4, 100, vec![FailUntil::Never], 0.8).await
 }
 
 #[tokio::test]
 async fn test_classifier_oom_max_parallel_escalates() -> Result<(), ThoError> {
-
     GlobalCtx::init_devices(2)?;
     let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
-    let files: Vec<(&'static str, f64)> = (0..16)
-        .map(|i| {
-            (
-                Box::leak(format!("file_{}", i).into_boxed_str()) as &'static str,
-                if i % 2 == 0 { 1.0 } else { 0.0 },
-            )
-        })
-        .collect();
+    let files: Vec<(&'static str, f64)> = (0..16).map(|i| (Box::leak(format!("file_{}", i).into_boxed_str()) as &'static str, if i % 2 == 0 { 1.0 } else { 0.0 })).collect();
 
     run_model_test_pipeline(
         1,
@@ -147,5 +84,6 @@ async fn test_classifier_oom_max_parallel_escalates() -> Result<(), ThoError> {
         50,
         vec![FailUntil::NaxParallel(crate::runner::adjusters::max_parallel::MAX_PARALLEL), FailUntil::MemLimit(128)],
         0.5,
-    ).await
+    )
+    .await
 }

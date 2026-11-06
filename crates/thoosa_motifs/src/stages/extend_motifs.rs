@@ -1,5 +1,3 @@
-use thoosa_common::tch_error::tch_result;
-use anyhow::Context as _;
 use crate::dims::{ChannelsMotifsDists, MotifSlices};
 use crate::motif_tracker_store::IdSlice;
 use crate::motifs_store::MotifsStore;
@@ -14,6 +12,7 @@ use crate::stages::slices_iter::{ResourceSlices, SlicesIter};
 use crate::stages::stacked_moitfs_loader::{StackedMotifsInput, StackedMotifsLoader, StackedMotifsOutput, StackedMotifsOutputId};
 use crate::stages::stage_ids::EXTEND_MOTIFS;
 use crate::stages::stft::SyncStftSelector;
+use anyhow::Context as _;
 use async_trait::async_trait;
 use log::{debug, warn};
 use parking_lot::RwLock;
@@ -27,13 +26,14 @@ use tch::Kind::Float;
 use tch::Tensor;
 use thoosa_common::data_with_extra::DataWithExtra;
 use thoosa_common::dims::ChannelsData;
+use thoosa_common::resources::{SavableResult, Simple};
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
 use thoosa_common::runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContext};
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, SelectRef, ThoDataRef};
 use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoStageAdjuster, NoopRunnableContext, OOMHandler, input_adjuster, run_ctx_adjuster};
-use thoosa_common::resources::{SavableResult, Simple};
 use thoosa_common::stages::freq_filter::ChannelsDataSelector;
+use thoosa_common::tch_error::tch_result;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::utils::{load_run_config, pad_to};
@@ -55,36 +55,28 @@ pub struct ExtendMotifsInput {
 }
 
 impl ExtendMotifsInput {
-
-
     pub fn new(resources_input: ResourcesConfigInput<Simple>) -> Self {
-        Self {
-            resources_input,
-        }
+        Self { resources_input }
     }
 
     pub fn resources_input(&self) -> &ResourcesConfigInput<Simple> {
         &self.resources_input
     }
-
 }
 
 impl Input for ExtendMotifsInput {}
 
 #[derive(Debug, Clone, CpuData)]
 #[cpu_data(shallow)]
-pub struct ExtendMotifsSavableResult {
-}
+pub struct ExtendMotifsSavableResult {}
 
 impl ExtendMotifsSavableResult {
     fn new() -> Self {
-        Self { }
+        Self {}
     }
 }
 
 impl Output for ExtendMotifsSavableResult {}
-
-
 
 #[async_trait]
 impl SavableResult for ExtendMotifsSavableResult {
@@ -92,12 +84,7 @@ impl SavableResult for ExtendMotifsSavableResult {
     type Workspace = dyn crate::motifs_ws::MotifsWorkspace;
     type R = u32;
 
-    async fn save(
-        &mut self,
-        _store: &Arc<dyn MotifsStore>,
-        _ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
-        _p: Self::P<'_>,
-    ) -> anyhow::Result<u32> {
+    async fn save(&mut self, _store: &Arc<dyn MotifsStore>, _ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, _p: Self::P<'_>) -> anyhow::Result<u32> {
         Ok(0)
     }
 }
@@ -110,13 +97,13 @@ where
 {
     id: SynKey,
     run_configs: Vec<ExtendMotifsRunConfig>,
-    stacked_motifs_loader:Arc<StackedMotifsLoader<ML, C>>,
-    find_motifs_run_config_ids:Vec<RunConfigId>,
+    stacked_motifs_loader: Arc<StackedMotifsLoader<ML, C>>,
+    find_motifs_run_config_ids: Vec<RunConfigId>,
     ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
     store: Arc<dyn MotifsStore>,
-    loader:Arc<L>,
-    clc_resources_motifs_dist:Arc<ClcResourcesMotifsDist<C>>,
-    motif_stats:Arc<MotifStats<ML, L, C>>,
+    loader: Arc<L>,
+    clc_resources_motifs_dist: Arc<ClcResourcesMotifsDist<C>>,
+    motif_stats: Arc<MotifStats<ML, L, C>>,
 }
 
 impl<L, ML, C> Debug for ExtendMotifsStage<L, ML, C>
@@ -148,13 +135,7 @@ where
     ) -> Result<Self, ThoError> {
         let channels = perf_log!(sync_read_lock!(ws)).channels() as usize;
 
-        let motif_stats = Arc::new(MotifStats::new(
-            Arc::clone(store),
-            Arc::clone(&loader),
-            Arc::clone(ws),
-            Arc::clone(&motif_loader),
-        ));
-
+        let motif_stats = Arc::new(MotifStats::new(Arc::clone(store), Arc::clone(&loader), Arc::clone(ws), Arc::clone(&motif_loader)));
 
         Ok(Self {
             id: SynKey::new([mono_key!(EXTEND_MOTIFS, "extend_stage")]),
@@ -162,14 +143,14 @@ where
             ws: Arc::clone(&ws),
             store: Arc::clone(&store),
             find_motifs_run_config_ids,
-            loader:Arc::clone(&loader),
+            loader: Arc::clone(&loader),
             stacked_motifs_loader: Arc::new(StackedMotifsLoader::new(Arc::clone(ws), Arc::clone(&motif_loader), Arc::clone(store))),
             clc_resources_motifs_dist: Arc::new(ClcResourcesMotifsDist::<C>::new(
                 channels,
                 #[cfg(test)]
-                _fail_if_size_bigger_than
+                _fail_if_size_bigger_than,
             )),
-            motif_stats
+            motif_stats,
         })
     }
 
@@ -184,10 +165,9 @@ where
     }
 
     #[inline]
-    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SelectMotifsStage::load_stacked_motifs"))]
-    async fn load_stacked_motifs(store:&Arc<dyn MotifsStore>, stacked_motifs_loader: &Arc<StackedMotifsLoader<ML, C>>, mut ctx_for_loader: C, find_motifs_run_config_ids: &Vec<RunConfigId>) -> Result<Vec<(Arc<FindMotifsRunConfig>, Arc<DevicesWrap<StackedMotifsOutput>>)>, ThoError> {
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "SelectMotifsStage::load_stacked_motifs"))]
+    async fn load_stacked_motifs(store: &Arc<dyn MotifsStore>, stacked_motifs_loader: &Arc<StackedMotifsLoader<ML, C>>, mut ctx_for_loader: C, find_motifs_run_config_ids: &Vec<RunConfigId>) -> Result<Vec<(Arc<FindMotifsRunConfig>, Arc<DevicesWrap<StackedMotifsOutput>>)>, ThoError> {
         let mut find_motifs_run_configs = Vec::with_capacity(find_motifs_run_config_ids.len());
-
 
         for find_motifs_run_config_id in find_motifs_run_config_ids {
             find_motifs_run_configs.push(Arc::new(t!(load_run_config(store, *find_motifs_run_config_id, FindMotifsRunConfig::type_name())).await?));
@@ -195,20 +175,18 @@ where
         let find_motifs_run_configs_len = find_motifs_run_configs.len();
 
         //for each FindMotifsRunConfigs X SelectMotifsRunConfig
-        let futures = find_motifs_run_configs
-            .into_iter()
-            .map(|find_motifs_run_config| {
-                let stacked_motifs_loader = Arc::clone(&stacked_motifs_loader);
-                let ctx_for_run = ctx_for_loader.branch(false);
+        let futures = find_motifs_run_configs.into_iter().map(|find_motifs_run_config| {
+            let stacked_motifs_loader = Arc::clone(&stacked_motifs_loader);
+            let ctx_for_run = ctx_for_loader.branch(false);
 
-                async move {
-                    let stacked_motifs_input = Arc::new(StackedMotifsInput::new(Arc::clone(&find_motifs_run_config))?);
+            async move {
+                let stacked_motifs_input = Arc::new(StackedMotifsInput::new(Arc::clone(&find_motifs_run_config))?);
 
-                    // Missing required source data must fail extension instead of shrinking the run.
-                    let motif_data = t!(stacked_motifs_loader.run_cached(stacked_motifs_input, ctx_for_run)).await?;
-                    Ok::<_, ThoError>((find_motifs_run_config, motif_data))
-                }
-            });
+                // Missing required source data must fail extension instead of shrinking the run.
+                let motif_data = t!(stacked_motifs_loader.run_cached(stacked_motifs_input, ctx_for_run)).await?;
+                Ok::<_, ThoError>((find_motifs_run_config, motif_data))
+            }
+        });
 
         let run_configs_stacked_motifs = t!(collect_futures_with_progress(
             futures,
@@ -216,53 +194,42 @@ where
             FuturesOrdering::Ordered,
             thoosa_shared::CollectionErrorPolicy::Propagate,
             "SelectMotifsStage::load_stacked_motifs",
-        )).await?;
+        ))
+        .await?;
         Ok(run_configs_stacked_motifs)
     }
 
-
-    async fn clc_stacked_motifs_statistics(
-        load_and_clc_dist: Arc<MotifStats<ML, L, C>>,
-        motif_data: Arc<DevicesWrap<StackedMotifsOutput>>,
-        slices_selector_metric: Metrics,
-        mut ctx: C,
-    ) -> Result<Arc<DevicesWrap<ThoTensor<ChannelsMotifsDists, SynKey>>>, ThoError> {
+    async fn clc_stacked_motifs_statistics(load_and_clc_dist: Arc<MotifStats<ML, L, C>>, motif_data: Arc<DevicesWrap<StackedMotifsOutput>>, slices_selector_metric: Metrics, mut ctx: C) -> Result<Arc<DevicesWrap<ThoTensor<ChannelsMotifsDists, SynKey>>>, ThoError> {
         // TODO: move this into a dedicated stage and cache the resulting motifs stats separately from stacked motifs.
         let (channels_motif_ids, find_motifs_run_config, max_motif_slices) = {
-                let motif_data = SelectRef::select_ref(&motif_data, ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
-                let motif_data = motif_data.as_ref();
-                let channels_motif_ids = motif_data.motifs.extra().0.clone();
-                let find_motifs_run_config = Arc::clone(&motif_data.motifs.extra().1);
-                let max_motif_slices = motif_data.motifs.data().size()[1] as usize;
-                Ok::<_, ThoError>((channels_motif_ids, find_motifs_run_config, max_motif_slices))
+            let motif_data = SelectRef::select_ref(&motif_data, ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
+            let motif_data = motif_data.as_ref();
+            let channels_motif_ids = motif_data.motifs.extra().0.clone();
+            let find_motifs_run_config = Arc::clone(&motif_data.motifs.extra().1);
+            let max_motif_slices = motif_data.motifs.data().size()[1] as usize;
+            Ok::<_, ThoError>((channels_motif_ids, find_motifs_run_config, max_motif_slices))
         }?;
 
         let device_idx = ctx.tho_device_idx();
-        let motif_ids = channels_motif_ids
-            .iter()
-            .flat_map(|ids| ids.iter().cloned())
-            .collect::<HashSet<_>>()
-            .into_iter()
-            .collect::<Vec<_>>();
+        let motif_ids = channels_motif_ids.iter().flat_map(|ids| ids.iter().cloned()).collect::<HashSet<_>>().into_iter().collect::<Vec<_>>();
         let motif_ids_len = motif_ids.len();
 
-        let futures = motif_ids
-            .into_iter()
-            .map(|motif_id| {
-                let load_and_clc_dist = Arc::clone(&load_and_clc_dist);
-                let slices_selector_metric = slices_selector_metric.clone();
-                let mut ctx_for_motif = ctx.branch(false);
-                async move {
-                    let result = t!(async {
-                        let motif_loader_input = MotifLoaderInput::find_motif_slices_only(motif_id.clone());
-                        let clc_input = Arc::new(MotifStatsInput::from_motif_input(motif_loader_input, vec![slices_selector_metric.clone()]));
-                        let motif_stats = t!(load_and_clc_dist.run(clc_input, ctx_for_motif.branch(false))).await?;
-                        let motif_stat = motif_stats.channel_value(&slices_selector_metric, 0)?;
-                        Ok::<_, ThoError>((motif_id, motif_stat))
-                    }).await;
-                    result
-                }
-            });
+        let futures = motif_ids.into_iter().map(|motif_id| {
+            let load_and_clc_dist = Arc::clone(&load_and_clc_dist);
+            let slices_selector_metric = slices_selector_metric.clone();
+            let mut ctx_for_motif = ctx.branch(false);
+            async move {
+                let result = t!(async {
+                    let motif_loader_input = MotifLoaderInput::find_motif_slices_only(motif_id.clone());
+                    let clc_input = Arc::new(MotifStatsInput::from_motif_input(motif_loader_input, vec![slices_selector_metric.clone()]));
+                    let motif_stats = t!(load_and_clc_dist.run(clc_input, ctx_for_motif.branch(false))).await?;
+                    let motif_stat = motif_stats.channel_value(&slices_selector_metric, 0)?;
+                    Ok::<_, ThoError>((motif_id, motif_stat))
+                })
+                .await;
+                result
+            }
+        });
 
         let motif_stats = t!(collect_futures_with_progress(
             futures,
@@ -270,9 +237,10 @@ where
             FuturesOrdering::Unordered,
             thoosa_shared::CollectionErrorPolicy::Propagate,
             "SelectMotifsStage::clc_stacked_motifs_statistics",
-        )).await?
-            .into_iter()
-            .collect::<HashMap<_, _>>();
+        ))
+        .await?
+        .into_iter()
+        .collect::<HashMap<_, _>>();
 
         let channels_motifs_stats_tensors = channels_motif_ids
             .iter()
@@ -283,20 +251,16 @@ where
                 }
                 let channel_stats = channel_motif_ids
                     .iter()
-                    .map(|motif_id| {
-                        motif_stats
-                            .get(motif_id)
-                            .copied()
-                            .ok_or_else(|| ThoError::new(format!("no motif stat found for motif_id={motif_id} channel={channel}")))
-                    })
+                    .map(|motif_id| motif_stats.get(motif_id).copied().ok_or_else(|| ThoError::new(format!("no motif stat found for motif_id={motif_id} channel={channel}"))))
                     .collect::<Result<Vec<_>, ThoError>>()?;
                 let channel_stats_t = tch_result(tch_result(Tensor::f_from_slice(channel_stats.as_slice()))?.f_to_device(ThoDevice::from(device_idx).into()))?;
                 if channel_stats_t.size()[0] < max_motif_slices as i64 {
                     //same padding as in StackedMotifsLoader::run
                     Ok(pad_to(
-                        &channel_stats_t, &[max_motif_slices as i64],
+                        &channel_stats_t,
+                        &[max_motif_slices as i64],
                         //this is to avoid selecting resource slices by MaskMaker::Le in ClcResourcesMotifsDist::do_run when cross-calculated with zero-padded motif slices giving 0 distance which would below any motif statistic; use f32::MIN because motifs_stats tensors are Float.
-                        f32::MIN as f64
+                        f32::MIN as f64,
                     )?)
                 } else {
                     Ok(channel_stats_t)
@@ -318,75 +282,52 @@ where
         Ok(Arc::new(DevicesWrap::wrap(motifs_stats)))
     }
 
-
-    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SelectMotifsStage::extend_motifs_for_run_config"))]
-    async fn extend_motifs_for_run_config(
-        &self,
-        extend_motifs_run_config: &ExtendMotifsRunConfig,
-        resources: Arc<Vec<Resource>>,
-        num_channels: usize,
-        total_size: usize,
-        mut ctx: C,
-    ) -> Result<Vec<HashMap<SynKey, HashSet<IdSlice>>>, ThoError> {
-
-        let slices_selector_metric = Metrics::from_similarity_metric(
-            extend_motifs_run_config.extend_config.slices_selector_metric,
-            Self::slices_selector_aggr_to_stats(extend_motifs_run_config.extend_config.slices_selector_aggr),
-        );
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "SelectMotifsStage::extend_motifs_for_run_config"))]
+    async fn extend_motifs_for_run_config(&self, extend_motifs_run_config: &ExtendMotifsRunConfig, resources: Arc<Vec<Resource>>, num_channels: usize, total_size: usize, mut ctx: C) -> Result<Vec<HashMap<SynKey, HashSet<IdSlice>>>, ThoError> {
+        let slices_selector_metric = Metrics::from_similarity_metric(extend_motifs_run_config.extend_config.slices_selector_metric, Self::slices_selector_aggr_to_stats(extend_motifs_run_config.extend_config.slices_selector_aggr));
         // This stays inside the run-config loop.
         // Stacked motifs are cached by find_motifs_run_config_id, while stats depend on metric/aggr (including floats in aggr).
         // Stats must be computed separately so motifs and statistics can be cached independently.
-        let run_configs_stacked_motifs = t!(Self::load_stacked_motifs(
-            &self.store,
-            &self.stacked_motifs_loader,
-            ctx.branch(true),
-            &self.find_motifs_run_config_ids,
-        )).await?;
+        let run_configs_stacked_motifs = t!(Self::load_stacked_motifs(&self.store, &self.stacked_motifs_loader, ctx.branch(true), &self.find_motifs_run_config_ids,)).await?;
 
-        let channels_motifs_added_slices: Arc<Vec<tokio::sync::RwLock<HashMap<SynKey, HashSet<IdSlice>>>>> =
-            Arc::new((0..num_channels).map(|_| tokio::sync::RwLock::new(HashMap::new())).collect());
+        let channels_motifs_added_slices: Arc<Vec<tokio::sync::RwLock<HashMap<SynKey, HashSet<IdSlice>>>>> = Arc::new((0..num_channels).map(|_| tokio::sync::RwLock::new(HashMap::new())).collect());
 
         let run_configs_stacked_motifs_len = run_configs_stacked_motifs.len();
-        let futures = run_configs_stacked_motifs
-            .into_iter()
-            .map(|(find_motifs_run_config, motif_data)| {
-                let resources = Arc::clone(&resources);
-                let find_motifs_run_config = Arc::clone(&find_motifs_run_config);
-                let channels_motifs_added_slices = Arc::clone(&channels_motifs_added_slices);
-                let clc_resources_motifs_dist = Arc::clone(&self.clc_resources_motifs_dist);
-                let loader = Arc::clone(&self.loader);
-                let ws = Arc::clone(&self.ws);
-                let extend_motifs_run_config = extend_motifs_run_config.clone();
-                let mut ctx_to_move = ctx.branch(true);
-                let clc_dist = Arc::clone(&self.motif_stats);
-                let slices_selector_metric = slices_selector_metric.clone();
+        let futures = run_configs_stacked_motifs.into_iter().map(|(find_motifs_run_config, motif_data)| {
+            let resources = Arc::clone(&resources);
+            let find_motifs_run_config = Arc::clone(&find_motifs_run_config);
+            let channels_motifs_added_slices = Arc::clone(&channels_motifs_added_slices);
+            let clc_resources_motifs_dist = Arc::clone(&self.clc_resources_motifs_dist);
+            let loader = Arc::clone(&self.loader);
+            let ws = Arc::clone(&self.ws);
+            let extend_motifs_run_config = extend_motifs_run_config.clone();
+            let mut ctx_to_move = ctx.branch(true);
+            let clc_dist = Arc::clone(&self.motif_stats);
+            let slices_selector_metric = slices_selector_metric.clone();
 
-                async move {
-                    // Propagate errors before publishing the accumulated slice set.
-                    t!(async {
-                        let motifs_stats = t!(Self::clc_stacked_motifs_statistics(
-                            clc_dist,
-                            Arc::clone(&motif_data),
-                            slices_selector_metric.clone(),
-                            ctx_to_move.branch(false),
-                        )).await?;
-                        t!(Self::extend_with_one_find_run(
-                            loader,
-                            ws,
-                            clc_resources_motifs_dist,
-                            extend_motifs_run_config,
-                            find_motifs_run_config,
-                            motif_data,
-                            motifs_stats,
-                            resources,
-                            channels_motifs_added_slices,
-                            100000, //TODO to FixedExtenMotifsCOnfig
-                            total_size,
-                            ctx_to_move.branch(false),
-                        )).await
-                    }).await
-                }
-            });
+            async move {
+                // Propagate errors before publishing the accumulated slice set.
+                t!(async {
+                    let motifs_stats = t!(Self::clc_stacked_motifs_statistics(clc_dist, Arc::clone(&motif_data), slices_selector_metric.clone(), ctx_to_move.branch(false),)).await?;
+                    t!(Self::extend_with_one_find_run(
+                        loader,
+                        ws,
+                        clc_resources_motifs_dist,
+                        extend_motifs_run_config,
+                        find_motifs_run_config,
+                        motif_data,
+                        motifs_stats,
+                        resources,
+                        channels_motifs_added_slices,
+                        100000, //TODO to FixedExtenMotifsCOnfig
+                        total_size,
+                        ctx_to_move.branch(false),
+                    ))
+                    .await
+                })
+                .await
+            }
+        });
 
         let _ = t!(collect_futures_with_progress(
             futures,
@@ -394,16 +335,17 @@ where
             FuturesOrdering::Unordered,
             thoosa_shared::CollectionErrorPolicy::Propagate,
             "SelectMotifsStage::extend_motifs_for_run_config",
-        )).await?;
+        ))
+        .await?;
 
         if Arc::strong_count(&channels_motifs_added_slices) != 1 {
-            return Err(ThoError::new(format!("can't unwrap motif_added_slices for {:?}", extend_motifs_run_config)))
+            return Err(ThoError::new(format!("can't unwrap motif_added_slices for {:?}", extend_motifs_run_config)));
         }
 
         Ok(Arc::into_inner(channels_motifs_added_slices).expect("can't unwrap motif_added_slices").into_iter().map(|lock| lock.into_inner()).collect())
     }
 
-    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SelectMotifsStage::extend_with_one_find_run"))]
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "SelectMotifsStage::extend_with_one_find_run"))]
     async fn extend_with_one_find_run(
         loader: Arc<L>,
         ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
@@ -427,8 +369,7 @@ where
             debug!("SelectMotifsStage::run: on i_0={i_0} resource_0={resource_0:?} num_resources={num_resources}");
             let configured_loader = config_to_stage(&loader, &find_motifs_run_config, &ws, ctx.tho_device_idx()).await?;
 
-            let t_0 = t!(Arc::clone(&configured_loader)
-                .run_cached(Arc::new(resource_0.clone()), ctx.branch(false))).await?;
+            let t_0 = t!(Arc::clone(&configured_loader).run_cached(Arc::new(resource_0.clone()), ctx.branch(false))).await?;
 
             t_1_batch_dim_0_size += t_0.size().dim_1();
             t_1_batch.push(t_0);
@@ -446,10 +387,7 @@ where
 
             let resource_ids = t_1_batch_resources.iter().map(|resource| resource.id()).collect::<Vec<_>>();
             let clc_resources_input = Arc::new(SelectMotifsInputSelectorWrap::new(
-                SynKey::new([
-                    mono_key!("SelectMotifsInputSelectorWrap", "stage"),
-                    mono_key!(format!("{resource_ids:?}"), "resource_ids"),
-                ]),
+                SynKey::new([mono_key!("SelectMotifsInputSelectorWrap", "stage"), mono_key!(format!("{resource_ids:?}"), "resource_ids")]),
                 t_1_batch,
                 resource_ids,
                 Arc::clone(&motif_data),
@@ -460,8 +398,7 @@ where
             debug!("SelectMotifsStage::run: 1. find_motifs_run_config={find_motifs_run_config:?}");
             // Distance calculation reuses the resource batch, motifs, and motif statistics.
 
-            let channels = perf_log!(sync_read_lock!(ws))
-                .channels();
+            let channels = perf_log!(sync_read_lock!(ws)).channels();
 
             let ClcResourcesMotifsDistOutput {
                 find_motifs_run_config_id,
@@ -476,114 +413,98 @@ where
                 ],
                 None,
             )
-                .run(
-                    &clc_resources_motifs_dist,
-                    Arc::clone(&clc_resources_input),
-                    ctx.branch(false),
-                    Contexts::new(
-                        SelectMotifsSplitterContext::new(
-                            t_1_batch_len as i64,
-                            batch_1_slice_lengths,
-                            t!(SelectMotifsClcOutputBuilder::new(
-                                StackedMotifsOutputId::new(find_motifs_run_config.id.expect("find_motifs_run_config"), vec![]),
-                                channels,
-                                find_motifs_run_config.step as usize,
-                            )).await,
-                        ),
-                        NoopRunnableContext {},
-                        MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new()),
+            .run(
+                &clc_resources_motifs_dist,
+                Arc::clone(&clc_resources_input),
+                ctx.branch(false),
+                Contexts::new(
+                    SelectMotifsSplitterContext::new(
+                        t_1_batch_len as i64,
+                        batch_1_slice_lengths,
+                        t!(SelectMotifsClcOutputBuilder::new(StackedMotifsOutputId::new(find_motifs_run_config.id.expect("find_motifs_run_config"), vec![]), channels, find_motifs_run_config.step as usize,)).await,
                     ),
-                )).await?;
-            let max_slices = extend_motifs_run_config.extend_max_slices.as_ref().map(|max_slices| {
-                match max_slices {
-                    MaxSlices::ByResourcesCount( MaxSlicesByResources {k}) => {
-                        *k * num_resources as u32
-                    }
-                    MaxSlices::Abs(MaxSlicesAbs{count}) => {
-                        *count
-                    }
-                }
-            }).unwrap_or(u32::MAX) as usize;
+                    NoopRunnableContext {},
+                    MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new()),
+                ),
+            ))
+            .await?;
+            let max_slices = extend_motifs_run_config
+                .extend_max_slices
+                .as_ref()
+                .map(|max_slices| match max_slices {
+                    MaxSlices::ByResourcesCount(MaxSlicesByResources { k }) => *k * num_resources as u32,
+                    MaxSlices::Abs(MaxSlicesAbs { count }) => *count,
+                })
+                .unwrap_or(u32::MAX) as usize;
 
             debug!("SelectMotifsStage::run: channel_masks_dists_ids={channel_masks_dists_ids:?} find_motifs_run_config_id={find_motifs_run_config_id}");
             let resources_slices = Arc::new(resources_iter.clone().collect::<Vec<_>>());
             let channel_masks_dists_ids_len = channel_masks_dists_ids.len();
-            let futures = channel_masks_dists_ids
-                .into_iter()
-                .enumerate()
-                .map(|(channel, channel_mask_dists_ids)| {
-                    let resources_slices = Arc::clone(&resources_slices);
-                    let channels_motifs_added_slices = Arc::clone(&channels_motifs_added_slices);
-                    async move {
-                        let result = t!(async {
-                            if let Some(mask_dists_ids) = channel_mask_dists_ids {
-                                debug!("SelectMotifsStage::run: channel={channel} mask_dists_ids={:?}", mask_dists_ids.1);
-                                let mask_dists = t!(mask_dists_ids.0.to_cpu()).await?;
-                                let mask_size = mask_dists.mask_size_hint()?;
-                                assert_eq!(mask_size.len(), 3, "SelectMotifsStage::run: expected 3D mask, got {mask_size:?}");
-                                assert_eq!(mask_size[0], 1, "SelectMotifsStage::run: expected single-channel mask, got {mask_size:?}");
-                                assert_eq!(mask_size[1] as usize, mask_dists_ids.1.len(), "SelectMotifsStage::run: motif/mask size mismatch mask={mask_size:?} motifs={}", mask_dists_ids.1.len());
-                                assert_eq!(mask_size[2] as usize, resources_slices.len(), "SelectMotifsStage::run: resources/mask size mismatch mask={mask_size:?} resources={}", resources_slices.len());
+            let futures = channel_masks_dists_ids.into_iter().enumerate().map(|(channel, channel_mask_dists_ids)| {
+                let resources_slices = Arc::clone(&resources_slices);
+                let channels_motifs_added_slices = Arc::clone(&channels_motifs_added_slices);
+                async move {
+                    let result = t!(async {
+                        if let Some(mask_dists_ids) = channel_mask_dists_ids {
+                            debug!("SelectMotifsStage::run: channel={channel} mask_dists_ids={:?}", mask_dists_ids.1);
+                            let mask_dists = t!(mask_dists_ids.0.to_cpu()).await?;
+                            let mask_size = mask_dists.mask_size_hint()?;
+                            assert_eq!(mask_size.len(), 3, "SelectMotifsStage::run: expected 3D mask, got {mask_size:?}");
+                            assert_eq!(mask_size[0], 1, "SelectMotifsStage::run: expected single-channel mask, got {mask_size:?}");
+                            assert_eq!(mask_size[1] as usize, mask_dists_ids.1.len(), "SelectMotifsStage::run: motif/mask size mismatch mask={mask_size:?} motifs={}", mask_dists_ids.1.len());
+                            assert_eq!(mask_size[2] as usize, resources_slices.len(), "SelectMotifsStage::run: resources/mask size mismatch mask={mask_size:?} resources={}", resources_slices.len());
 
-                                let motif_count = mask_dists_ids.1.len();
-                                let resources_slices_cloned = Arc::clone(&resources_slices);
-                                let matches_by_motif = t!(tokio::task::spawn_blocking(move || {
-                                    tracing::info_span!(
-                                        "extend_motifs::group_mask_matches",
-                                        kind = "spawn_blocking",
-                                        file = file!(),
-                                        line = line!(),
-                                        task = format!("group mask matches for channel={channel} motif_count={motif_count}"),
-                                    ).in_scope(|| {
-                                        use rayon::prelude::*;
-                                        rayon_pool().install(|| {
-                                            let match_indices = mask_dists.into_indices_iter()?;
-                                            let mut matches = match_indices.par_bridge().map(|(mask_channel, motif_idx, slice_idx, _)| {
-                                                (mask_channel as usize, motif_idx as usize, slice_idx as usize)
-                                            }).collect::<Vec<_>>();
-                                            matches.par_sort_unstable_by(|l, r| l.1.cmp(&r.1).then(l.2.cmp(&r.2)));
+                            let motif_count = mask_dists_ids.1.len();
+                            let resources_slices_cloned = Arc::clone(&resources_slices);
+                            let matches_by_motif = t!(tokio::task::spawn_blocking(move || {
+                                tracing::info_span!("extend_motifs::group_mask_matches", kind = "spawn_blocking", file = file!(), line = line!(), task = format!("group mask matches for channel={channel} motif_count={motif_count}"),).in_scope(|| {
+                                    use rayon::prelude::*;
+                                    rayon_pool().install(|| {
+                                        let match_indices = mask_dists.into_indices_iter()?;
+                                        let mut matches = match_indices.par_bridge().map(|(mask_channel, motif_idx, slice_idx, _)| (mask_channel as usize, motif_idx as usize, slice_idx as usize)).collect::<Vec<_>>();
+                                        matches.par_sort_unstable_by(|l, r| l.1.cmp(&r.1).then(l.2.cmp(&r.2)));
 
-                                            let mut grouped_matches = vec![Vec::<IdSlice>::new(); motif_count];
-                                            for (mask_channel, motif_idx, slice_idx) in matches {
-                                                assert_eq!(mask_channel, 0, "SelectMotifsStage::run: expected single-channel mask index, got {mask_channel}");
-                                                assert!(motif_idx < motif_count, "SelectMotifsStage::run: motif index out of bounds motif_idx={motif_idx} motif_count={motif_count}");
-                                                assert!(slice_idx < resources_slices_cloned.len(), "SelectMotifsStage::run: resource slice index out of bounds slice_idx={slice_idx} resources_len={}", resources_slices_cloned.len());
-                                                let slice = resources_slices_cloned[slice_idx];
-                                                grouped_matches[motif_idx].push(IdSlice(0, slice.0, slice.1));
-                                            }
+                                        let mut grouped_matches = vec![Vec::<IdSlice>::new(); motif_count];
+                                        for (mask_channel, motif_idx, slice_idx) in matches {
+                                            assert_eq!(mask_channel, 0, "SelectMotifsStage::run: expected single-channel mask index, got {mask_channel}");
+                                            assert!(motif_idx < motif_count, "SelectMotifsStage::run: motif index out of bounds motif_idx={motif_idx} motif_count={motif_count}");
+                                            assert!(slice_idx < resources_slices_cloned.len(), "SelectMotifsStage::run: resource slice index out of bounds slice_idx={slice_idx} resources_len={}", resources_slices_cloned.len());
+                                            let slice = resources_slices_cloned[slice_idx];
+                                            grouped_matches[motif_idx].push(IdSlice(0, slice.0, slice.1));
+                                        }
 
-                                            Ok::<_, ThoError>(grouped_matches)
-                                        })
+                                        Ok::<_, ThoError>(grouped_matches)
                                     })
-                                })).await??;
+                                })
+                            }))
+                            .await??;
 
+                            let mut motif_added_slices_guard = t!(channels_motifs_added_slices[channel].write()).await;
 
-                                let mut motif_added_slices_guard = t!(channels_motifs_added_slices[channel].write()).await;
-
-                                for (motif_id, matched_slices) in mask_dists_ids.1.into_iter().zip(matches_by_motif.into_iter()) {
-
-                                    let slices = motif_added_slices_guard.entry(motif_id.clone()).or_insert(HashSet::new());
-                                    let mut added_slices = 0;
-                                    let mut skipped_slices = 0;
-                                    for slice in matched_slices {
-                                        if slices.len() > max_slices {
-                                            continue;
-                                        }
-                                        if slices.insert(slice) {
-                                            added_slices += 1;
-                                        } else {
-                                            skipped_slices += 1;
-                                        }
+                            for (motif_id, matched_slices) in mask_dists_ids.1.into_iter().zip(matches_by_motif.into_iter()) {
+                                let slices = motif_added_slices_guard.entry(motif_id.clone()).or_insert(HashSet::new());
+                                let mut added_slices = 0;
+                                let mut skipped_slices = 0;
+                                for slice in matched_slices {
+                                    if slices.len() > max_slices {
+                                        continue;
                                     }
-
-                                    debug!("SelectMotifsStage::run: motif_id={motif_id} skipped_slices={skipped_slices} added_slices={added_slices}");
+                                    if slices.insert(slice) {
+                                        added_slices += 1;
+                                    } else {
+                                        skipped_slices += 1;
+                                    }
                                 }
+
+                                debug!("SelectMotifsStage::run: motif_id={motif_id} skipped_slices={skipped_slices} added_slices={added_slices}");
                             }
-                            Ok::<_, ThoError>(())
-                        }).await;
-                        result
-                    }
-                });
+                        }
+                        Ok::<_, ThoError>(())
+                    })
+                    .await;
+                    result
+                }
+            });
 
             t!(collect_futures_with_progress(
                 futures,
@@ -591,10 +512,10 @@ where
                 FuturesOrdering::Unordered,
                 thoosa_shared::CollectionErrorPolicy::Propagate,
                 "SelectMotifsStage::extend_with_one_find_run_channel_masks",
-            )).await?;
+            ))
+            .await?;
 
             debug!("SelectMotifsStage::run: 2. find_motifs_run_config={find_motifs_run_config:?}");
-
 
             t_1_batch_dim_0_size = 0;
             t_1_batch = vec![];
@@ -604,7 +525,6 @@ where
         debug!("SelectMotifsStage::run: processed find_motifs_run_config={find_motifs_run_config:?} extend_motifs_run_config={extend_motifs_run_config:?}");
         Ok(())
     }
-
 }
 
 impl<L, ML, C> Stage for ExtendMotifsStage<L, ML, C>
@@ -624,7 +544,7 @@ where
     ML: for<'i> AsyncStage<In<'i> = Arc<MotifLoaderInput>, Out = Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
-    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ExtendMotifsStage::run"))]
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "ExtendMotifsStage::run"))]
     async fn run(self: Arc<Self>, input: Self::In<'static>, mut ctx: Self::Ctx) -> Result<Self::Out, ThoError> {
         debug!("ExtendMotifsStage::run: input={input:?}");
 
@@ -632,7 +552,7 @@ where
         let resources = Arc::new(t!(resources_config.to_resources(&self.store)).await?);
         if resources.is_empty() {
             warn!("ExtendMotifsStage::run: no labels resources");
-            return Err(ThoError::new(format!("no resources found in {input:?}")))
+            return Err(ThoError::new(format!("no resources found in {input:?}")));
         }
         let num_channels = perf_log!(sync_read_lock!(self.ws)).channels() as usize;
         let total_size = resources.iter().map(|resource| resource.length() as usize).sum::<usize>();
@@ -643,13 +563,7 @@ where
             let resources_for_fut = Arc::clone(&resources);
             let mut ctx_for_fut = ctx.branch(false);
             async move {
-                let channels_motifs_added_slices = t!(self_for_fut.extend_motifs_for_run_config(
-                    &extend_motifs_run_config,
-                    resources_for_fut,
-                    num_channels,
-                    total_size,
-                    ctx_for_fut.branch(false),
-                )).await?;
+                let channels_motifs_added_slices = t!(self_for_fut.extend_motifs_for_run_config(&extend_motifs_run_config, resources_for_fut, num_channels, total_size, ctx_for_fut.branch(false),)).await?;
                 debug!("ExtendMotifsStage::run: extend_motifs_for_run_config done");
                 let extend_motifs_run_config_id = extend_motifs_run_config.id.expect("no extend_motifs_run_config_id");
                 for (channel, motif_slices) in channels_motifs_added_slices.into_iter().enumerate() {
@@ -661,7 +575,14 @@ where
                 Ok::<_, ThoError>(())
             }
         });
-        let _ = t!(collect_futures_with_progress(futures, run_configs_len, FuturesOrdering::Unordered, thoosa_shared::CollectionErrorPolicy::SkipData(&[thoosa_shared::DataErrorKind::InputTooShort]), "ExtendMotifsStage::run")).await?;
+        let _ = t!(collect_futures_with_progress(
+            futures,
+            run_configs_len,
+            FuturesOrdering::Unordered,
+            thoosa_shared::CollectionErrorPolicy::SkipData(&[thoosa_shared::DataErrorKind::InputTooShort]),
+            "ExtendMotifsStage::run"
+        ))
+        .await?;
         Ok(Arc::new(ExtendMotifsSavableResult::new()))
     }
 }
@@ -678,13 +599,7 @@ struct SelectMotifsInputSelectorWrap {
 }
 
 impl SelectMotifsInputSelectorWrap {
-    pub fn new(
-        id: SynKey,
-        batch: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>,
-        resource_ids: Vec<ResourceId>,
-        stacked_motifs: Arc<DevicesWrap<StackedMotifsOutput>>,
-        motifs_stats: Arc<DevicesWrap<ThoTensor<ChannelsMotifsDists, SynKey>>>,
-    ) -> Self {
+    pub fn new(id: SynKey, batch: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>, resource_ids: Vec<ResourceId>, stacked_motifs: Arc<DevicesWrap<StackedMotifsOutput>>, motifs_stats: Arc<DevicesWrap<ThoTensor<ChannelsMotifsDists, SynKey>>>) -> Self {
         let resource_offsets = vec![0; resource_ids.len()];
         Self {
             id,
@@ -700,7 +615,6 @@ impl SelectMotifsInputSelectorWrap {
 impl Data for SelectMotifsInputSelectorWrap {
     type Metrics = i64;
 
-
     fn size(&self) -> Self::Metrics {
         self.batch.len() as i64
     }
@@ -710,17 +624,19 @@ impl Data for SelectMotifsInputSelectorWrap {
     }
 
     fn mem_size(&self) -> u64 {
-        self.batch.iter().map(|batch| batch.mem_size()).sum::<u64>()
-            + self.stacked_motifs.mem_size()
-            + self.motifs_stats.mem_size()
+        self.batch.iter().map(|batch| batch.mem_size()).sum::<u64>() + self.stacked_motifs.mem_size() + self.motifs_stats.mem_size()
     }
 }
 
-
 impl BorrowRef for SelectMotifsInputSelectorWrap {
-    fn protect(&self, device: usize) -> thoosa_common::runner::residency::ResidencyLease { thoosa_common::runner::residency::ResidencyLease::combine(self.batch.iter().map(|value| value.protect(device)).chain([self.stacked_motifs.protect(device), self.motifs_stats.protect(device)])) }
+    fn protect(&self, device: usize) -> thoosa_common::runner::residency::ResidencyLease {
+        thoosa_common::runner::residency::ResidencyLease::combine(self.batch.iter().map(|value| value.protect(device)).chain([self.stacked_motifs.protect(device), self.motifs_stats.protect(device)]))
+    }
 
-    type Out<'a> = ClcResourcesMotifsDistInput<'a> where Self: 'a;
+    type Out<'a>
+        = ClcResourcesMotifsDistInput<'a>
+    where
+        Self: 'a;
 
     fn borrow_ref<'a>(&'a self, to_device_idx: usize) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
     where
@@ -733,10 +649,15 @@ impl BorrowRef for SelectMotifsInputSelectorWrap {
             }
             let stacked_motifs = t!(self.stacked_motifs.load_from_any_device_(to_device_idx)).await?;
             let motifs_stats = t!(self.motifs_stats.load_from_any_device_(to_device_idx)).await?;
-            Ok(ClcResourcesMotifsDistInput::from_data_refs(batch, self.resource_ids.clone(), self.resource_offsets.clone(), ThoDataRef::ReadLocked(stacked_motifs), ThoDataRef::ReadLocked(motifs_stats)))
+            Ok(ClcResourcesMotifsDistInput::from_data_refs(
+                batch,
+                self.resource_ids.clone(),
+                self.resource_offsets.clone(),
+                ThoDataRef::ReadLocked(stacked_motifs),
+                ThoDataRef::ReadLocked(motifs_stats),
+            ))
         }
     }
-
 }
 
 impl SelectRef<SelectMotifsInputSelector> for SelectMotifsInputSelectorWrap {
@@ -785,25 +706,17 @@ impl SelectRef<SelectMotifsInputSelector> for SelectMotifsInputSelectorWrap {
     }
 }
 
-
-
 #[derive(Debug)]
 struct SelectMotifsSavableResultBuilder {
-    id:StackedMotifsOutputId,
-    output:Vec<ClcResourcesMotifsDistOutput>,
-    channels:u32,
-    step:usize
+    id: StackedMotifsOutputId,
+    output: Vec<ClcResourcesMotifsDistOutput>,
+    channels: u32,
+    step: usize,
 }
 
 impl SelectMotifsSavableResultBuilder {
-    pub async fn new(id:StackedMotifsOutputId, channels:u32, step:usize) -> Self {
-
-        Self {
-            id,
-            output: vec![],
-            channels,
-            step
-        }
+    pub async fn new(id: StackedMotifsOutputId, channels: u32, step: usize) -> Self {
+        Self { id, output: vec![], channels, step }
     }
 }
 
@@ -814,20 +727,13 @@ impl OutputBuilder for SelectMotifsSavableResultBuilder {
         debug!("SelectMotifsSavableResultBuilder::add_partial_output: o={o:?}");
 
         // Complete the transfer before accepting this split; detached copies hid failures until build.
-        let output = t!(o.to_cpu().instrument(tracing::info_span!(
-            "extend_motifs::partial_output_to_cpu",
-            file = file!(),
-            line = line!(),
-            task = "move partial extended motif output to CPU",
-        ))).await?;
+        let output = t!(o.to_cpu().instrument(tracing::info_span!("extend_motifs::partial_output_to_cpu", file = file!(), line = line!(), task = "move partial extended motif output to CPU",))).await?;
         self.output.push(output);
         Ok(())
     }
 
     async fn build(self) -> Result<Self::O, ThoError> {
-
         let mut resource_ids_sizes: Vec<ResourceSlices> = vec![];
-
 
         let output = self.output;
 
@@ -840,18 +746,13 @@ impl OutputBuilder for SelectMotifsSavableResultBuilder {
         //if a chanel has no motifs then all partial outputs will contain None and corresponding vec in channel_masks will be empty.
 
         let channel_masks_motif_ids = output.into_iter().try_fold(
-            (
-                (0..self.channels).map(|_c|vec![]).collect::<Vec<Vec<Tensor>>>(),
-                (0..self.channels).map(|_c|vec![]).collect::<Vec<Vec<SynKey>>>()
-            ),
-
+            ((0..self.channels).map(|_c| vec![]).collect::<Vec<Vec<Tensor>>>(), (0..self.channels).map(|_c| vec![]).collect::<Vec<Vec<SynKey>>>()),
             |mut channel_masks, partial_output| -> Result<_, ThoError> {
-
                 debug!("SelectMotifsSavableResultBuilder::build: partial_output={partial_output:?}");
 
                 assert_eq!(partial_output.channel_masks_dists_ids.len() as u32, self.channels);
 
-                for (c, mask_op) in partial_output.channel_masks_dists_ids.into_iter().enumerate(){
+                for (c, mask_op) in partial_output.channel_masks_dists_ids.into_iter().enumerate() {
                     debug!("SelectMotifsSavableResultBuilder::build: c={c} mask_op={mask_op:?}");
 
                     if let Some(mask) = mask_op {
@@ -860,41 +761,39 @@ impl OutputBuilder for SelectMotifsSavableResultBuilder {
                         debug!("SelectMotifsSavableResultBuilder::build: c={c} mask_t=\n{mask_t}");
 
                         channel_masks.0[c].push(mask_t);
-                        channel_masks.1[c] = mask.1;//TODO collect dists, needed for dumping plots only
+                        channel_masks.1[c] = mask.1; //TODO collect dists, needed for dumping plots only
                     }
-                };
+                }
 
                 resource_ids_sizes.extend(partial_output.resources_iter.resource_ids_sizes);
 
                 Ok(channel_masks)
-            })?;
+            },
+        )?;
 
-        let channel_masks_dists_ids = channel_masks_motif_ids.0.into_iter().zip(channel_masks_motif_ids.1).map(|channel_masks_motif_ids|{
-            debug!("SelectMotifsSavableResultBuilder::build: channel_masks_motif_ids={channel_masks_motif_ids:?}");
+        let channel_masks_dists_ids = channel_masks_motif_ids
+            .0
+            .into_iter()
+            .zip(channel_masks_motif_ids.1)
+            .map(|channel_masks_motif_ids| {
+                debug!("SelectMotifsSavableResultBuilder::build: channel_masks_motif_ids={channel_masks_motif_ids:?}");
 
-            if channel_masks_motif_ids.0.is_empty() {
-                Ok(None)
-            } else {
-                Ok(Some(
-                    (
+                if channel_masks_motif_ids.0.is_empty() {
+                    Ok(None)
+                } else {
+                    Ok(Some((
                         DistsMask::new(
                             tch_result(Tensor::f_concat(&channel_masks_motif_ids.0, 2))?, //1 dim - resources
                             None,
                             DistsMaskType::AsIs,
                         )?,
-                        channel_masks_motif_ids.1
-                    ),
-                ))
-            }
-
-        })
+                        channel_masks_motif_ids.1,
+                    )))
+                }
+            })
             .collect::<Result<Vec<_>, ThoError>>()?;
 
-        Ok(ClcResourcesMotifsDistOutput::new(
-            self.id.find_motifs_run_config_id,
-            channel_masks_dists_ids,
-            SlicesIter::new_with_offsets(self.step, resource_ids_sizes)
-        ))
+        Ok(ClcResourcesMotifsDistOutput::new(self.id.find_motifs_run_config_id, channel_masks_dists_ids, SlicesIter::new_with_offsets(self.step, resource_ids_sizes)))
     }
 }
 
@@ -952,11 +851,7 @@ struct SliceAdjusterContext {
 
 impl SliceAdjusterContext {
     fn new() -> Self {
-        Self {
-            input_len: 0,
-            split_len: 0,
-            done_to: 0,
-        }
+        Self { input_len: 0, split_len: 0, done_to: 0 }
     }
 
     fn reset(&mut self, input_len: i64) {
@@ -995,7 +890,7 @@ impl SplitsAdjusterContext for SliceAdjusterContext {
 #[derive(Debug)]
 struct SelectMotifsSplitterContext<'a, ST>
 where
-    ST: Stage<Out=ClcResourcesMotifsDistOutput> + Adjustable + 'a,
+    ST: Stage<Out = ClcResourcesMotifsDistOutput> + Adjustable + 'a,
     ST::In<'a>: Data<Metrics = i64>,
 {
     input_len: i64,
@@ -1009,9 +904,9 @@ where
     pd: PhantomData<&'a ST>,
 }
 
-impl <'a, ST> SelectMotifsSplitterContext<'a, ST>
+impl<'a, ST> SelectMotifsSplitterContext<'a, ST>
 where
-    ST: Stage<Out=ClcResourcesMotifsDistOutput> + Adjustable + 'a,
+    ST: Stage<Out = ClcResourcesMotifsDistOutput> + Adjustable + 'a,
     ST::In<'a>: Data<Metrics = i64>,
 {
     pub fn new(batch_1_len: <<ST as Stage>::In<'a> as Data>::Metrics, batch_1_slice_lengths: Vec<i64>, output_builder: SelectMotifsClcOutputBuilder) -> Self {
@@ -1038,11 +933,7 @@ where
         self.batch_1_mode = Batch1SplitMode::Slice;
         self.slice_resource_idx = self.done_to as usize;
 
-        let input_len = self
-            .batch_1_slice_lengths
-            .get(self.slice_resource_idx)
-            .copied()
-            .unwrap_or(0);
+        let input_len = self.batch_1_slice_lengths.get(self.slice_resource_idx).copied().unwrap_or(0);
         self.slice_ctx.reset(input_len);
 
         input_len > 0
@@ -1055,18 +946,14 @@ where
         }
 
         self.slice_resource_idx = self.done_to as usize;
-        let input_len = self
-            .batch_1_slice_lengths
-            .get(self.slice_resource_idx)
-            .copied()
-            .unwrap_or(0);
+        let input_len = self.batch_1_slice_lengths.get(self.slice_resource_idx).copied().unwrap_or(0);
         self.slice_ctx.reset(input_len);
     }
 }
 
-impl <'a, ST> SplitsAdjusterContext for SelectMotifsSplitterContext<'a, ST>
+impl<'a, ST> SplitsAdjusterContext for SelectMotifsSplitterContext<'a, ST>
 where
-    ST: Stage<Out=ClcResourcesMotifsDistOutput> + Adjustable + 'a,
+    ST: Stage<Out = ClcResourcesMotifsDistOutput> + Adjustable + 'a,
     ST::In<'a>: Data<Metrics = i64>,
 {
     type Metrics = <<ST as Stage>::In<'a> as Data>::Metrics;
@@ -1088,9 +975,9 @@ where
     }
 }
 
-impl <'a, 'z, ST> InputContext<'a, ST> for SelectMotifsSplitterContext<'z, ST>
+impl<'a, 'z, ST> InputContext<'a, ST> for SelectMotifsSplitterContext<'z, ST>
 where
-    ST: Stage<Out=ClcResourcesMotifsDistOutput> + Adjustable + 'a,
+    ST: Stage<Out = ClcResourcesMotifsDistOutput> + Adjustable + 'a,
     ST::In<'z>: Data<Metrics = i64>,
 {
     async fn add_partial_output(&mut self, out: ST::Out) -> Result<(), ThoError> {
@@ -1136,9 +1023,9 @@ impl SelectMotifsAdjuster {
 }
 
 #[async_trait]
-impl <'a, ST> Adjuster<SelectMotifsSplitterContext<'a, ST>> for SelectMotifsAdjuster
+impl<'a, ST> Adjuster<SelectMotifsSplitterContext<'a, ST>> for SelectMotifsAdjuster
 where
-    ST: Stage<Out=ClcResourcesMotifsDistOutput> + Adjustable + 'a,
+    ST: Stage<Out = ClcResourcesMotifsDistOutput> + Adjustable + 'a,
     ST::In<'a>: Data<Metrics = i64>,
 {
     type A = SelectMotifsInputSelector;
@@ -1186,11 +1073,8 @@ where
     }
 }
 
-
-
 #[cfg(test)]
 mod tests {
-    use thoosa_common::tch_error::tch_result;
     use crate::motifs_store::MockMotifsStoreBuilder;
     use crate::stages::dists_tracker::{DistsMask, DistsMaskType};
     use crate::stages::extend_motifs::{ExtendMotifsStage, SelectMotifsSavableResultBuilder};
@@ -1215,6 +1099,7 @@ mod tests {
     use thoosa_common::runner::common::{MockRunCtx, mock_run_ctx};
     use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
+    use thoosa_common::tch_error::tch_result;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::utils::to_vec_f32;
     use thoosa_shared::comp_id::SynKey;
@@ -1230,54 +1115,37 @@ mod tests {
         let find_motifs_run_config_id = 7u32;
         let find_motifs_run_config = Arc::new(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_config_id), 1, 3, None, None));
 
-        let channels_motif_ids = vec![
-            vec![(11u32, "motif_id").into(), (11u32, "motif_id").into(), (12u32, "motif_id").into()],
-            vec![(13u32, "motif_id").into()],
-        ];
+        let channels_motif_ids = vec![vec![(11u32, "motif_id").into(), (11u32, "motif_id").into(), (12u32, "motif_id").into()], vec![(13u32, "motif_id").into()]];
         let motifs_t = Tensor::zeros([2, 4, 3], FLOAT_CPU);
         let motifs = ThoTensor::new(SynKey::new([mono_key!("motifs", "test_motifs")]), motifs_t)?;
-        let stacked_motifs_output = StackedMotifsOutput::new(
-            SynKey::new([mono_key!("StackedMotifsOutput", "test_stacked_motifs_output")]),
-            DataWithExtra::new(motifs, (channels_motif_ids, Arc::clone(&find_motifs_run_config), vec![])),
-        );
+        let stacked_motifs_output = StackedMotifsOutput::new(SynKey::new([mono_key!("StackedMotifsOutput", "test_stacked_motifs_output")]), DataWithExtra::new(motifs, (channels_motif_ids, Arc::clone(&find_motifs_run_config), vec![])));
         let motif_data = Arc::new(DevicesWrap::wrap(stacked_motifs_output));
 
-        let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
-            (
-                MotifLoaderInput::find_motif_slices_only((11u32, "motif_id").into()),
-                (
-                    MotifMeta { channel: 0, find_motifs_run_config_id, window: 3 },
-                    Tensor::from_slice(&[0.0f32, 0.0, 0.0, 3.0, 0.0, 0.0]).view([2, 3]),
-                ),
-            ),
-            (
-                MotifLoaderInput::find_motif_slices_only((12u32, "motif_id").into()),
-                (
-                    MotifMeta { channel: 0, find_motifs_run_config_id, window: 3 },
-                    Tensor::from_slice(&[0.0f32, 0.0, 0.0, 4.0, 0.0, 0.0]).view([2, 3]),
-                ),
-            ),
-            (
-                MotifLoaderInput::find_motif_slices_only((13u32, "motif_id").into()),
-                (
-                    MotifMeta { channel: 1, find_motifs_run_config_id, window: 3 },
-                    Tensor::from_slice(&[0.0f32, 0.0, 0.0, 5.0, 0.0, 0.0]).view([2, 3]),
-                ),
-            ),
-        ]).finish());
+        let motif_loader = Arc::new(
+            mock_motif_loader::build()
+                .with_run_cached([
+                    (
+                        MotifLoaderInput::find_motif_slices_only((11u32, "motif_id").into()),
+                        (MotifMeta { channel: 0, find_motifs_run_config_id, window: 3 }, Tensor::from_slice(&[0.0f32, 0.0, 0.0, 3.0, 0.0, 0.0]).view([2, 3])),
+                    ),
+                    (
+                        MotifLoaderInput::find_motif_slices_only((12u32, "motif_id").into()),
+                        (MotifMeta { channel: 0, find_motifs_run_config_id, window: 3 }, Tensor::from_slice(&[0.0f32, 0.0, 0.0, 4.0, 0.0, 0.0]).view([2, 3])),
+                    ),
+                    (
+                        MotifLoaderInput::find_motif_slices_only((13u32, "motif_id").into()),
+                        (MotifMeta { channel: 1, find_motifs_run_config_id, window: 3 }, Tensor::from_slice(&[0.0f32, 0.0, 0.0, 5.0, 0.0, 0.0]).view([2, 3])),
+                    ),
+                ])
+                .finish(),
+        );
         let store = MockMotifsStoreBuilder::new().build();
         let loader = Arc::new(mock_tensor_loader::build().finish());
         let clc_dist = Arc::new(MotifStats::new(store, loader, Arc::clone(&ws), motif_loader));
 
         let mut ctx = mock_run_ctx::default(1);
         let metric = Metrics::default();
-        let motifs_stats = ExtendMotifsStage::<MockTensorLoader, MockMotifLoader, MockRunCtx>::clc_stacked_motifs_statistics(
-            clc_dist,
-            motif_data,
-            metric,
-            ctx.branch(false),
-        )
-            .await?;
+        let motifs_stats = ExtendMotifsStage::<MockTensorLoader, MockMotifLoader, MockRunCtx>::clc_stacked_motifs_statistics(clc_dist, motif_data, metric, ctx.branch(false)).await?;
 
         let _ctx_for_data = ctx.branch(false);
         let motifs_stats = SelectRef::select_ref(&motifs_stats, 0, Some(SyncStftSelector)).await?;
@@ -1298,7 +1166,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_output_builder() -> Result<(), ThoError>  {
+    async fn test_output_builder() -> Result<(), ThoError> {
         GlobalCtx::init_devices(2)?;
         let num_channels = 3;
         let mut output_builder = Box::new(SelectMotifsSavableResultBuilder::new(StackedMotifsOutputId::new(0, vec![]), num_channels as u32, 50).await);
@@ -1306,67 +1174,50 @@ mod tests {
         let mask_0 = Tensor::rand(&[3, 5, 7], FLOAT_CUDA).lt(0.5);
         let expected_mask_0 = tch_result(mask_0.f_to_device(tch::Device::Cpu))?;
         let mask_0_size = mask_0.size();
-        output_builder.add_partial_output(
-            ClcResourcesMotifsDistOutput::new(
+        output_builder
+            .add_partial_output(ClcResourcesMotifsDistOutput::new(
                 0,
                 vec![
-                    Some(
-                        (
-                            DistsMask::new(
-                                //3 channels, 5 motifs, 7 resource slices
-                                mask_0,
-                                None,
-                                DistsMaskType::MaskPacked(mask_0_size, None),
-                            )?,
-                            vec![
-                                (0u32, "motif_id").into()
-                            ]
-                        )
-                    ),
+                    Some((
+                        DistsMask::new(
+                            //3 channels, 5 motifs, 7 resource slices
+                            mask_0,
+                            None,
+                            DistsMaskType::MaskPacked(mask_0_size, None),
+                        )?,
+                        vec![(0u32, "motif_id").into()],
+                    )),
                     None,
-                    None
+                    None,
                 ],
-                SlicesIter::new(100, vec![
-                    (0u32, 100),
-                    (1u32, 100)
-                ])
-            )
-        ).await?;
+                SlicesIter::new(100, vec![(0u32, 100), (1u32, 100)]),
+            ))
+            .await?;
 
         let mask_1 = Tensor::rand(&[3, 5, 7], FLOAT_CUDA).lt(0.5);
         let expected_mask_1 = tch_result(mask_1.f_to_device(tch::Device::Cpu))?;
         let mask_1_size = mask_1.size();
-        output_builder.add_partial_output(
-            ClcResourcesMotifsDistOutput::new(
+        output_builder
+            .add_partial_output(ClcResourcesMotifsDistOutput::new(
                 0,
                 vec![
-                    Some(
-                        (
-                            DistsMask::new(
-                                //3 channels, 5 motifs, 7 resource slices
-                                mask_1,
-                                None,
-                                DistsMaskType::MaskPacked(mask_1_size, None),
-                            )?,
-                            vec![
-                                (0u32, "motif_id").into()
-                            ]
-                        )
-                    ),
+                    Some((
+                        DistsMask::new(
+                            //3 channels, 5 motifs, 7 resource slices
+                            mask_1,
+                            None,
+                            DistsMaskType::MaskPacked(mask_1_size, None),
+                        )?,
+                        vec![(0u32, "motif_id").into()],
+                    )),
                     None,
-                    None
+                    None,
                 ],
-                SlicesIter::new(100, vec![
-                    (0u32, 100),
-                    (1u32, 100)
-                ])
-            )
-        ).await?;
+                SlicesIter::new(100, vec![(0u32, 100), (1u32, 100)]),
+            ))
+            .await?;
 
-        let ClcResourcesMotifsDistOutput {
-            channel_masks_dists_ids,
-            ..
-        } = output_builder.build().await?;
+        let ClcResourcesMotifsDistOutput { channel_masks_dists_ids, .. } = output_builder.build().await?;
 
         assert_eq!(channel_masks_dists_ids.len(), num_channels);
         let mut channel_masks_dists_ids = channel_masks_dists_ids.into_iter();
@@ -1379,8 +1230,6 @@ mod tests {
         assert!(channel_masks_dists_ids.next().expect("channel 1").is_none());
         assert!(channel_masks_dists_ids.next().expect("channel 2").is_none());
 
-
         Ok(())
     }
-
 }

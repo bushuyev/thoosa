@@ -4,11 +4,10 @@ use log::debug;
 use parking_lot::RwLock;
 use std::fmt::{Debug, Display, Formatter};
 use std::sync::Arc;
-use thoosa_shared::resource::{Resource, ResourceStore, ResourcesConfig};
 use thoosa_shared::ResourceType;
-use thoosa_store::Store;
+use thoosa_shared::resource::{Resource, ResourceStore, ResourcesConfig};
 use thoosa_shared::tracked_await::t;
-
+use thoosa_store::Store;
 
 #[derive(Debug, Clone)]
 pub struct Simple {
@@ -29,30 +28,19 @@ impl Simple {
 impl ResourcesConfig for Simple {
     type R = Vec<Resource>;
 
-    async fn to_resources<S: ResourceStore + ?Sized + Send + Sync>(
-        &self,
-        store: &Arc<S>,
-    ) -> anyhow::Result<Vec<Resource>> {
+    async fn to_resources<S: ResourceStore + ?Sized + Send + Sync>(&self, store: &Arc<S>) -> anyhow::Result<Vec<Resource>> {
         Ok(match self.resources() {
-            ResourceType::List(list) => t!(store
-                .list_resources_by_file_stems(&list.into_iter().map(|v| v.as_str()).collect::<Vec<_>>())).await?,
-            ResourceType::Set(set) => t!(store
-                .list_resource_set_resources_by_descr(set)).await?,
+            ResourceType::List(list) => t!(store.list_resources_by_file_stems(&list.into_iter().map(|v| v.as_str()).collect::<Vec<_>>())).await?,
+            ResourceType::Set(set) => t!(store.list_resource_set_resources_by_descr(set)).await?,
             ResourceType::Group(group) => {
                 let store_guard = store;
                 let mut resources = Vec::new();
-                for (_, resource_set) in t!(store_guard
-                    .list_resource_set_group_sets(group)).await?
-                {
-                    resources.extend(
-                        t!(store_guard
-                            .list_resource_set_resources_by_descr(&resource_set)).await?,
-                    );
+                for (_, resource_set) in t!(store_guard.list_resource_set_group_sets(group)).await? {
+                    resources.extend(t!(store_guard.list_resource_set_resources_by_descr(&resource_set)).await?);
                 }
                 resources
             }
-            ResourceType::NotInGroup(descr) => t!(store
-                .list_resources_not_in_group(descr, 1000)).await?, //TODO limit
+            ResourceType::NotInGroup(descr) => t!(store.list_resources_not_in_group(descr, 1000)).await?, //TODO limit
         })
     }
 
@@ -64,13 +52,7 @@ impl ResourcesConfig for Simple {
         }
 
         let resources = t!(self.to_resources(store)).await?;
-        if resources.is_empty() {
-            Err(anyhow::anyhow!(format!(
-                "resource config {self:?} resolved to no resources"
-            )))
-        } else {
-            Ok(())
-        }
+        if resources.is_empty() { Err(anyhow::anyhow!(format!("resource config {self:?} resolved to no resources"))) } else { Ok(()) }
     }
 }
 
@@ -81,10 +63,7 @@ pub struct Empty {}
 impl ResourcesConfig for Empty {
     type R = ();
 
-    async fn to_resources<S: ResourceStore + ?Sized + Send + Sync>(
-        &self,
-        _store: &Arc<S>,
-    ) -> anyhow::Result<Self::R> {
+    async fn to_resources<S: ResourceStore + ?Sized + Send + Sync>(&self, _store: &Arc<S>) -> anyhow::Result<Self::R> {
         Ok(())
     }
 
@@ -115,10 +94,7 @@ impl ResourcesConfig for Labeled {
     // (label, resources)
     type R = Vec<(String, Vec<Resource>)>;
 
-    async fn to_resources<S: ResourceStore + ?Sized + Send + Sync>(
-        &self,
-        store: &Arc<S>,
-    ) -> anyhow::Result<Vec<(String, Vec<Resource>)>> {
+    async fn to_resources<S: ResourceStore + ?Sized + Send + Sync>(&self, store: &Arc<S>) -> anyhow::Result<Vec<(String, Vec<Resource>)>> {
         let store_guard = store;
         let mut out = Vec::new();
         for (label, resource_set) in t!(store_guard.list_group_labeled_resources_sets(&self.group)).await? {
@@ -130,16 +106,12 @@ impl ResourcesConfig for Labeled {
     async fn check<S: ResourceStore + ?Sized + Send + Sync>(&self, store: &Arc<S>) -> anyhow::Result<()> {
         let labeled_resources = t!(self.to_resources(store)).await?;
         if labeled_resources.is_empty() {
-            return Err(anyhow::anyhow!(format!(
-                "resource config {self:?} resolved to no labeled resource sets"
-            )));
+            return Err(anyhow::anyhow!(format!("resource config {self:?} resolved to no labeled resource sets")));
         }
 
         for (label, resources) in &labeled_resources {
             if resources.is_empty() {
-                return Err(anyhow::anyhow!(format!(
-                    "label {label} in resource config {self:?} has no resources"
-                )));
+                return Err(anyhow::anyhow!(format!("label {label} in resource config {self:?} has no resources")));
             }
         }
 
@@ -169,18 +141,12 @@ impl ResourcesConfig for Logits {
     // (label, resources)
     type R = Vec<(Resource, Vec<f32>)>;
 
-    async fn to_resources<S: ResourceStore + ?Sized + Send + Sync>(
-        &self,
-        store: &Arc<S>,
-    ) -> anyhow::Result<Vec<(Resource, Vec<f32>)>> {
-        t!(store
-            .list_resource_random_in_group(&self.group)).await?
+    async fn to_resources<S: ResourceStore + ?Sized + Send + Sync>(&self, store: &Arc<S>) -> anyhow::Result<Vec<(Resource, Vec<f32>)>> {
+        t!(store.list_resource_random_in_group(&self.group))
+            .await?
             .into_iter()
             .map(move |(resource_id, labels_p)| {
-                debug!(
-                    "ResourcesConfig::to_resources resource_id={resource_id:?} labels_p={:?}",
-                    labels_p
-                );
+                debug!("ResourcesConfig::to_resources resource_id={resource_id:?} labels_p={:?}", labels_p);
                 Ok((
                     resource_id,
                     labels_p, //Box::new(Tensor::from_slice(labels_p.as_slice()).to_device(*device))
@@ -191,9 +157,7 @@ impl ResourcesConfig for Logits {
 
     async fn check<S: ResourceStore + ?Sized + Send + Sync>(&self, store: &Arc<S>) -> anyhow::Result<()> {
         if t!(store.list_resource_random_in_group(&self.group)).await?.is_empty() {
-            Err(anyhow::anyhow!(format!(
-                "resource config {self:?} resolved to no logits resources"
-            )))
+            Err(anyhow::anyhow!(format!("resource config {self:?} resolved to no logits resources")))
         } else {
             Ok(())
         }
@@ -208,17 +172,13 @@ impl Display for Logits {
 
 #[derive(Debug, Clone)]
 pub struct NetResources<RC: ResourcesConfig> {
-
     train_resources: RC,
     valid_resources: RC,
 }
 
 impl<RC: ResourcesConfig> NetResources<RC> {
     pub fn new(train_resources: RC, valid_resources: RC) -> Self {
-        Self {
-            train_resources,
-            valid_resources,
-        }
+        Self { train_resources, valid_resources }
     }
 }
 
@@ -229,10 +189,7 @@ where
 {
     type R = (RC::R, RC::R);
 
-    async fn to_resources<S: ResourceStore + ?Sized + Send + Sync>(
-        &self,
-        store: &Arc<S>,
-    ) -> anyhow::Result<(RC::R, RC::R)> {
+    async fn to_resources<S: ResourceStore + ?Sized + Send + Sync>(&self, store: &Arc<S>) -> anyhow::Result<(RC::R, RC::R)> {
         Ok((t!(self.train_resources.to_resources(store)).await?, t!(self.valid_resources.to_resources(store)).await?))
     }
 
@@ -255,14 +212,14 @@ pub trait SavableResult: Sync + Send + Debug {
     type Store: Store + ?Sized;
     /// Allows feature crates to retain a stronger workspace trait object without making `thoosa_common` depend on them.
     type Workspace: Workspace + ?Sized = dyn Workspace;
-    type P<'a>:Debug = ();
-    type R:Debug = ();
+    type P<'a>: Debug = ();
+    type R: Debug = ();
 
     async fn save(
         &mut self, //TODO consume
         store: &Arc<Self::Store>,
         ws: &Arc<RwLock<Box<Self::Workspace>>>,
-        p: Self::P<'_>
+        p: Self::P<'_>,
     ) -> anyhow::Result<Self::R>;
 }
 

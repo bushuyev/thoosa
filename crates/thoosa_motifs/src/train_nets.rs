@@ -1,6 +1,5 @@
 #![allow(non_snake_case, unused_assignments, unused_variables, non_camel_case_types)]
 
-
 use anyhow::Context as _;
 use clap::clap_derive::Args;
 use thoosa_common::nets::batches::BatchLengths;
@@ -9,11 +8,11 @@ use thoosa_common::nets::nodes::{BinaryHeadPool, InitMode, ThoModule};
 use thoosa_common::resources::{Empty, Logits, NetResources};
 use thoosa_common::utils::{mask_from_lengths, masked_max, masked_mean};
 
-use log::{debug};
+use log::debug;
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
-use std::path::PathBuf;
 use std::fs;
+use std::path::PathBuf;
 use tch::nn::{BatchNormConfig, ConvConfig, LinearConfig, VarStore, init};
 use tch::{Device, Tensor};
 
@@ -23,7 +22,10 @@ use thoosa_cpu_data_derive::CpuData;
 use crate::dims::{MotifSlices, Spectorgram};
 use thoosa_common::dims::Dims;
 use thoosa_common::nets::common_nets;
-use thoosa_common::nets::common_nets::{BinaryHeadPoolArgs, BinaryHeadPoolArgsBuilder, BinaryHeadPoolArgsFields, BinaryHeadPoolArgsRangeOrValue, CommonTrainingRunConfig, CommonTrainingRunConfigBuilder, CommonTrainingRunConfigFields, CommonTrainingRunConfigRangeOrValue, ConvNetArgs, ConvNetArgsBuilder, ConvNetArgsFields, ConvNetArgsRangeOrValue, ConvNetJoint, ConvNetParams, LinLenNetParams, OptConfig, SelfAttentionNetArgs, SelfAttentionNetArgsBuilder, SelfAttentionNetArgsFields, SelfAttentionNetArgsRangeOrValue, SelfAttentionNetParams, StftRunConfig, StftRunConfigBuilder, StftRunConfigFields, StftRunConfigRangeOrValue, WithCommonTrainingRunConfig,
+use thoosa_common::nets::common_nets::{
+    BinaryHeadPoolArgs, BinaryHeadPoolArgsBuilder, BinaryHeadPoolArgsFields, BinaryHeadPoolArgsRangeOrValue, CommonTrainingRunConfig, CommonTrainingRunConfigBuilder, CommonTrainingRunConfigFields, CommonTrainingRunConfigRangeOrValue, ConvNetArgs, ConvNetArgsBuilder, ConvNetArgsFields,
+    ConvNetArgsRangeOrValue, ConvNetJoint, ConvNetParams, LinLenNetParams, OptConfig, SelfAttentionNetArgs, SelfAttentionNetArgsBuilder, SelfAttentionNetArgsFields, SelfAttentionNetArgsRangeOrValue, SelfAttentionNetParams, StftRunConfig, StftRunConfigBuilder, StftRunConfigFields,
+    StftRunConfigRangeOrValue, WithCommonTrainingRunConfig,
 };
 use thoosa_common::nets::nodes::InitModeBuilder;
 use thoosa_common::nets::nodes::InitModeFields;
@@ -40,7 +42,6 @@ pub struct TrainLabelNetRunConfigResultParams<'a> {
     pub train_motif_nets_run_config_ids: &'a Vec<RunConfigId>,
     pub motif_nets_ids: &'a Vec<u32>,
 }
-
 
 #[derive(Args, Debug, Clone)]
 pub struct TrainMotifsNetsArgs {
@@ -66,10 +67,12 @@ pub struct TrainMotifsNetsArgs {
 #[derive(Debug, Clone, PartialEq, Eq, CpuData)]
 #[cpu_data(shallow)]
 pub enum MotifsBy {
-    SelectMotifsRunIds { select_motifs_run_config_ids: Vec<RunConfigId> },
+    SelectMotifsRunIds {
+        select_motifs_run_config_ids: Vec<RunConfigId>,
+    },
     MotifId {
         motif_id: u32,
-        select_motifs_run_config_ids: Option<Vec<RunConfigId>>//if motif_id is in select_motifs_run_config_ids
+        select_motifs_run_config_ids: Option<Vec<RunConfigId>>, //if motif_id is in select_motifs_run_config_ids
     },
 }
 
@@ -103,12 +106,7 @@ mod train_motifs_nets_args_tests {
             motifs_limit: None,
         };
 
-        assert_eq!(
-            args.motifs_by().unwrap(),
-            MotifsBy::SelectMotifsRunIds {
-                select_motifs_run_config_ids: vec![1, 2],
-            }
-        );
+        assert_eq!(args.motifs_by().unwrap(), MotifsBy::SelectMotifsRunIds { select_motifs_run_config_ids: vec![1, 2] });
     }
 
     #[test]
@@ -158,11 +156,11 @@ pub struct MotifConvNetArgs {
 
     #[in_map]
     #[run_config]
-    pub step: u32,//TODO renamed to Conv stride
+    pub step: u32, //TODO renamed to Conv stride
 
     #[in_map]
     #[run_config]
-    pub channels:u32,
+    pub channels: u32,
 
     #[in_map]
     #[run_config]
@@ -170,7 +168,7 @@ pub struct MotifConvNetArgs {
 
     #[in_map]
     #[run_config]
-    pub head_pool:Option<BinaryHeadPoolArgs>
+    pub head_pool: Option<BinaryHeadPoolArgs>,
 }
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
@@ -182,15 +180,13 @@ pub struct MotifLinNetArgs {
     #[in_map]
     #[run_config]
     pub step: u32,
-
 }
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct MotifCosineNetArgs {
-
     #[in_map]
     #[run_config]
-    pub a:f64,
+    pub a: f64,
 
     #[in_map]
     #[run_config]
@@ -198,16 +194,14 @@ pub struct MotifCosineNetArgs {
 
     #[in_map]
     #[run_config]
-    pub init_mode:InitMode
-
+    pub init_mode: InitMode,
 }
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct MotifCosine2DNetArgs {
-
     #[in_map]
     #[run_config]
-    pub a:f64,
+    pub a: f64,
 
     #[in_map]
     #[run_config]
@@ -215,13 +209,12 @@ pub struct MotifCosine2DNetArgs {
 
     #[in_map]
     #[run_config]
-    pub init_mode:InitMode,
+    pub init_mode: InitMode,
 
     #[in_map]
     #[run_config]
-    pub stft_config:StftRunConfig
+    pub stft_config: StftRunConfig,
 }
-
 
 #[allow(non_snake_case, unused_assignments, unused_variables, non_camel_case_types)]
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -254,8 +247,6 @@ pub struct TrainMotifNetRunConfig {
     #[run_config]
     #[serde(default)]
     pub net: MotifNetTypeArgs,
-
-
 }
 
 impl WithCommonTrainingRunConfig for TrainMotifNetRunConfig {
@@ -263,7 +254,6 @@ impl WithCommonTrainingRunConfig for TrainMotifNetRunConfig {
         &self.common_training_args
     }
 }
-
 
 impl TrainMotifNetRunConfig {
     pub fn new(id: Option<RunConfigId>, common_training_args: CommonTrainingRunConfig, net: MotifNetTypeArgs) -> Self {
@@ -277,21 +267,28 @@ impl AsRef<CommonTrainingRunConfig> for TrainMotifNetRunConfig {
     }
 }
 
-
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct MotifConvNetParams {
     pub num_features: u32,
     pub conv_layers: u32,
     pub head_layers: u32,
-    pub stride: u32,//stride within slice
+    pub stride: u32, //stride within slice
     pub channels: u32,
     pub kernel: u32,
-    pub head_pool: Option<BinaryHeadPool>
+    pub head_pool: Option<BinaryHeadPool>,
 }
 
 impl MotifConvNetParams {
     pub fn new(num_features: u32, conv_layers: u32, head_layers: u32, stride: u32, channels: u32, kernel: u32) -> Self {
-        Self { num_features, conv_layers, head_layers, stride, channels, kernel, head_pool:None }
+        Self {
+            num_features,
+            conv_layers,
+            head_layers,
+            stride,
+            channels,
+            kernel,
+            head_pool: None,
+        }
     }
 }
 
@@ -310,9 +307,9 @@ impl MotifLinNetParams {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct MotifCosineNetParams {
     pub num_features: u32,
-    pub a:f64,
-    pub b:f64,
-    pub init_mode:InitMode
+    pub a: f64,
+    pub b: f64,
+    pub init_mode: InitMode,
 }
 
 impl MotifCosineNetParams {
@@ -325,18 +322,17 @@ impl MotifCosineNetParams {
 pub struct MotifCosine2dNetParams {
     pub kw_time: u32,
     pub kh_freq: u32,
-    pub a:f64,
-    pub b:f64,
-    pub init_mode:InitMode,
-    pub motif_width:u32
+    pub a: f64,
+    pub b: f64,
+    pub init_mode: InitMode,
+    pub motif_width: u32,
 }
 
 impl MotifCosine2dNetParams {
     pub fn new(kw: u32, kh: u32, a: f64, b: f64, init_mode: InitMode, motif_width: u32) -> Self {
-        Self { kw_time: kw, kh_freq: kh, a, b, init_mode,motif_width }
+        Self { kw_time: kw, kh_freq: kh, a, b, init_mode, motif_width }
     }
 }
-
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub enum MotifNetTypeParams {
@@ -375,7 +371,8 @@ impl MotifNetParams {
         Self { net_type }
     }
 
-    pub fn new_conv(num_features: u32, conv_layers: u32, head_layers: u32, stride: u32, channels: u32, kernel: u32) -> Self {//head_pool: BinaryHeadPool
+    pub fn new_conv(num_features: u32, conv_layers: u32, head_layers: u32, stride: u32, channels: u32, kernel: u32) -> Self {
+        //head_pool: BinaryHeadPool
         Self::new_with_net_type(MotifNetTypeParams::ConvNetParams(MotifConvNetParams::new(num_features, conv_layers, head_layers, stride, channels, kernel)))
     }
 
@@ -391,17 +388,17 @@ impl MotifNetParams {
         Self::new_with_net_type(MotifNetTypeParams::CosineNet2DParams(MotifCosine2dNetParams::new(kw, kh, a, b, init_mode, motif_width)))
     }
 
-
     pub fn from_file(path: &PathBuf) -> anyhow::Result<Self> {
         serde_json5::from_str::<MotifNetParams>(fs::read_to_string(&path)?.as_str()).with_context(|| format!("read motif net params from {path:?}"))
     }
 
-    pub fn num_features(&self) -> u32 {//this is used to group motif nets + calculate overlap for StepAlignedSplitsAdjuster::new_with_overlap at thoosa_motifs/src/stages/apply_motif_nets.rs
+    pub fn num_features(&self) -> u32 {
+        //this is used to group motif nets + calculate overlap for StepAlignedSplitsAdjuster::new_with_overlap at thoosa_motifs/src/stages/apply_motif_nets.rs
         match &self.net_type {
             MotifNetTypeParams::LinNetParams(v) => v.num_features,
             MotifNetTypeParams::ConvNetParams(v) => v.num_features,
             MotifNetTypeParams::CosineNetParams(v) => v.num_features,
-            MotifNetTypeParams::CosineNet2DParams(v) => {v.motif_width }
+            MotifNetTypeParams::CosineNet2DParams(v) => v.motif_width,
         }
     }
 
@@ -411,56 +408,42 @@ impl MotifNetParams {
             MotifNetTypeParams::LinNetParams(v) => lin_motif_node(v),
             MotifNetTypeParams::ConvNetParams(v) => conv_motif_node(v),
             MotifNetTypeParams::CosineNetParams(v) => cosine_motif_node(v, motif),
-            MotifNetTypeParams::CosineNet2DParams(v) => {cosine_2d_motif_node(
-                v,
-                motif.map(|tt| -> anyhow::Result<_> { Ok(Arc::new(ThoTensor::new(tt.id().clone(), tt.local()?.f_alias()?)?)) }).transpose()?
-            )}
+            MotifNetTypeParams::CosineNet2DParams(v) => cosine_2d_motif_node(v, motif.map(|tt| -> anyhow::Result<_> { Ok(Arc::new(ThoTensor::new(tt.id().clone(), tt.local()?.f_alias()?)?)) }).transpose()?),
         }
     }
 }
-
 
 pub fn conv_motif_node(params: &MotifConvNetParams) -> anyhow::Result<Node> {
     debug!("motif_node: params={params:?}");
 
     let mut builder = SeqBuilder::new(params.num_features, None)?;
-    let nd = ConvConfig {
-        stride: params.stride as i64,
-        ..ConvConfig::default()
-    };
+    let nd = ConvConfig { stride: params.stride as i64, ..ConvConfig::default() };
 
     let hidden_config = ConvConfig::default();
 
-    let mut net = builder
-        .batch_norm(BatchNormConfig::default(), None)?
-        .closure(
-            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
-                let r = t.unsqueeze(1);
+    let mut net = builder.batch_norm(BatchNormConfig::default(), None)?.closure(
+        Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
+            let r = t.unsqueeze(1);
 
-                debug!("conv_motif_node: 0. t.size={:?} r.size={:?}", t.size(), r.size());
+            debug!("conv_motif_node: 0. t.size={:?} r.size={:?}", t.size(), r.size());
 
-                Ok(r)
-            })),
-            None,
-        )?;
+            Ok(r)
+        })),
+        None,
+    )?;
 
+    net = net.conv_1d("motif_conv_1", params.kernel, 1, params.channels, nd, None)?.func(|t| Ok(Tensor::f_relu(t)?))?;
 
-    net = net
-        .conv_1d("motif_conv_1", params.kernel, 1, params.channels, nd, None)?
-        .func(|t| Ok(Tensor::f_relu(t)?))?;
+    let mut net = builder.batch_norm(BatchNormConfig::default(), None)?.closure(
+        Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
+            let r = t.shallow_clone();
 
-    let mut net = builder
-        .batch_norm(BatchNormConfig::default(), None)?
-        .closure(
-            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
-                let r = t.shallow_clone();
+            debug!("conv_motif_node, after motif_conv_1: t.size={:?} r.size={:?}", t.size(), r.size());
 
-                debug!("conv_motif_node, after motif_conv_1: t.size={:?} r.size={:?}", t.size(), r.size());
-
-                Ok(r)
-            })),
-            None,
-        )?;
+            Ok(r)
+        })),
+        None,
+    )?;
 
     for i in 0..params.conv_layers as usize {
         net = net
@@ -484,14 +467,11 @@ pub fn conv_motif_node(params: &MotifConvNetParams) -> anyhow::Result<Node> {
 
     net = net.conv_1d("score_head", 1, params.channels, 1, ConvConfig::default(), None)?;
 
-    net = net.avg_pool(params.kernel, 1, params.kernel/2)?;
-
-
+    net = net.avg_pool(params.kernel, 1, params.kernel / 2)?;
 
     // net = net.adaptive_avg_pool(1, params.channels)?;
 
-
-net.closure(
+    net.closure(
         Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
             let r = t.squeeze();
 
@@ -506,34 +486,17 @@ net.closure(
         })),
         None,
     )?
-    .linear_feats(
-        "motif_first_head",
-        2,1
-    )?
-
+    .linear_feats("motif_first_head", 2, 1)?
     .func(|t| Ok(Tensor::f_relu(t)?))?;
 
     for i in 0..params.head_layers as usize {
-        net = net
-            .linear_f(
-                format!("motif_{i}_head"),
-                if i < 1 + (params.head_layers / 2) as usize {
-                    2.
-                } else {
-                    0.5
-                },
-            )?
-            .func(|t| Ok(Tensor::f_gelu(t, "none")?))?;
+        net = net.linear_f(format!("motif_{i}_head"), if i < 1 + (params.head_layers / 2) as usize { 2. } else { 0.5 })?.func(|t| Ok(Tensor::f_gelu(t, "none")?))?;
     }
 
     net
         // .func(|t| Ok(Tensor::f_relu(t)?))?
-        .linear_s(
-            1,
-            "motif_last_head",
-        )?
+        .linear_s(1, "motif_last_head")?
         .end_seq()
-
 }
 
 pub fn cosine_2d_motif_node(params: &MotifCosine2dNetParams, motif: Option<Arc<ThoTensor<Spectorgram, SynKey>>>) -> anyhow::Result<Node> {
@@ -541,14 +504,12 @@ pub fn cosine_2d_motif_node(params: &MotifCosine2dNetParams, motif: Option<Arc<T
 
     let mut builder = SeqBuilder::new(0, None)?;
 
-
-    let params =  MotifCosine2dNetParams{
-        kh_freq: motif.as_ref().map(|v|v.as_ref().size()[1] as u32).unwrap_or(params.kh_freq),//freq
-        kw_time: motif.as_ref().map(|v|v.as_ref().size()[2] as u32).unwrap_or(params.kw_time),//time
+    let params = MotifCosine2dNetParams {
+        kh_freq: motif.as_ref().map(|v| v.as_ref().size()[1] as u32).unwrap_or(params.kh_freq), //freq
+        kw_time: motif.as_ref().map(|v| v.as_ref().size()[2] as u32).unwrap_or(params.kw_time), //time
 
         ..params.clone()
     };
-
 
     builder
         .closure(
@@ -569,47 +530,46 @@ pub fn cosine_2d_motif_node(params: &MotifCosine2dNetParams, motif: Option<Arc<T
         .end_seq()
 }
 
-pub static TRIGGER_RESET_IN_COSINE_MOTIF_NODE:&'static str = "TRIGGER_RESET_IN_COSINE_MOTIF_NODE.thoosa";
+pub static TRIGGER_RESET_IN_COSINE_MOTIF_NODE: &'static str = "TRIGGER_RESET_IN_COSINE_MOTIF_NODE.thoosa";
 
 pub fn cosine_motif_node(params: &MotifCosineNetParams, motif: Option<Arc<ThoTensor<MotifSlices, SynKey>>>) -> anyhow::Result<Node> {
     debug!("cosine_motif_node: params={params:?}");
 
     let mut builder = SeqBuilder::new(params.num_features, None)?;
 
-    let params =  MotifCosineNetParams{
-        num_features: motif.as_ref().map(|v|v.size().dim_1() as u32).unwrap_or(params.num_features),
+    let params = MotifCosineNetParams {
+        num_features: motif.as_ref().map(|v| v.size().dim_1() as u32).unwrap_or(params.num_features),
         ..params.clone()
     };
 
-
     let builder = builder
-    .closure(
-        Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
-            debug!("cosine_motif_node: 1. t.size={:?}", t.size());
+        .closure(
+            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
+                debug!("cosine_motif_node: 1. t.size={:?}", t.size());
 
-            #[cfg(feature = "test-restart-hooks")]
-            {
-                use log::info;
-                use thoosa_shared::test_utils::{is_flag_set, set_flag};
+                #[cfg(feature = "test-restart-hooks")]
+                {
+                    use log::info;
+                    use thoosa_shared::test_utils::{is_flag_set, set_flag};
 
-                static CALL_COUNTER:parking_lot::Mutex<u64> = parking_lot::Mutex::new(0);
-                let mut guard = CALL_COUNTER.lock();
-                *guard +=1;
+                    static CALL_COUNTER: parking_lot::Mutex<u64> = parking_lot::Mutex::new(0);
+                    let mut guard = CALL_COUNTER.lock();
+                    *guard += 1;
 
-                if *guard == 10 && !is_flag_set(TRIGGER_RESET_IN_COSINE_MOTIF_NODE)? {
-                    set_flag(TRIGGER_RESET_IN_COSINE_MOTIF_NODE)?;
+                    if *guard == 10 && !is_flag_set(TRIGGER_RESET_IN_COSINE_MOTIF_NODE)? {
+                        set_flag(TRIGGER_RESET_IN_COSINE_MOTIF_NODE)?;
 
-                    info!("cosine_motif_node: trigger restart guard={guard:?} is_TRIGGER_RESET_IN_COSINE_MOTIF_NODE_set={:?}", is_flag_set(TRIGGER_RESET_IN_COSINE_MOTIF_NODE));
+                        info!("cosine_motif_node: trigger restart guard={guard:?} is_TRIGGER_RESET_IN_COSINE_MOTIF_NODE_set={:?}", is_flag_set(TRIGGER_RESET_IN_COSINE_MOTIF_NODE));
 
-                    return Err(anyhow::anyhow!("device-side assert triggered"))
+                        return Err(anyhow::anyhow!("device-side assert triggered"));
+                    }
                 }
-            }
 
-            Ok(t.unsqueeze(1))
-        })),
-        None,
-    )?
-    .cosine_conv_1d("cosine_bank", params.num_features, motif, params.a, params.b, params.init_mode)?;
+                Ok(t.unsqueeze(1))
+            })),
+            None,
+        )?
+        .cosine_conv_1d("cosine_bank", params.num_features, motif, params.a, params.b, params.init_mode)?;
 
     #[cfg(test)]
     let builder = builder.closure(
@@ -620,11 +580,8 @@ pub fn cosine_motif_node(params: &MotifCosineNetParams, motif: Option<Arc<ThoTen
         None,
     )?;
 
-
     builder.end_seq()
-
 }
-
 
 pub fn lin_motif_node(params: &MotifLinNetParams) -> anyhow::Result<Node> {
     debug!("motif_node: params={params:?}");
@@ -632,31 +589,19 @@ pub fn lin_motif_node(params: &MotifLinNetParams) -> anyhow::Result<Node> {
     let mut builder = SeqBuilder::new(params.num_features, None)?;
     let mut net = builder
         // .batch_norm()
-        .linear_s(
-            params.num_features * 2,
-            "todo",
-        )?
-        .func(|t|Ok(Tensor::f_relu(t)?))?;
+        .linear_s(params.num_features * 2, "todo")?
+        .func(|t| Ok(Tensor::f_relu(t)?))?;
 
     for i in 0..params.num_layers as usize {
-        net = net
-            .linear_s(
-                params.num_features * 2,
-                "todo",
-            )?
-            .func(|t|Ok(Tensor::f_relu(t)?))?;
+        net = net.linear_s(params.num_features * 2, "todo")?.func(|t| Ok(Tensor::f_relu(t)?))?;
     }
 
     net
         // .linear_s(180)
         // .func(|t|Ok(Tensor::f_relu(t)?))
-        .linear_s(
-            1,
-            "todo",
-        )?
-        .func(|t|Ok(Tensor::f_sigmoid(t)?))?
+        .linear_s(1, "todo")?
+        .func(|t| Ok(Tensor::f_sigmoid(t)?))?
         .end_seq()
-
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -676,7 +621,6 @@ impl ToJsonFile for LabelNetParams {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum LabelNetTypeParams {
-
     LinNetParams(LinLenNetParams),
     ConvNetParams(ConvNetParams),
     SelfAttentionNetParams(SelfAttentionNetParams),
@@ -688,38 +632,25 @@ impl Default for LabelNetTypeParams {
     }
 }
 
-
 impl LabelNetParams {
     pub fn new(
         motif_nets: u32, //TODO move to LinNetParams
         net_type: LabelNetTypeParams,
     ) -> Self {
-        Self {
-            motif_nets,
-            net_type,
-        }
+        Self { motif_nets, net_type }
     }
 
     pub fn from_file(path: &PathBuf) -> anyhow::Result<Self> {
-        Ok(serde_json5::from_str::<LabelNetParams>(fs::read_to_string(&path)?.as_str())
-            .with_context(|| format!("read label net params from {path:?}"))?)
+        Ok(serde_json5::from_str::<LabelNetParams>(fs::read_to_string(&path)?.as_str()).with_context(|| format!("read label net params from {path:?}"))?)
     }
 
     pub fn label_net(&self) -> anyhow::Result<Node> {
         match &self.net_type {
-            LabelNetTypeParams::LinNetParams(_) => {
-                lin_label_node(&self)
-            }
-            LabelNetTypeParams::ConvNetParams(_) => {
-                conv_label_node(&self)
-            }
-            LabelNetTypeParams::SelfAttentionNetParams(_) => {
-                self_attention_label_node(&self)
-            }
+            LabelNetTypeParams::LinNetParams(_) => lin_label_node(&self),
+            LabelNetTypeParams::ConvNetParams(_) => conv_label_node(&self),
+            LabelNetTypeParams::SelfAttentionNetParams(_) => self_attention_label_node(&self),
         }
     }
-
-
 }
 
 pub fn conv_label_node(params: &LabelNetParams) -> anyhow::Result<Node> {
@@ -729,25 +660,16 @@ pub fn conv_label_node(params: &LabelNetParams) -> anyhow::Result<Node> {
 
     debug!("cnn_label_node: params={params:?}");
 
-
     let mut seq_builder = SeqBuilder::new(0, None)?;
-    let mut builder = seq_builder
-        .closure(
-            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
-                debug!("cnn_label_node: input={t:?}");
-                Ok(t.shallow_clone())
-            })),
-            None,
-        )?;
-
-    builder = builder.conv_1d(
-        "cnn_label_conv_1d",
-        cnn_params.kernel,
-        params.motif_nets,
-        cnn_params.hidden_conv_channels,
-        ConvConfig::default(),
+    let mut builder = seq_builder.closure(
+        Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
+            debug!("cnn_label_node: input={t:?}");
+            Ok(t.shallow_clone())
+        })),
         None,
-    )?.closure(
+    )?;
+
+    builder = builder.conv_1d("cnn_label_conv_1d", cnn_params.kernel, params.motif_nets, cnn_params.hidden_conv_channels, ConvConfig::default(), None)?.closure(
         Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
             debug!("cnn_label_node: cnn_label_conv_1d output={t:?}");
             Ok(t.shallow_clone())
@@ -756,15 +678,7 @@ pub fn conv_label_node(params: &LabelNetParams) -> anyhow::Result<Node> {
     )?;
 
     for layer in 0..cnn_params.num_conv_layers {
-        builder = builder.conv_1d(
-            format!("cnn_label_conv_1d_{layer}"),
-            cnn_params.kernel,
-            cnn_params.hidden_conv_channels,
-            cnn_params.hidden_conv_channels,
-            ConvConfig::default(),
-            None,
-        )?
-        .closure(
+        builder = builder.conv_1d(format!("cnn_label_conv_1d_{layer}"), cnn_params.kernel, cnn_params.hidden_conv_channels, cnn_params.hidden_conv_channels, ConvConfig::default(), None)?.closure(
             Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
                 debug!("cnn_label_node: cnn_label_conv_1d_{layer} output={t:?}");
                 Ok(t.shallow_clone())
@@ -773,60 +687,50 @@ pub fn conv_label_node(params: &LabelNetParams) -> anyhow::Result<Node> {
         )?;
     }
 
-    builder = match &cnn_params.joint{
-        ConvNetJoint::AttnPool1d => {
-            builder.attn_pool1d(
-                "attn_pool",
-                cnn_params.hidden_conv_channels,
-                2*cnn_params.hidden_conv_channels
-            )?
+    builder = match &cnn_params.joint {
+        ConvNetJoint::AttnPool1d => builder
+            .attn_pool1d("attn_pool", cnn_params.hidden_conv_channels, 2 * cnn_params.hidden_conv_channels)?
             .closure(
                 Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
                     debug!("cnn_label_node: attn_pool output={t:?}");
                     Ok(t.shallow_clone())
                 })),
                 None,
-            )?.linear_feats(
-                "cnn_label_head",
-                cnn_params.hidden_conv_channels, 2*cnn_params.num_head_features,
             )?
+            .linear_feats("cnn_label_head", cnn_params.hidden_conv_channels, 2 * cnn_params.num_head_features)?
             .closure(
                 Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
                     debug!("cnn_label_node: cnn_label_head output={t:?}");
                     Ok(t.shallow_clone())
                 })),
                 None,
-            )?
-        }
+            )?,
 
         ConvNetJoint::MinMax => {
-            builder.closure(
-                Arc::new(Box::new(move |t: &Tensor, lengths: Option<&BatchLengths>| {
-                    debug!("cnn_label_node: MinMax leaner input={t:?} lengths={lengths:?}");
-                    let lengths = lengths.map(BatchLengths::as_slice).unwrap_or(&[]);//TODO
-                    let mask = mask_from_lengths(lengths, *lengths.iter().max().unwrap_or(&0), t.device())?;
+            builder
+                .closure(
+                    Arc::new(Box::new(move |t: &Tensor, lengths: Option<&BatchLengths>| {
+                        debug!("cnn_label_node: MinMax leaner input={t:?} lengths={lengths:?}");
+                        let lengths = lengths.map(BatchLengths::as_slice).unwrap_or(&[]); //TODO
+                        let mask = mask_from_lengths(lengths, *lengths.iter().max().unwrap_or(&0), t.device())?;
 
-                    let mean = t.f_mean_dim(2, false, None)?;
-                    let max = t.f_max_dim(2, false)?;
-                    let mean = masked_mean(t, &mask)?;
-                    let max = masked_max(t, &mask)?;
+                        let mean = t.f_mean_dim(2, false, None)?;
+                        let max = t.f_max_dim(2, false)?;
+                        let mean = masked_mean(t, &mask)?;
+                        let max = masked_max(t, &mask)?;
 
-                    Ok(Tensor::f_cat(&[mean, max], 1)?)
-
-                })),
-                None,
-            )?
-            .closure(
-                Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
-                    debug!("cnn_label_node: MinMax output={t:?}");
-                    Ok(t.shallow_clone())
-                })),
-                None,
-            )?
-            .linear_feats(
-                "cnn_label_head",
-                2* cnn_params.hidden_conv_channels, 2*cnn_params.num_head_features,
-            )?
+                        Ok(Tensor::f_cat(&[mean, max], 1)?)
+                    })),
+                    None,
+                )?
+                .closure(
+                    Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
+                        debug!("cnn_label_node: MinMax output={t:?}");
+                        Ok(t.shallow_clone())
+                    })),
+                    None,
+                )?
+                .linear_feats("cnn_label_head", 2 * cnn_params.hidden_conv_channels, 2 * cnn_params.num_head_features)?
                 .closure(
                     Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
                         debug!("cnn_label_node: cnn_label_head output={t:?}");
@@ -838,33 +742,29 @@ pub fn conv_label_node(params: &LabelNetParams) -> anyhow::Result<Node> {
     };
 
     for layer in 0..cnn_params.num_head_layers {
-        builder = builder.linear_s(
-            2*cnn_params.num_head_features,
-            format!("cnn_label_head_{layer}"),
-        )?
+        builder = builder
+            .linear_s(2 * cnn_params.num_head_features, format!("cnn_label_head_{layer}"))?
+            .closure(
+                Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
+                    debug!("cnn_label_node: cnn_label_head_{layer} output={t:?}");
+                    Ok(t.shallow_clone())
+                })),
+                None,
+            )?
+            .func(|t| Ok(Tensor::f_relu(t)?))?;
+    }
+
+    builder
+        .linear_s(1, "cnn_label_head_last")?
         .closure(
             Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
-                debug!("cnn_label_node: cnn_label_head_{layer} output={t:?}");
+                debug!("cnn_label_node: cnn_label_head_last={t:?}");
                 Ok(t.shallow_clone())
             })),
             None,
         )?
-        .func(|t| Ok(Tensor::f_relu(t)?))?;
-    }
-
-    builder.linear_s(
-        1,
-        "cnn_label_head_last",
-    )?
-    .closure(
-        Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
-            debug!("cnn_label_node: cnn_label_head_last={t:?}");
-            Ok(t.shallow_clone())
-        })),
-        None,
-    )?
-    // .func(|t|Ok(Tensor::f_sigmoid(t)?))
-    .end_seq()
+        // .func(|t|Ok(Tensor::f_sigmoid(t)?))
+        .end_seq()
 }
 
 pub fn self_attention_label_node(params: &LabelNetParams) -> anyhow::Result<Node> {
@@ -873,7 +773,6 @@ pub fn self_attention_label_node(params: &LabelNetParams) -> anyhow::Result<Node
     };
 
     debug!("self_attention_label_node: params={params:?}");
-
 
     let mut seq_builder = SeqBuilder::new(0, None)?;
     let builder = seq_builder
@@ -884,18 +783,8 @@ pub fn self_attention_label_node(params: &LabelNetParams) -> anyhow::Result<Node
             })),
             Some(params.motif_nets),
         )?
-        .linear_feats(
-            "self_attention_in_proj",
-            params.motif_nets,
-            sa_params.head_size * sa_params.n_heads,
-        )?
-        .self_attention(
-            "self_attention_block",
-            sa_params.head_size * sa_params.n_heads,
-            sa_params.n_heads,
-            sa_params.ff_mult,
-            sa_params.dropout,
-        )?
+        .linear_feats("self_attention_in_proj", params.motif_nets, sa_params.head_size * sa_params.n_heads)?
+        .self_attention("self_attention_block", sa_params.head_size * sa_params.n_heads, sa_params.n_heads, sa_params.ff_mult, sa_params.dropout)?
         .closure(
             Arc::new(Box::new(move |t: &Tensor, lengths: Option<&BatchLengths>| {
                 debug!("self_attention_label_node: pooling input={t:?} lengths={lengths:?}");
@@ -903,22 +792,20 @@ pub fn self_attention_label_node(params: &LabelNetParams) -> anyhow::Result<Node
             })),
             None,
         )?
-        .linear_s(
-            1,
-            "self_attention_label_head_last",
-        )?;
+        .linear_s(1, "self_attention_label_head_last")?;
 
-        #[cfg(any(debug_assertions, tho_debug))] {
+    #[cfg(any(debug_assertions, tho_debug))]
+    {
         let builder = builder.closure(
             Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
                 debug!("self_attention_label_node: self_attention_label_head_last={t:?}");
                 Ok(t.shallow_clone())
             })),
             None,
-        )?;}
+        )?;
+    }
 
-
-    builder .end_seq()
+    builder.end_seq()
 }
 
 pub fn lin_label_node(params: &LabelNetParams) -> anyhow::Result<Node> {
@@ -932,31 +819,22 @@ pub fn lin_label_node(params: &LabelNetParams) -> anyhow::Result<Node> {
     debug!("lin_label_node: num_features={num_features}");
 
     let mut seq_builder = SeqBuilder::new(0, None)?;
-    let mut builder = seq_builder.adaptive_avg_pool(lin_params.features,lin_params.features )?;
+    let mut builder = seq_builder.adaptive_avg_pool(lin_params.features, lin_params.features)?;
 
     for layer in 0..lin_params.layers {
-        builder = builder.linear_feats(
-            "lin_label_node",
-            lin_params.features,
-            lin_params.features,
-        )?
-        .func(|t|Ok(Tensor::f_relu(t)?))?;
+        builder = builder.linear_feats("lin_label_node", lin_params.features, lin_params.features)?.func(|t| Ok(Tensor::f_relu(t)?))?;
     }
 
-
-    builder.linear_s(
-        1,
-        "lin_label_node last",
-    )?
-    .closure(
-        Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
-            debug!("lin_label_node: out={:?}", t.size());
-            Ok(t.f_mean_dim(1, false, None)?)
-        })),
-        Some(params.motif_nets),
-    )?
-    .end_seq()
-
+    builder
+        .linear_s(1, "lin_label_node last")?
+        .closure(
+            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
+                debug!("lin_label_node: out={:?}", t.size());
+                Ok(t.f_mean_dim(1, false, None)?)
+            })),
+            Some(params.motif_nets),
+        )?
+        .end_seq()
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -1010,8 +888,7 @@ impl FinalNetParams {
     }
 
     pub fn from_file(path: &PathBuf) -> anyhow::Result<Self> {
-        Ok(serde_json5::from_str::<FinalNetParams>(fs::read_to_string(&path)?.as_str())
-            .with_context(|| format!("read final net params from {path:?}"))?)
+        Ok(serde_json5::from_str::<FinalNetParams>(fs::read_to_string(&path)?.as_str()).with_context(|| format!("read final net params from {path:?}"))?)
     }
 }
 
@@ -1028,35 +905,18 @@ pub fn final_net(params: &FinalNetParams) -> anyhow::Result<Node> {
         //     })),
         //     None,
         // )?
-        .linear_s(
-            params.mid_features * params.in_features,
-            "final_net_first_layer".to_string(),
-        )?
-        .func(|t|Ok(Tensor::f_relu(t)?))?;
+        .linear_s(params.mid_features * params.in_features, "final_net_first_layer".to_string())?
+        .func(|t| Ok(Tensor::f_relu(t)?))?;
 
     for i in 0..params.num_layers {
-        net = net
-            .linear_s(
-                params.mid_features * params.in_features,
-                format!("final_net_{i}th_layer"),
-            )?
-            .func(|t|Ok(Tensor::f_relu(t)?))?;
+        net = net.linear_s(params.mid_features * params.in_features, format!("final_net_{i}th_layer"))?.func(|t| Ok(Tensor::f_relu(t)?))?;
     }
 
-net
-    .linear_s(
-        params.out_features,
-        "final_net_last_layer",
-    )?
-    .end_seq()
+    net.linear_s(params.out_features, "final_net_last_layer")?.end_seq()
 }
 
-
 pub fn slices_in_all_resources<ResourceId>(slices: Vec<(ResourceId, Vec<Tensor>)>) -> Vec<Tensor> {
-    slices
-        .into_iter()
-        .flat_map(|(_resource_key, slices)| slices.into_iter())
-        .collect::<Vec<Tensor>>()
+    slices.into_iter().flat_map(|(_resource_key, slices)| slices.into_iter()).collect::<Vec<Tensor>>()
 }
 
 #[derive(Args, Debug, Clone)]
@@ -1082,10 +942,7 @@ pub struct TrainFinalNetArgs {
 
 impl TrainFinalNetArgs {
     pub fn resource_config(&self) -> NetResources<Logits> {
-        NetResources::new(
-            Logits::new(self.train_resource_group.clone()),
-            Logits::new(self.valid_resource_group.clone()),
-        )
+        NetResources::new(Logits::new(self.train_resource_group.clone()), Logits::new(self.valid_resource_group.clone()))
     }
 }
 
@@ -1112,7 +969,6 @@ impl WithCommonTrainingRunConfig for TrainFinalNetRunConfig {
     }
 }
 
-
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
 pub struct FinalNetArgs {
     #[in_map]
@@ -1131,23 +987,14 @@ impl AsRef<CommonTrainingRunConfig> for TrainFinalNetRunConfig {
 }
 
 impl FinalNetArgs {
-
     pub fn new(num_layers: u32, mid_features: u32) -> Self {
         Self { num_layers, mid_features }
     }
 }
 
 impl TrainFinalNetRunConfig {
-    pub fn new(
-        id: Option<RunConfigId>,
-        common_training_args: CommonTrainingRunConfig,
-        net: FinalNetArgs,
-    ) -> Self {
-        Self {
-            id,
-            common_training_args,
-            net,
-        }
+    pub fn new(id: Option<RunConfigId>, common_training_args: CommonTrainingRunConfig, net: FinalNetArgs) -> Self {
+        Self { id, common_training_args, net }
     }
 }
 
@@ -1166,7 +1013,7 @@ pub struct InferArgs {
     pub output_dir: String,
 
     #[arg(long)]
-    pub limit:Option<usize>,
+    pub limit: Option<usize>,
 
     #[arg(long)]
     pub models_dir: Option<String>,
@@ -1180,12 +1027,7 @@ impl InferArgs {
         &self.output_dir
     }
 
-    pub fn new(
-        final_run_config_id: RunConfigId,
-        input_data: String,
-        output: String,
-        input_slice_step: usize,
-    ) -> Self {
+    pub fn new(final_run_config_id: RunConfigId, input_data: String, output: String, input_slice_step: usize) -> Self {
         Self {
             final_run_config_id,
             motif_slices_step: input_slice_step,
@@ -1204,9 +1046,8 @@ pub enum LabelNetTypeArgs {
 
     LinNet(LinNetArgs),
 
-    SelfAttentionNet(SelfAttentionNetArgs)
+    SelfAttentionNet(SelfAttentionNetArgs),
 }
-
 
 #[allow(non_snake_case, unused_assignments, unused_variables)]
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -1220,38 +1061,23 @@ pub struct LinNetArgs {
     pub features: u32,
 }
 
-
 impl LinNetArgs {
     pub fn new(num_layers: u32, slices_len: u32) -> Self {
-        Self {
-            num_layers,
-            features: slices_len,
-        }
+        Self { num_layers, features: slices_len }
     }
 }
 
 ///sums and multiplies inputs by k
-pub fn dummy_label_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
-    num_features: u32,
-    k: f64,
-    device: Device,
-    descr: &str,
-) -> anyhow::Result<Box<dyn ThoModule<DI, DO>>> {
+pub fn dummy_label_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(num_features: u32, k: f64, device: Device, descr: &str) -> anyhow::Result<Box<dyn ThoModule<DI, DO>>> {
     let vs = VarStore::new(device);
 
     SeqBuilder::new(num_features, None)?
         .closure(
             Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
-                debug!(
-                        "test_label_net: merged final in flatten t.size()={:?}",
-                        t.size()
-                    );
+                debug!("test_label_net: merged final in flatten t.size()={:?}", t.size());
 
                 let t_0 = t.sum_dim_intlist(&[1, 2][..], false, None);
-                debug!(
-                        "test_label_net: merged final out flatten t_0.size()={:?}",
-                        t_0.size()
-                    );
+                debug!("test_label_net: merged final out flatten t_0.size()={:?}", t_0.size());
 
                 Ok(t_0)
             })),
@@ -1271,27 +1097,17 @@ pub fn dummy_label_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
 }
 
 ///returns [batch x frequencies x time]
-pub fn motifs_to_specs(x_train: &Tensor, desc: &str, hop_length: i64/*, path_buf: &PathBuf*/) -> Tensor {
-    let motifs = x_train.unbind(0, );
+pub fn motifs_to_specs(x_train: &Tensor, desc: &str, hop_length: i64 /*, path_buf: &PathBuf*/) -> Tensor {
+    let motifs = x_train.unbind(0);
     let mut specs = vec![];
     // let path = path_buf.join(desc);
     // fs::create_dir_all(&path).unwrap();
     for (i, motif) in motifs.iter().enumerate() {
         let motif = motif.unsqueeze(0);
-        let spec_i = motif.stft(
-            16000,
-            hop_length,
-            16000,
-            None::<Tensor>,
-            false,
-            true,
-            true,
-            true
-        ).squeeze_dim(0).abs(); //.transpose(0, 1);
+        let spec_i = motif.stft(16000, hop_length, 16000, None::<Tensor>, false, true, true, true).squeeze_dim(0).abs(); //.transpose(0, 1);
 
         debug!("motifs_to_specs: motif={motif:?} spec_i={spec_i:?}");
         // fs::create_dir_all(format!("/tmp/plots/spectrogram_{}")
-
 
         //
         // plot_spectrogram(
@@ -1308,16 +1124,16 @@ pub fn motifs_to_specs(x_train: &Tensor, desc: &str, hop_length: i64/*, path_buf
     specs_x
 }
 
-
 #[cfg(test)]
 #[allow(unused_imports, unused_variables, unused_mut, dead_code)]
 mod train_tests {
-    use anyhow::Context as _;
-    use super::{CommonTrainingRunConfigRangeOrValue, FinalNetArgs, FinalNetParams, LabelNetTypeArgs, LabelNetTypeArgsRangeOrValue, LabelNetTypeParams, LinNetArgs, MotifCosine2dNetParams, MotifCosineNetParams, TrainFinalNetRunConfig, TrainLabelNetRunConfigResultParams, TrainMotifNetRunConfig, conv_label_node, cosine_2d_motif_node, cosine_motif_node, dummy_label_net, lin_label_node, lin_motif_node, motifs_to_specs, self_attention_label_node};
     use super::{
-        InferArgs, LabelNetParams, MotifLinNetParams, MotifNetParams,
+        CommonTrainingRunConfigRangeOrValue, FinalNetArgs, FinalNetParams, LabelNetTypeArgs, LabelNetTypeArgsRangeOrValue, LabelNetTypeParams, LinNetArgs, MotifCosine2dNetParams, MotifCosineNetParams, TrainFinalNetRunConfig, TrainLabelNetRunConfigResultParams, TrainMotifNetRunConfig,
+        conv_label_node, cosine_2d_motif_node, cosine_motif_node, dummy_label_net, lin_label_node, lin_motif_node, motifs_to_specs, self_attention_label_node,
     };
+    use super::{InferArgs, LabelNetParams, MotifLinNetParams, MotifNetParams};
     use crate::dims::{ChannelsMotifsData, LabelProbability, MotifProbability};
+    use anyhow::Context as _;
     use async_trait::async_trait;
     use futures::executor::block_on;
     use futures_util::FutureExt;
@@ -1352,9 +1168,7 @@ mod train_tests {
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::transforms::filters::BandPassFilterParamsRangeOrValue;
     use thoosa_common::utils::{TrainListener, debug_plot_impl, from, mix_x_binary_with_labels, optimizer_mem_size, pad_stack_with_mask, plot_spectrogram, set_requires_grad_in_subpath, stretch, vs_mem_size};
-    use thoosa_common::utils::{
-        lin_t, pad_to, reset_print_options, t_0_0, tensor_mem_size,
-    };
+    use thoosa_common::utils::{lin_t, pad_to, reset_print_options, t_0_0, tensor_mem_size};
     use thoosa_common::ws::{FsWorkspace, NET_WEIGHTS_FILE, Workspace};
     use thoosa_common::ws::{WsConfigs, mock_ws_simp};
     use thoosa_properties_map::ToHashmap;
@@ -1368,7 +1182,6 @@ mod train_tests {
     use thoosa_shared::{CopyToDevice, ThoError, batch_windows, cdt_for_dir, clc_num_batches, mono_key, pulse_in_rand, sin_v, sin_v_f, slices_len};
     use thoosa_store::{MockStore, SqlStore, TrainedNet, TrainedNetsBy};
     use torch_sys::at_autocast_clear_cache;
-
 
     use super::LabelNetTypeParams::LinNetParams;
     use crate::tch_test_utils::motifs_tensor;
@@ -1385,8 +1198,6 @@ mod train_tests {
         thoosa_shared::test_utils::init_test_logging();
     }
 
-
-
     #[test]
     fn test_test_net() -> anyhow::Result<()> {
         let t_0 = lin_test_tensor(1000, 5);
@@ -1397,37 +1208,18 @@ mod train_tests {
         debug!("t.size={:?}", t.size());
 
         //sums and multiplies by k
-        let r_0: ThoTensor<AnyDims, DebugId> =
-            utils::test_net(100, 1., Cpu, "test_net")?.tho_forward(&t, None, true)?;
+        let r_0: ThoTensor<AnyDims, DebugId> = utils::test_net(100, 1., Cpu, "test_net")?.tho_forward(&t, None, true)?;
         debug!("r_0.size={:?}", r_0.size());
 
         assert_eq!(Tensor::from_slice(&[4950.]), r_0.local()?.i((0, 0, ..)));
-        assert_eq!(
-            Tensor::from_slice(&[9900.]),
-            utils::test_net::<AnyDims, AnyDims>(100, 2., Cpu, "test_net")?
-                .tho_forward(&t, None, true)?
-                .local()?
-                .i((0, 0, ..))
-        );
+        assert_eq!(Tensor::from_slice(&[9900.]), utils::test_net::<AnyDims, AnyDims>(100, 2., Cpu, "test_net")?.tho_forward(&t, None, true)?.local()?.i((0, 0, ..)));
 
         Ok(())
     }
-    
+
     //5 ch
     fn lin_test_tensor(input_n: i64, channels: u32) -> Tensor {
-        Tensor::vstack(
-            (1..=channels)
-                .map(|c| {
-                    Tensor::from_slice(
-                        (0..input_n)
-                            .map(|i| i as f32 * c as f32)
-                            .collect::<Vec<_>>()
-                            .as_slice(),
-                    )
-                })
-                .collect::<Vec<_>>()
-                .as_slice(),
-        )
+        Tensor::vstack((1..=channels).map(|c| Tensor::from_slice((0..input_n).map(|i| i as f32 * c as f32).collect::<Vec<_>>().as_slice())).collect::<Vec<_>>().as_slice())
     }
 
     #[tokio::test]
@@ -1438,55 +1230,24 @@ mod train_tests {
         let max_motif_nodes = 19;
         let features = 23;
 
-        let ws = Arc::new(RwLock::new(FsWorkspace::new(
-            test_dir,
-            WsConfigs::new(
-                channels,
-            1000,
-            32000
-            )
-        )?));
-        let params = LabelNetParams::new(
-            max_motif_nodes,
-            LabelNetTypeParams::LinNetParams(LinLenNetParams::new(features, 3)),
-        );
+        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, WsConfigs::new(channels, 1000, 32000))?));
+        let params = LabelNetParams::new(max_motif_nodes, LabelNetTypeParams::LinNetParams(LinLenNetParams::new(features, 3)));
 
         let mut vs_0 = VarStore::new(Cpu);
-        let net: Box<dyn ThoModule<AnyDims, AnyDims>> =
-            lin_label_node(&params)?.build_tch_module(&vs_0.root())?;
+        let net: Box<dyn ThoModule<AnyDims, AnyDims>> = lin_label_node(&params)?.build_tch_module(&vs_0.root())?;
         vs_0.freeze();
 
         let batch = 11i64;
         for features in [features, 123, 17] {
-            let _ = net.tho_forward(
-                &Tensor::rand(
-                    [
-                        batch,
-                        channels as i64,
-                        features as i64,
-                    ],
-                    FLOAT_CPU,
-                )
-                    .into(),
-                None,
-                false,
-            )?;
+            let _ = net.tho_forward(&Tensor::rand([batch, channels as i64, features as i64], FLOAT_CPU).into(), None, false)?;
         }
 
+        let model_path = ws.write().save_net(1, (&vs_0).into(), "labels/test_label", &params)?;
 
-        let model_path = ws
-            .write()
-            .save_net(1, (&vs_0).into(), "labels/test_label", &params)?;
-
-        debug!("model_path={model_path:?} vs_0.variables().len()={}",vs_0.variables().len());
+        debug!("model_path={model_path:?} vs_0.variables().len()={}", vs_0.variables().len());
 
         let params_for_builder = params.clone();
-        let loaded_module: ThoModuleWithStore<AnyDims, AnyDims> = ThoModuleWithStore::load("".into(),
-                                                                                           move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder)?.build_tch_module(path),
-                                                                                           model_path,
-                                                                                           Cpu,
-                                                                                           false,
-        )?;
+        let loaded_module: ThoModuleWithStore<AnyDims, AnyDims> = ThoModuleWithStore::load("".into(), move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder)?.build_tch_module(path), model_path, Cpu, false)?;
 
         assert!(vs_0.variables().len() > 0);
         assert_eq!(vs_0.variables(), loaded_module.var_store().variables());
@@ -1499,15 +1260,9 @@ mod train_tests {
         thoosa_common::runner::global_ctx::GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
-        _test_save_load_conv_label_node(
-            3, 19, &[2000, 12030, 17000], 11i64,
-            ConvNetParams::new(3, 64, 10, 10, 256, ConvNetJoint::MinMax)
-        ).await?;
+        _test_save_load_conv_label_node(3, 19, &[2000, 12030, 17000], 11i64, ConvNetParams::new(3, 64, 10, 10, 256, ConvNetJoint::MinMax)).await?;
 
-        _test_save_load_conv_label_node(
-            3, 19, &[2000, 12030, 17000], 11i64,
-            ConvNetParams::new(3, 64, 10, 10, 256, ConvNetJoint::AttnPool1d)
-        ).await?;
+        _test_save_load_conv_label_node(3, 19, &[2000, 12030, 17000], 11i64, ConvNetParams::new(3, 64, 10, 10, 256, ConvNetJoint::AttnPool1d)).await?;
 
         Ok(())
     }
@@ -1517,15 +1272,9 @@ mod train_tests {
         thoosa_common::runner::global_ctx::GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
-        _test_save_load_conv_label_node(
-            360, 1541, &[1541], 101i64,
-            ConvNetParams::new(7, 64, 100, 10, 256, ConvNetJoint::MinMax)
-        ).await?;
+        _test_save_load_conv_label_node(360, 1541, &[1541], 101i64, ConvNetParams::new(7, 64, 100, 10, 256, ConvNetJoint::MinMax)).await?;
 
-        _test_save_load_conv_label_node(
-            360, 1541, &[1541], 101i64,
-            ConvNetParams::new(7, 64, 100, 10, 256, ConvNetJoint::AttnPool1d)
-        ).await?;
+        _test_save_load_conv_label_node(360, 1541, &[1541], 101i64, ConvNetParams::new(7, 64, 100, 10, 256, ConvNetJoint::AttnPool1d)).await?;
 
         Ok(())
     }
@@ -1535,58 +1284,29 @@ mod train_tests {
         thoosa_common::runner::global_ctx::GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
-        _test_save_load_self_attention_label_node(
-            19,
-            &[128, 256, 384],
-            11i64,
-            SelfAttentionNetParams::new(64, 4, 4, 0.1),
-            false,
-        ).await?;
+        _test_save_load_self_attention_label_node(19, &[128, 256, 384], 11i64, SelfAttentionNetParams::new(64, 4, 4, 0.1), false).await?;
 
-        _test_save_load_self_attention_label_node(
-            19,
-            &[128, 256, 384],
-            11i64,
-            SelfAttentionNetParams::new(64, 4, 4, 0.1),
-            true,
-        ).await?;
+        _test_save_load_self_attention_label_node(19, &[128, 256, 384], 11i64, SelfAttentionNetParams::new(64, 4, 4, 0.1), true).await?;
 
         Ok(())
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn heavy_test_train_conv_label_node() -> anyhow::Result<()> {
-        let motif_nets= 100;
+        let motif_nets = 100;
         let conv_net_params = ConvNetParams::new(8, 8, 10, 8, 8, ConvNetJoint::AttnPool1d);
-        let params = LabelNetParams::new(
-            motif_nets,
-            LabelNetTypeParams::ConvNetParams(conv_net_params),
-        );
+        let params = LabelNetParams::new(motif_nets, LabelNetTypeParams::ConvNetParams(conv_net_params));
 
         let mut vs_0 = VarStore::new(Cpu);
         let net: Box<dyn ThoModule<AnyDims, AnyDims>> = conv_label_node(&params)?.build_tch_module(&vs_0.root())?;
         let mut opt = AdamW::default().amsgrad(true).build(&vs_0, 1e-3)?;
 
         let batch = 64usize;
-        let (x_train, y_train, lengths_train) = gen_motifs_output(
-            batch,
-            motif_nets as usize,
-            1200..=1400,
-            LabelSignal::ByMotifs,
-            0.01,
-            Some(11),
-        )?;
+        let (x_train, y_train, lengths_train) = gen_motifs_output(batch, motif_nets as usize, 1200..=1400, LabelSignal::ByMotifs, 0.01, Some(11))?;
         let target_train = y_train.unsqueeze(1);
         let lengths_train = lengths_train.iter().map(|v| *v as i64).collect::<Vec<_>>();
 
-        let (x_eval, y_eval, lengths_eval) = gen_motifs_output(
-            batch,
-            motif_nets as usize,
-            1200..=1400,
-            LabelSignal::ByMotifs,
-            0.15,
-            Some(12),
-        )?;
+        let (x_eval, y_eval, lengths_eval) = gen_motifs_output(batch, motif_nets as usize, 1200..=1400, LabelSignal::ByMotifs, 0.15, Some(12))?;
         let target_eval = y_eval.unsqueeze(1);
         let lengths_eval = lengths_eval.iter().map(|v| *v as i64).collect::<Vec<_>>();
 
@@ -1611,7 +1331,7 @@ mod train_tests {
         let logits_eval = net.tho_forward(&x_eval.shallow_clone().into(), Some(&mut lengths_eval), false)?;
         let eval_loss = logits_eval.local()?.binary_cross_entropy_with_logits::<Tensor>(&target_eval, None, None, Reduction::Mean).double_value(&[]);
 
-        debug!("heavy_test_train_conv_label_node: first_loss={:?} last_loss={last_loss:.5} eval_loss_before={eval_loss_before:.5} eval_loss_after={eval_loss:.5}",first_loss);
+        debug!("heavy_test_train_conv_label_node: first_loss={:?} last_loss={last_loss:.5} eval_loss_before={eval_loss_before:.5} eval_loss_after={eval_loss:.5}", first_loss);
 
         assert!(first_loss.unwrap_or(last_loss) > last_loss, "expected train loss to decrease, first_loss={first_loss:?}, last_loss={last_loss}");
         assert!(eval_loss < eval_loss_before, "expected eval loss to improve, before={eval_loss_before}, after={eval_loss}");
@@ -1623,37 +1343,20 @@ mod train_tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn heavy_test_train_lin_label_node_on_kernels() -> anyhow::Result<()> {
-        let motif_nets= 100;
+        let motif_nets = 100;
         let conv_net_params = LinLenNetParams::new(256, 4);
-        let params = LabelNetParams::new(
-            motif_nets,
-            LabelNetTypeParams::LinNetParams(conv_net_params),
-        );
+        let params = LabelNetParams::new(motif_nets, LabelNetTypeParams::LinNetParams(conv_net_params));
 
         let mut vs_0 = VarStore::new(Cpu);
         let net: Box<dyn ThoModule<AnyDims, AnyDims>> = lin_label_node(&params)?.build_tch_module(&vs_0.root())?;
         let mut opt = AdamW::default().amsgrad(true).build(&vs_0, 1e-3)?;
 
         let batch = 64usize;
-        let (x_train, y_train, lengths_train) = gen_motifs_output(
-            batch,
-            motif_nets as usize,
-            1200..=1400,
-            LabelSignal::ByMotifs,
-            0.01,
-            Some(11),
-        )?;
+        let (x_train, y_train, lengths_train) = gen_motifs_output(batch, motif_nets as usize, 1200..=1400, LabelSignal::ByMotifs, 0.01, Some(11))?;
         let target_train = y_train.unsqueeze(1);
         let lengths_train = lengths_train.iter().map(|v| *v as i64).collect::<Vec<_>>();
 
-        let (x_eval, y_eval, lengths_eval) = gen_motifs_output(
-            batch,
-            motif_nets as usize,
-            1200..=1400,
-            LabelSignal::ByMotifs,
-            0.15,
-            Some(12),
-        )?;
+        let (x_eval, y_eval, lengths_eval) = gen_motifs_output(batch, motif_nets as usize, 1200..=1400, LabelSignal::ByMotifs, 0.15, Some(12))?;
         let target_eval = y_eval.unsqueeze(1);
         let lengths_eval = lengths_eval.iter().map(|v| *v as i64).collect::<Vec<_>>();
 
@@ -1678,7 +1381,7 @@ mod train_tests {
         let logits_eval = net.tho_forward(&x_eval.shallow_clone().into(), Some(&mut lengths_eval), false)?;
         let eval_loss = logits_eval.local()?.binary_cross_entropy_with_logits::<Tensor>(&target_eval, None, None, Reduction::Mean).double_value(&[]);
 
-        debug!("heavy_test_train_conv_label_node: first_loss={:?} last_loss={last_loss:.5} eval_loss_before={eval_loss_before:.5} eval_loss_after={eval_loss:.5}",first_loss);
+        debug!("heavy_test_train_conv_label_node: first_loss={:?} last_loss={last_loss:.5} eval_loss_before={eval_loss_before:.5} eval_loss_after={eval_loss:.5}", first_loss);
 
         assert!(first_loss.unwrap_or(last_loss) > last_loss, "expected train loss to decrease, first_loss={first_loss:?}, last_loss={last_loss}");
         assert!(eval_loss < eval_loss_before, "expected eval loss to improve, before={eval_loss_before}, after={eval_loss}");
@@ -1686,12 +1389,11 @@ mod train_tests {
         Ok(())
     }
 
-
-    fn gen_motifs_batch(batch: usize, motif_len: usize, motifs: &Tensor) -> anyhow::Result<(Tensor, Option<BatchLengths>, Tensor)>{
-        assert_eq!(batch%2, 0);
+    fn gen_motifs_batch(batch: usize, motif_len: usize, motifs: &Tensor) -> anyhow::Result<(Tensor, Option<BatchLengths>, Tensor)> {
+        assert_eq!(batch % 2, 0);
 
         // debug_plot_impl(motifs, "motifs", 0)?;
-        let random = motifs_tensor(motif_len, batch/2, TestSignalKind::Triangle, 1.0, 2.0);
+        let random = motifs_tensor(motif_len, batch / 2, TestSignalKind::Triangle, 1.0, 2.0);
         // debug_plot_impl(&random, "random", 0)?;
 
         mix_x_binary_with_labels(motifs, None, &random, None)
@@ -1699,29 +1401,24 @@ mod train_tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn heavy_test_train_cosine_motif_node() -> anyhow::Result<()> {
-        let motif_width= 100usize;
+        let motif_width = 100usize;
         let batch = 64usize;
 
         let conv_net_params = ConvNetParams::new(8, 8, 10, 8, 8, ConvNetJoint::AttnPool1d);
 
-
-
         let mut vs_0 = VarStore::new(Cpu);
         let motifs = motifs_tensor(motif_width, batch / 2, TestSignalKind::ChirpUp, 1.0, 2.0);
 
-        let (x_train, lengths_train,  y_train) = gen_motifs_batch(batch, motif_width, &motifs)?;
+        let (x_train, lengths_train, y_train) = gen_motifs_batch(batch, motif_width, &motifs)?;
         // debug_plot_impl(&x_train, "x_train", 0)?;
 
-        let (x_eval,lengths_eval, y_eval, ) = gen_motifs_batch(batch, motif_width, &motifs_tensor(motif_width, batch / 2, TestSignalKind::ChirpUp, 1.5, 3.0))?;
+        let (x_eval, lengths_eval, y_eval) = gen_motifs_batch(batch, motif_width, &motifs_tensor(motif_width, batch / 2, TestSignalKind::ChirpUp, 1.5, 3.0))?;
         // debug_plot_impl(&x_eval, "x_eval", 0)?;
 
         for init_mode in &thoosa_common::nets::nodes::InitMode::list(0.4) {
             let net = cosine_motif_node(&MotifCosineNetParams::new(motif_width as u32, 10.0, 1.0, init_mode.clone()), Some(Arc::new(ThoTensor::new("motifs".into(), motifs.shallow_clone())?)))?.build_tch_module(&vs_0.root())?;
 
-            let result = run_cosine_motif_node(
-                &mut vs_0, &x_train, &y_train, &x_eval, &y_eval,
-                &net
-            );
+            let result = run_cosine_motif_node(&mut vs_0, &x_train, &y_train, &x_eval, &y_eval, &net);
             debug!("heavy_test_train_cosine_motif_node: init_mode={init_mode:?} result={result:?}");
         }
 
@@ -1748,7 +1445,7 @@ mod train_tests {
             let logits_eval = net.tho_forward(&x_eval.shallow_clone().into(), None, false)?;
             let eval_loss = logits_eval.local()?.binary_cross_entropy_with_logits::<Tensor>(&y_eval, None, None, Reduction::Mean).double_value(&[]);
             if eval_loss < 0.1 {
-                debug!("heavy_test_train_cosine_motif_node: first_loss={:?} last_loss={last_loss:.5} eval_loss_before={eval_loss_before:.5} eval_loss_after={eval_loss:.5}",first_loss);
+                debug!("heavy_test_train_cosine_motif_node: first_loss={:?} last_loss={last_loss:.5} eval_loss_before={eval_loss_before:.5} eval_loss_after={eval_loss:.5}", first_loss);
                 return Ok(i);
             }
 
@@ -1765,59 +1462,45 @@ mod train_tests {
         let test_dir = Path::new("/tmp/plots/").join(cdt_for_dir());
         fs::create_dir_all(&test_dir)?;
 
-        let motif_width= 160_000usize;
+        let motif_width = 160_000usize;
         let batch = 64usize;
-
 
         let mut vs_0 = VarStore::new(Cpu);
         // let motifs = motifs_tensor(motif_width, batch / 2, MotifKind::ChirpUp, 1.0, 2.0);
-        let motifs = Tensor::stack((0..batch/2).map(|i| {
-            Tensor::from_slice(sin_v_f(160_000, 8000.0, 32_000.0).as_slice())
-        }).collect::<Vec<_>>().as_slice(), 0);
+        let motifs = Tensor::stack((0..batch / 2).map(|i| Tensor::from_slice(sin_v_f(160_000, 8000.0, 32_000.0).as_slice())).collect::<Vec<_>>().as_slice(), 0);
 
-        let kernel = motifs_to_specs(&motifs, "kernel"/*, &test_dir*/,   4000);
+        let kernel = motifs_to_specs(&motifs, "kernel" /*, &test_dir*/, 4000);
 
-        let (x_train, lengths_train,  y_train) = gen_motifs_batch(batch, motif_width, &motifs)?;
+        let (x_train, lengths_train, y_train) = gen_motifs_batch(batch, motif_width, &motifs)?;
         // debug_plot_impl(&x_train, "x_train", 0)?;
 
-        let specs_x = motifs_to_specs(&x_train, "specs_x"/*, &test_dir*/,   4000);
+        let specs_x = motifs_to_specs(&x_train, "specs_x" /*, &test_dir*/, 4000);
 
         debug!("heavy_test_train_cosine_motif_node_2d: all_spects_t={specs_x:?} kernel={kernel:?}");
-
 
         // let (x_eval,lengths_eval, y_eval, ) = gen_motifs_batch(batch, motif_width, &motifs_tensor(motif_width, batch / 2, MotifKind::ChirpUp, 1.5, 3.0))?;
         // debug_plot_impl(&x_eval, "x_eval", 0)?;
 
-        for init_mode in [InitMode::Mean(InitDummy{})] {// &crate::my_tch::MotifInitMode::list(0.4) {
+        for init_mode in [InitMode::Mean(InitDummy {})] {
+            // &crate::my_tch::MotifInitMode::list(0.4) {
             let net = cosine_2d_motif_node(&MotifCosine2dNetParams::new(0, 0, 10.0, 1.0, init_mode.clone(), motif_width as u32), Some(Arc::new(ThoTensor::new("motifs".into(), kernel.shallow_clone())?)))?.build_tch_module(&vs_0.root())?;
 
             let result = run_cosine_motif_node(
                 // &mut vs_0, &x_train, &y_train, &x_eval, &y_eval,
-                &mut vs_0, &specs_x, &y_train, &specs_x, &y_train,
-                &net
+                &mut vs_0, &specs_x, &y_train, &specs_x, &y_train, &net,
             );
             debug!("heavy_test_train_cosine_motif_node: init_mode={init_mode:?} result={result:?}");
         }
         Ok(())
     }
 
-
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_train_self_attention_label_node() -> anyhow::Result<()> {
         tch::manual_seed(42);
         let motif_nets = 2;
 
-
-
         let batch = 10usize;
-        let eval_x_y = gen_motifs_output(
-            batch,
-            motif_nets as usize,
-            100..=100,
-            LabelSignal::ByOrder,
-            0.1,
-            None,
-        )?;
+        let eval_x_y = gen_motifs_output(batch, motif_nets as usize, 100..=100, LabelSignal::ByOrder, 0.1, None)?;
         // crate::utils::debug_plot_impl(&eval_x_y.0.i((.., 0, ..)), &format!("eval_random_motif_net_0_output_label_{:?}",  eval_x_y.1), 0)?;
         // crate::utils::debug_plot_impl(&eval_x_y.0.i((.., 1, ..)), &format!("eval_random_motif_net_1_output_label_{:?}",  eval_x_y.1), 0)?;
 
@@ -1827,14 +1510,7 @@ mod train_tests {
             batch,
             eval_x_y,
             |step| {
-                let v = gen_motifs_output(
-                    batch,
-                    motif_nets as usize,
-                    100..=100,
-                    LabelSignal::ByOrder,
-                    0.1,
-                    None,
-                )?;
+                let v = gen_motifs_output(batch, motif_nets as usize, 100..=100, LabelSignal::ByOrder, 0.1, None)?;
                 // debug!("y {}", v.1);
                 // crate::utils::debug_plot_impl(&v.0.i((.., 0, ..)), &format!("{step}_random_motif_net_0_output_label_{:?}",  v.1), 0)?;
                 // crate::utils::debug_plot_impl(&v.0.i((.., 1, ..)), &format!("{step}_random_motif_net_1_output_label_{:?}",  v.1), 0)?;
@@ -1847,10 +1523,8 @@ mod train_tests {
 
         assert!(last_loss < first_loss.expect("no first_loss"));
 
-
         Ok(())
     }
-
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn heavy_test_train_self_attention_label_node() -> anyhow::Result<()> {
@@ -1861,27 +1535,12 @@ mod train_tests {
             motif_nets,
             SelfAttentionNetParams::new(64, 4, 2, 0.1),
             32usize,
-            gen_motifs_output(
-                32,
-                motif_nets as usize,
-                220..=320,
-                LabelSignal::ByOrder,
-                0.35,
-                Some(22),
-            )?, |step| gen_motifs_output(
-                32,
-                motif_nets as usize,
-                220..=320,
-                LabelSignal::ByOrder,
-                0.35,
-                Some(1_000 + step as u64),
-            ), 120,
+            gen_motifs_output(32, motif_nets as usize, 220..=320, LabelSignal::ByOrder, 0.35, Some(22))?,
+            |step| gen_motifs_output(32, motif_nets as usize, 220..=320, LabelSignal::ByOrder, 0.35, Some(1_000 + step as u64)),
+            120,
         )?;
 
-        debug!(
-            "heavy_test_train_self_attention_label_node: first_loss={:?} last_loss={last_loss:.5} eval_loss_before={eval_loss_before:.5} eval_loss_after={eval_loss:.5}",
-            first_loss,
-        );
+        debug!("heavy_test_train_self_attention_label_node: first_loss={:?} last_loss={last_loss:.5} eval_loss_before={eval_loss_before:.5} eval_loss_after={eval_loss:.5}", first_loss,);
 
         assert!(first_loss.unwrap_or(last_loss) > last_loss, "expected train loss to decrease, first_loss={first_loss:?}, last_loss={last_loss}");
         assert!(eval_loss < eval_loss_before, "expected eval loss to improve, before={eval_loss_before}, after={eval_loss}");
@@ -1891,18 +1550,13 @@ mod train_tests {
 
     fn train_self_attention<XYF>(motif_nets: u32, attention_net_params: SelfAttentionNetParams, batch: usize, x_y_lengths_eval: (Tensor, Tensor, Vec<usize>), x_y_lengths_train: XYF, steps: i32) -> anyhow::Result<(f64, Option<f64>, f64, f64)>
     where
-        XYF: Fn(i32)->anyhow::Result<(Tensor, Tensor, Vec<usize>)>
+        XYF: Fn(i32) -> anyhow::Result<(Tensor, Tensor, Vec<usize>)>,
     {
-
-        let params = LabelNetParams::new(
-            motif_nets,
-            LabelNetTypeParams::SelfAttentionNetParams(attention_net_params),
-        );
+        let params = LabelNetParams::new(motif_nets, LabelNetTypeParams::SelfAttentionNetParams(attention_net_params));
 
         let mut vs_0 = VarStore::new(Cpu);
         let net: Box<dyn ThoModule<AnyDims, AnyDims>> = self_attention_label_node(&params)?.build_tch_module(&vs_0.root())?;
         let mut opt = AdamW::default().amsgrad(true).build(&vs_0, 1e-2)?;
-
 
         let (x_eval, y_eval, lengths_eval) = x_y_lengths_eval;
         let target_eval = y_eval.unsqueeze(1);
@@ -1940,15 +1594,11 @@ mod train_tests {
         let ws = Arc::new(RwLock::new(FsWorkspace::new(
             test_dir,
             WsConfigs::new(
-                motif_nets,
-            1000,//not used
-            32000
-            )
+                motif_nets, 1000, //not used
+                32000,
+            ),
         )?));
-        let params = LabelNetParams::new(
-          motif_nets,
-          LabelNetTypeParams::ConvNetParams(conv_net_params),
-        );
+        let params = LabelNetParams::new(motif_nets, LabelNetTypeParams::ConvNetParams(conv_net_params));
 
         let mut vs_0 = VarStore::new(Cpu);
         let net: Box<dyn ThoModule<AnyDims, AnyDims>> = conv_label_node(&params)?.build_tch_module(&vs_0.root())?;
@@ -1956,57 +1606,24 @@ mod train_tests {
 
         for slices in all_slices {
             let mut lengths = BatchLengths::new(vec![*slices as i64; batch as usize]);
-            let _ = net.tho_forward(
-                &Tensor::rand(
-                    [
-                        batch,
-                        motif_nets as i64,
-                        *slices as i64,
-                    ],
-                    FLOAT_CPU,
-                ).into(),
-
-                Some(&mut lengths),
-                false,
-            )?;
+            let _ = net.tho_forward(&Tensor::rand([batch, motif_nets as i64, *slices as i64], FLOAT_CPU).into(), Some(&mut lengths), false)?;
         }
 
-        let model_path = ws
-            .write()
-            .save_net(1, (&vs_0).into(), "labels/test_label", &params)?;
+        let model_path = ws.write().save_net(1, (&vs_0).into(), "labels/test_label", &params)?;
 
-        debug!("model_path={model_path:?} vs_0.variables().len()={}",vs_0.variables().len());
+        debug!("model_path={model_path:?} vs_0.variables().len()={}", vs_0.variables().len());
 
         let params_for_builder = params.clone();
-        let loaded_module: ThoModuleWithStore<AnyDims, AnyDims> = ThoModuleWithStore::load("".into(),
-                                                                                           move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder)?.build_tch_module(path),
-                                                                                           model_path,
-                                                                                           Cpu,
-                                                                                           false,
-        )?;
+        let loaded_module: ThoModuleWithStore<AnyDims, AnyDims> = ThoModuleWithStore::load("".into(), move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder)?.build_tch_module(path), model_path, Cpu, false)?;
 
         assert!(vs_0.variables().len() > 0);
         assert_eq!(vs_0.variables(), loaded_module.var_store().variables());
 
-
         let cuda_net = loaded_module.copy_to_device(1).await?;
         for slices in all_slices {
             let mut lengths = BatchLengths::new(vec![*slices as i64; batch as usize]);
-            let _ = cuda_net.tho_forward(
-                &Tensor::rand(
-                    [
-                        batch,
-                        motif_nets as i64,
-                        *slices as i64,
-                    ],
-                    FLOAT_CUDA,
-                ).into(),
-
-                Some(&mut lengths),
-                false,
-            )?;
+            let _ = cuda_net.tho_forward(&Tensor::rand([batch, motif_nets as i64, *slices as i64], FLOAT_CUDA).into(), Some(&mut lengths), false)?;
         }
-
 
         Ok(())
     }
@@ -2015,18 +1632,8 @@ mod train_tests {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         debug!("_test_save_load_self_attention_label_node: test_dir={test_dir:?}");
 
-        let ws = Arc::new(RwLock::new(FsWorkspace::new(
-            test_dir,
-            WsConfigs::new(
-                motif_nets,
-            1000,
-            32000
-            )
-        )?));
-        let params = LabelNetParams::new(
-            motif_nets,
-            LabelNetTypeParams::SelfAttentionNetParams(self_attention_net_params),
-        );
+        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, WsConfigs::new(motif_nets, 1000, 32000))?));
+        let params = LabelNetParams::new(motif_nets, LabelNetTypeParams::SelfAttentionNetParams(self_attention_net_params));
 
         let mut vs_0 = VarStore::new(Cpu);
         let net: Box<dyn ThoModule<AnyDims, AnyDims>> = self_attention_label_node(&params)?.build_tch_module(&vs_0.root())?;
@@ -2039,34 +1646,15 @@ mod train_tests {
 
         for slices in all_slices {
             let mut lengths = BatchLengths::new(vec![*slices as i64; batch as usize]);
-            let _ = module_with_store.tho_forward(
-                &Tensor::rand(
-                    [
-                        batch,
-                        motif_nets as i64,
-                        *slices as i64,
-                    ],
-                    FLOAT_CPU,
-                ).into(),
-                Some(&mut lengths),
-                false,
-            )?;
+            let _ = module_with_store.tho_forward(&Tensor::rand([batch, motif_nets as i64, *slices as i64], FLOAT_CPU).into(), Some(&mut lengths), false)?;
         }
 
-        let model_path = ws
-            .write()
-            .save_net(1, module_with_store.var_store().into(), "labels/test_label", &params)?;
+        let model_path = ws.write().save_net(1, module_with_store.var_store().into(), "labels/test_label", &params)?;
 
-        debug!("_test_save_load_self_attention_label_node: model_path={model_path:?} vs_0.variables().len()={}",module_with_store.var_store().variables().len());
+        debug!("_test_save_load_self_attention_label_node: model_path={model_path:?} vs_0.variables().len()={}", module_with_store.var_store().variables().len());
 
         let params_for_builder = params.clone();
-        let loaded_module: ThoModuleWithStore<AnyDims, AnyDims> = ThoModuleWithStore::load(
-            "".into(),
-           move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder)?.build_tch_module(path),
-           model_path,
-           Cpu,
-           false,
-        )?;
+        let loaded_module: ThoModuleWithStore<AnyDims, AnyDims> = ThoModuleWithStore::load("".into(), move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder)?.build_tch_module(path), model_path, Cpu, false)?;
 
         assert!(module_with_store.var_store().variables().len() > 0);
         assert_eq!(module_with_store.var_store().variables(), loaded_module.var_store().variables());
@@ -2080,18 +1668,7 @@ mod train_tests {
 
             for slices in all_slices {
                 let mut lengths = BatchLengths::new(vec![*slices as i64; batch as usize]);
-                let _ = cuda_net.tho_forward(
-                    &Tensor::rand(
-                        [
-                            batch,
-                            motif_nets as i64,
-                            *slices as i64,
-                        ],
-                        FLOAT_CUDA
-                    ).into(),
-                    Some(&mut lengths),
-                    false,
-                )?;
+                let _ = cuda_net.tho_forward(&Tensor::rand([batch, motif_nets as i64, *slices as i64], FLOAT_CUDA).into(), Some(&mut lengths), false)?;
             }
         }
 
@@ -2099,13 +1676,10 @@ mod train_tests {
     }
 
     #[test]
-    fn test_cnn_label_node_with_mask() -> anyhow::Result<()>{
+    fn test_cnn_label_node_with_mask() -> anyhow::Result<()> {
         reset_print_options();
         let motif_nets = 3;
-        let params = LabelNetParams::new(
-            motif_nets,
-            LabelNetTypeParams::ConvNetParams(ConvNetParams::new(3, 4, 3, 10, 256, ConvNetJoint::MinMax)),
-        );
+        let params = LabelNetParams::new(motif_nets, LabelNetTypeParams::ConvNetParams(ConvNetParams::new(3, 4, 3, 10, 256, ConvNetJoint::MinMax)));
 
         let mut vs_0 = VarStore::new(Cpu);
         let net: Box<dyn ThoModule<AnyDims, AnyDims>> = conv_label_node(&params)?.build_tch_module(&vs_0.root())?;
@@ -2113,11 +1687,11 @@ mod train_tests {
 
         let max_len = 32;
         let batch_vec = std::iter::once(Tensor::rand(&[motif_nets as i64, max_len], FLOAT_CPU))
-            .chain((1..4).map(|i|Tensor::rand(&[motif_nets as i64, random_range(max_len/2..max_len)], FLOAT_CPU)))
-            .chain(std::iter::once(Tensor::rand(&[motif_nets as i64, max_len/2], FLOAT_CPU)))
+            .chain((1..4).map(|i| Tensor::rand(&[motif_nets as i64, random_range(max_len / 2..max_len)], FLOAT_CPU)))
+            .chain(std::iter::once(Tensor::rand(&[motif_nets as i64, max_len / 2], FLOAT_CPU)))
             .collect::<Vec<_>>();
 
-        let batch_max_len = batch_vec.iter().map(|t|t.size()[1]).max().unwrap();
+        let batch_max_len = batch_vec.iter().map(|t| t.size()[1]).max().unwrap();
         let batch_refs_vec = batch_vec.iter().collect::<Vec<_>>();
 
         debug!("batch_refs_vec={batch_refs_vec:?}");
@@ -2126,12 +1700,7 @@ mod train_tests {
         let mut lengths = BatchLengths::new(lengths);
 
         debug!("batch=\n{batch} lengths={lengths:?}");
-        let _ = net.tho_forward(
-            &batch.into(),
-
-            Some(&mut lengths),
-            false,
-        )?;
+        let _ = net.tho_forward(&batch.into(), Some(&mut lengths), false)?;
 
         Ok(())
     }
@@ -2145,35 +1714,14 @@ mod train_tests {
     }
 
     fn asc_t<const S: usize>(mut data: [f32; S]) -> Tensor {
-        Tensor::from_slice(
-            (0..S)
-                .map(|i| data[i] + i as f32 * 2.)
-                .collect::<Vec<_>>()
-                .as_slice(),
-        )
-        .to_kind(Float)
+        Tensor::from_slice((0..S).map(|i| data[i] + i as f32 * 2.).collect::<Vec<_>>().as_slice()).to_kind(Float)
     }
 
     fn desc_t<const S: usize>(mut data: [f32; S]) -> Tensor {
-        Tensor::from_slice(
-            (0..S)
-                .rev()
-                .map(|i| data[i] + i as f32 * 2.)
-                .collect::<Vec<_>>()
-                .as_slice(),
-        )
-        .to_kind(Float)
+        Tensor::from_slice((0..S).rev().map(|i| data[i] + i as f32 * 2.).collect::<Vec<_>>().as_slice()).to_kind(Float)
     }
 
-
-
-    fn dummy_labels_net_input<'a>(
-        labels: &[bool],
-        channels: usize,
-        max_motif_nets: usize,
-        slices_len: usize,
-        tr: Option<Box<dyn Fn(&Tensor) -> Tensor + 'a>>,
-    ) -> Tensor {
+    fn dummy_labels_net_input<'a>(labels: &[bool], channels: usize, max_motif_nets: usize, slices_len: usize, tr: Option<Box<dyn Fn(&Tensor) -> Tensor + 'a>>) -> Tensor {
         //batch size x channels x max motif nets x slices_len
         let mut labels_iter = labels.iter();
         let t = Tensor::stack(
@@ -2182,21 +1730,7 @@ mod train_tests {
                 .map(|label| {
                     Tensor::stack(
                         (0..channels)
-                            .map(|mb| {
-                                Tensor::stack(
-                                    (0..max_motif_nets)
-                                        .map(|mmn| {
-                                            if *label {
-                                                motifs_1(slices_len)
-                                            } else {
-                                                motifs_0(slices_len)
-                                            }
-                                        })
-                                        .collect::<Vec<_>>()
-                                        .as_slice(),
-                                    0,
-                                )
-                            })
+                            .map(|mb| Tensor::stack((0..max_motif_nets).map(|mmn| if *label { motifs_1(slices_len) } else { motifs_0(slices_len) }).collect::<Vec<_>>().as_slice(), 0))
                             .collect::<Vec<_>>()
                             .as_slice(),
                         0,
@@ -2215,25 +1749,12 @@ mod train_tests {
         t
     }
 
-    fn dummy_motif_net_input<'a>(
-        labels: &[bool],
-        channels: usize,
-        n: usize,
-        tr: Option<Box<dyn Fn(&Tensor) -> Tensor + 'a>>,
-    ) -> Tensor {
+    fn dummy_motif_net_input<'a>(labels: &[bool], channels: usize, n: usize, tr: Option<Box<dyn Fn(&Tensor) -> Tensor + 'a>>) -> Tensor {
         //batch size x channels x max motif nets x slices_len
         let batch = Tensor::stack(
             labels
                 .iter()
-                .map(|label| {
-                    Tensor::stack(
-                        (0..channels)
-                            .map(|channel| if *label { motifs_1(n) } else { motifs_0(n) })
-                            .collect::<Vec<_>>()
-                            .as_slice(),
-                        0,
-                    )
-                })
+                .map(|label| Tensor::stack((0..channels).map(|channel| if *label { motifs_1(n) } else { motifs_0(n) }).collect::<Vec<_>>().as_slice(), 0))
                 .map(|t| {
                     debug!("dummy_motif_net_input: tr.size={:?}", t.size());
                     tr.as_ref().map(|tr| tr(&t)).unwrap_or(t)
@@ -2267,10 +1788,7 @@ mod train_tests {
         arr
     }
 
-
-    fn dummy_final_net_input<const LABELS_SIZE: usize, D: Dims>(
-        batch_size: usize,
-    ) -> (ThoTensor<D, DebugId>, Tensor) {
+    fn dummy_final_net_input<const LABELS_SIZE: usize, D: Dims>(batch_size: usize) -> (ThoTensor<D, DebugId>, Tensor) {
         let mut rng = rand::rng();
         let data = (0..batch_size)
             .map(|label| {
@@ -2286,21 +1804,8 @@ mod train_tests {
             .collect::<Vec<_>>();
 
         (
-            Tensor::stack(
-                data.iter()
-                    .map(|d| d.0.shallow_clone())
-                    .collect::<Vec<_>>()
-                    .as_slice(),
-                0,
-            )
-            .into(),
-            Tensor::stack(
-                data.iter()
-                    .map(|d| d.1.shallow_clone())
-                    .collect::<Vec<_>>()
-                    .as_slice(),
-                0,
-            ),
+            Tensor::stack(data.iter().map(|d| d.0.shallow_clone()).collect::<Vec<_>>().as_slice(), 0).into(),
+            Tensor::stack(data.iter().map(|d| d.1.shallow_clone()).collect::<Vec<_>>().as_slice(), 0),
         )
     }
 
@@ -2338,11 +1843,7 @@ mod train_tests {
         let indices: Vec<i64> = (0..n).filter(|&idx| idx != m).collect();
 
         // Put the scaled_others values into out at positions other than m
-        let _ = out.index_put_(
-            &[Some(Tensor::from_slice(indices.as_slice()))],
-            &scaled_others,
-            false,
-        );
+        let _ = out.index_put_(&[Some(Tensor::from_slice(indices.as_slice()))], &scaled_others, false);
 
         out
     }
@@ -2358,16 +1859,10 @@ mod train_tests {
         fs::create_dir_all(models_path.clone())?;
 
         let mut vs_0 = VarStore::new(Cpu);
-        let _: Box<dyn ThoModule<AnyDims, AnyDims>> =
-            super::final_net(&FinalNetParams::new(features, 100, 0, 1))?
-                .build_tch_module(&vs_0.root())?;
+        let _: Box<dyn ThoModule<AnyDims, AnyDims>> = super::final_net(&FinalNetParams::new(features, 100, 0, 1))?.build_tch_module(&vs_0.root())?;
 
         vs_0.freeze();
-        debug!(
-            "save_test_final_model: features={} vs_0.variables()={:?}",
-            features,
-            vs_0.variables()
-        );
+        debug!("save_test_final_model: features={} vs_0.variables()={:?}", features, vs_0.variables());
         vs_0.save(models_path.join("final.safetensors"))?;
         Ok(())
     }
@@ -2375,18 +1870,11 @@ mod train_tests {
     #[test]
     fn test_is_nonzero() -> anyhow::Result<()> {
         assert!(common_nets::is_nonzero(&Tensor::from_slice(&[0., 1., 0.]))?);
-        assert!(common_nets::is_nonzero(&Tensor::stack(
-            &[
-                Tensor::from_slice(&[0., 1., 0.]),
-                Tensor::from_slice(&[0., 0., 0.])
-            ],
-            0
-        ))?);
+        assert!(common_nets::is_nonzero(&Tensor::stack(&[Tensor::from_slice(&[0., 1., 0.]), Tensor::from_slice(&[0., 0., 0.])], 0))?);
         assert!(!common_nets::is_nonzero(&Tensor::from_slice(&[0., 0., 0.]))?);
 
         Ok(())
     }
-
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum LabelSignal {
@@ -2397,17 +1885,10 @@ mod train_tests {
     }
 
     #[inline]
-    fn row_mut<'a>(
-        data: &'a mut [f32],
-        motif_nets: usize,
-        b: usize,
-        m: usize,
-        l: usize,
-    ) -> &'a mut [f32] {
+    fn row_mut<'a>(data: &'a mut [f32], motif_nets: usize, b: usize, m: usize, l: usize) -> &'a mut [f32] {
         let off = (b * motif_nets + m) * l;
         &mut data[off..off + l]
     }
-
 
     /// Generate dummy outputs that look like "motif detector logits over time".
     ///
@@ -2421,28 +1902,18 @@ mod train_tests {
     /// - `x`: [batch, motif_nets, max_L] float logits (padded)
     /// - `y`: [batch] float labels in {0.0, 1.0}
     /// - `lengths`: Vec<usize> where lengths[b] == true L for sample b
-    pub fn gen_motifs_output(
-        batch: usize,
-        motif_nets: usize,
-        l_range: RangeInclusive<usize>,
-        label_signal: LabelSignal,
-        similarity: f32,
-        seed: Option<u64>,
-    ) -> anyhow::Result<(Tensor, Tensor, Vec<usize>)> {
+    pub fn gen_motifs_output(batch: usize, motif_nets: usize, l_range: RangeInclusive<usize>, label_signal: LabelSignal, similarity: f32, seed: Option<u64>) -> anyhow::Result<(Tensor, Tensor, Vec<usize>)> {
         assert_ne!(batch, 0, "batch must be > 0");
         assert_ne!(motif_nets, 0, "motif_nets must be > 0");
 
         let (l_lo, l_hi) = (*l_range.start(), *l_range.end());
-        assert!(
-            !(l_lo == 0 || l_hi == 0 || l_lo > l_hi),
-            "l_range must be non-empty and >= 1"
-        );
+        assert!(!(l_lo == 0 || l_hi == 0 || l_lo > l_hi), "l_range must be non-empty and >= 1");
 
         let mut rng = match seed {
             Some(s) => StdRng::seed_from_u64(s),
             None => {
-                let mut tr = rand::rng();     // rand 0.10
-                StdRng::from_rng(&mut tr)     // infallible
+                let mut tr = rand::rng(); // rand 0.10
+                StdRng::from_rng(&mut tr) // infallible
             }
         };
 
@@ -2479,8 +1950,7 @@ mod train_tests {
         let sigma = 2.0_f32;
         let radius: isize = 6;
 
-        let normal = Normal::new(base_mean as f64, noise_std as f64)
-            .context("construct normal distribution")?;
+        let normal = Normal::new(base_mean as f64, noise_std as f64).context("construct normal distribution")?;
 
         // Allocate padded tensor storage: [batch * motif_nets * max_l]
         // Fill padding with a constant "no match" value (base_mean).
@@ -2529,11 +1999,7 @@ mod train_tests {
 
             match label_signal {
                 LabelSignal::ByMotifs => {
-                    let (primary, secondary) = if y {
-                        (pos_group.as_slice(), neg_group.as_slice())
-                    } else {
-                        (neg_group.as_slice(), pos_group.as_slice())
-                    };
+                    let (primary, secondary) = if y { (pos_group.as_slice(), neg_group.as_slice()) } else { (neg_group.as_slice(), pos_group.as_slice()) };
 
                     // Clear peaks on primary motifs.
                     for &m in primary {
@@ -2610,11 +2076,7 @@ mod train_tests {
             }
         }
 
-        let x = Tensor::from_slice(&data).reshape([
-            batch as i64,
-            motif_nets as i64,
-            max_l as i64,
-        ]);
+        let x = Tensor::from_slice(&data).reshape([batch as i64, motif_nets as i64, max_l as i64]);
 
         let y = Tensor::from_slice(&labels).to_kind(Kind::Float);
 
@@ -2624,14 +2086,7 @@ mod train_tests {
     #[test]
     fn shapes_ok() {
         let batch_len = 3;
-        let (x, y, lengths) = gen_motifs_output(
-            batch_len,
-            5,
-            70..=80,
-            LabelSignal::ByMotifs,
-            0.2,
-            Some(123),
-        ).unwrap();
+        let (x, y, lengths) = gen_motifs_output(batch_len, 5, 70..=80, LabelSignal::ByMotifs, 0.2, Some(123)).unwrap();
 
         debug!("lengths={lengths:?}");
         debug!("x=\n{x} y=\n{y}");
@@ -2646,12 +2101,8 @@ mod train_tests {
         assert_eq!(ys, vec![batch_len as i64]);
     }
 
-
-
-
     #[test]
-    fn test_inference_mode() -> anyhow::Result<()>{
-
+    fn test_inference_mode() -> anyhow::Result<()> {
         assert!(!Tensor::zeros(&[10, 100], FLOAT_CPU).is_inference());
 
         let _guard = InferenceModeGuard::enabled()?;
@@ -2685,13 +2136,11 @@ mod train_tests {
         let motif_c_on_resource_0_t = Tensor::ones(motif_c_on_resource_0_len, FLOAT_CPU) * 0.3; //what is returned by ApplyMotifNets::run
 
         let max_len_0 = *[motif_a_on_resource_0_len, motif_b_on_resource_0_len, motif_c_on_resource_0_len].iter().max().unwrap();
-        let resource_0_t_after_nets_applied = Tensor::f_vstack(
-            &[
-                stretch(&motif_a_on_resource_0_t, max_len_0 as usize, 0)?, //corresponds to crates/thoosa_motifs/src/stages/apply_motif_nets.rs:525
-                stretch(&motif_b_on_resource_0_t, max_len_0 as usize, 0)?, //corresponds to crates/thoosa_motifs/src/stages/apply_motif_nets.rs:525
-                stretch(&motif_c_on_resource_0_t, max_len_0 as usize, 0)? //corresponds to crates/thoosa_motifs/src/stages/apply_motif_nets.rs:525
-            ]
-        )?;
+        let resource_0_t_after_nets_applied = Tensor::f_vstack(&[
+            stretch(&motif_a_on_resource_0_t, max_len_0 as usize, 0)?, //corresponds to crates/thoosa_motifs/src/stages/apply_motif_nets.rs:525
+            stretch(&motif_b_on_resource_0_t, max_len_0 as usize, 0)?, //corresponds to crates/thoosa_motifs/src/stages/apply_motif_nets.rs:525
+            stretch(&motif_c_on_resource_0_t, max_len_0 as usize, 0)?, //corresponds to crates/thoosa_motifs/src/stages/apply_motif_nets.rs:525
+        ])?;
 
         debug!("motif_a_on_resource_0_len={motif_a_on_resource_0_len} motif_b_on_resource_0_len={motif_b_on_resource_0_len} motif_c_on_resource_0_len={motif_c_on_resource_0_len}");
 
@@ -2704,13 +2153,11 @@ mod train_tests {
         let motif_c_on_resource_1_t = Tensor::ones(motif_c_on_resource_1_len, FLOAT_CPU) * 1.3; //what is returned by ApplyMotifNets::run
 
         let max_len_1 = *[motif_a_on_resource_1_len, motif_b_on_resource_1_len, motif_c_on_resource_1_len].iter().max().unwrap();
-        let resource_1_t_after_nets_applied = Tensor::f_vstack(
-            &[
-                stretch(&motif_a_on_resource_1_t, max_len_1 as usize, 0)?, //corresponds to crates/thoosa_motifs/src/stages/apply_motif_nets.rs:525
-                stretch(&motif_b_on_resource_1_t, max_len_1 as usize, 0)?, //corresponds to crates/thoosa_motifs/src/stages/apply_motif_nets.rs:525
-                stretch(&motif_c_on_resource_1_t, max_len_1 as usize, 0)? //corresponds to crates/thoosa_motifs/src/stages/apply_motif_nets.rs:525
-            ]
-        )?;
+        let resource_1_t_after_nets_applied = Tensor::f_vstack(&[
+            stretch(&motif_a_on_resource_1_t, max_len_1 as usize, 0)?, //corresponds to crates/thoosa_motifs/src/stages/apply_motif_nets.rs:525
+            stretch(&motif_b_on_resource_1_t, max_len_1 as usize, 0)?, //corresponds to crates/thoosa_motifs/src/stages/apply_motif_nets.rs:525
+            stretch(&motif_c_on_resource_1_t, max_len_1 as usize, 0)?, //corresponds to crates/thoosa_motifs/src/stages/apply_motif_nets.rs:525
+        ])?;
 
         debug!("motif_a_on_resource_1_len={motif_a_on_resource_1_len} motif_b_on_resource_1_len={motif_b_on_resource_1_len} motif_c_on_resource_1_len={motif_c_on_resource_1_len}");
 
@@ -2721,7 +2168,6 @@ mod train_tests {
         // TrainLabelNets, ResourcesBatch
         let max_input = max(resource_0_t_after_nets_applied.size()[1], resource_1_t_after_nets_applied.size()[1]);
         debug!("max_input={max_input}");
-
 
         let (x_0_batch, lengths_0) = pad_stack_with_mask(&[&resource_0_t_after_nets_applied], num_motif_nets, max_input)?;
         let (x_1_batch, lengths_1) = pad_stack_with_mask(&[&resource_1_t_after_nets_applied], num_motif_nets, max_input)?;
@@ -2742,23 +2188,14 @@ mod train_tests {
 
         let self_attention_net_params = SelfAttentionNetParams::new(64, 4, 4, 0.1);
 
-        let params = LabelNetParams::new(
-            3,
-            LabelNetTypeParams::SelfAttentionNetParams(self_attention_net_params),
-        );
+        let params = LabelNetParams::new(3, LabelNetTypeParams::SelfAttentionNetParams(self_attention_net_params));
 
         let mut vs_0 = VarStore::new(Cpu);
         let net: Box<dyn ThoModule<AnyDims, AnyDims>> = self_attention_label_node(&params)?.build_tch_module(&vs_0.root())?;
         vs_0.freeze();
 
-        let _ = net.tho_forward(
-            &x.into(),
-            lengths.as_mut(),
-            false,
-        )?;
-
+        let _ = net.tho_forward(&x.into(), lengths.as_mut(), false)?;
 
         Ok(())
     }
-
 }

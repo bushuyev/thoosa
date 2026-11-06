@@ -15,7 +15,7 @@ use async_trait::async_trait;
 use bytemuck::{Pod, Zeroable};
 use chrono::SecondsFormat;
 use log::{debug, info, trace, warn};
-use mockall::{automock, Any};
+use mockall::{Any, automock};
 use num_traits::PrimInt;
 use parking_lot::Mutex;
 #[cfg(test)]
@@ -40,9 +40,8 @@ use std::sync::atomic::AtomicBool;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{fmt, fs};
 
-
-pub mod resource;
 mod cuda_activity;
+pub mod resource;
 pub use cuda_activity::CudaActivityScope;
 pub mod val;
 
@@ -51,25 +50,25 @@ pub mod colors_iter;
 pub mod hyperparameter;
 pub mod opt_rng;
 
-pub mod run_configs;
-pub mod test_utils;
-pub mod traits;
-pub mod perf_logging;
-pub mod copy_mode;
-pub mod comp_id;
-pub mod collect_futures_eta;
-pub mod device_stats;
-pub mod math;
 pub mod audio_utils;
-pub mod tmp_file;
-pub mod macros;
-pub mod rayon_pool;
-pub mod tracked_await;
+pub mod collect_futures_eta;
 pub mod collect_futures_with_progress;
+pub mod comp_id;
+pub mod copy_mode;
+pub mod device_stats;
 pub mod futures_limits;
 pub mod ipc_types;
+pub mod macros;
+pub mod math;
+pub mod perf_logging;
+pub mod rayon_pool;
+pub mod run_configs;
+pub mod test_utils;
+pub mod tmp_file;
+pub mod tracked_await;
+pub mod traits;
 
-pub use collect_futures_with_progress::{collect_futures_with_progress, collect_futures_best_effort_with_progress, CollectionErrorPolicy};
+pub use collect_futures_with_progress::{CollectionErrorPolicy, collect_futures_best_effort_with_progress, collect_futures_with_progress};
 
 pub mod grouping;
 pub use grouping::{group_slices, group_slices_try};
@@ -92,7 +91,9 @@ pub struct CudaDeviceGeneration(pub u64);
 pub enum CudaRecoveryState {
     #[default]
     Running,
-    Recovering { cause: ThoError },
+    Recovering {
+        cause: ThoError,
+    },
     Failed(Arc<CudaRecoveryFailure>),
 }
 
@@ -136,7 +137,12 @@ impl CudaActivityGate {
         // identify the actual gate, not just an ordinal or a local cycle number.
         static NEXT_GATE_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let id = NEXT_GATE_ID.fetch_update(std::sync::atomic::Ordering::Relaxed, std::sync::atomic::Ordering::Relaxed, |id| id.checked_add(1)).expect("CUDA gate identity overflow");
-        Self { id, device_idx, state: Mutex::new(CudaActivityGateState::default()), notify: tokio::sync::Notify::new() }
+        Self {
+            id,
+            device_idx,
+            state: Mutex::new(CudaActivityGateState::default()),
+            notify: tokio::sync::Notify::new(),
+        }
     }
 
     pub fn device_idx(&self) -> usize {
@@ -355,8 +361,6 @@ impl CudaActivityGate {
 pub const LOCK_TIMEOUT: Duration = Duration::from_mins(1);
 // pub const FUTURES_TIMEOUT: Duration = Duration::from_hours(240);//TODO should depend on future
 
-
-
 struct AggPerf<'a>(&'a str, &'a str);
 impl std::fmt::Display for AggPerf<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -364,22 +368,21 @@ impl std::fmt::Display for AggPerf<'_> {
     }
 }
 
-
 #[tracing::instrument(level="debug", skip_all, fields(agg_perf = %AggPerf("sync_lock", descr)))]
 #[inline]
-pub fn with_perf_log<F, R>(f:F, descr:&str) -> R
+pub fn with_perf_log<F, R>(f: F, descr: &str) -> R
 where
-    F:FnOnce()->R {
-
+    F: FnOnce() -> R,
+{
     f()
 }
 
-
 #[tracing::instrument(level="debug", skip_all, fields(agg_perf = %AggPerf("async_lock", descr)))]
 #[inline]
-pub async fn with_async_perf_log<F, R>(f:F, descr:&str) -> R
+pub async fn with_async_perf_log<F, R>(f: F, descr: &str) -> R
 where
-    F:AsyncFnOnce()->R {
+    F: AsyncFnOnce() -> R,
+{
     trace!("with_async_perf_log: descr={descr}");
     let r = f().await;
     trace!("with_async_perf_log: descr={descr} done");
@@ -401,7 +404,7 @@ impl Display for TensorIdSliceIdx {
 pub enum CudaAction {
     NeedsRestart,
     HandleOOM,
-    Other //wrong index, etc
+    Other, //wrong index, etc
 }
 
 #[derive(Debug, Clone)]
@@ -417,18 +420,18 @@ pub enum DataErrorKind {
     InputTooShort,
     EmptyTrainingClass,
     // The stage still does not fit into GPU memory after all OOM adjustments; callers must opt in to skipping it.
-    OOMHandlingFailed,//TODO this is not a DataErrorKind - move into ThoError or CollectionErrorPolicy variant
+    OOMHandlingFailed, //TODO this is not a DataErrorKind - move into ThoError or CollectionErrorPolicy variant
 }
 pub mod tho_error {
 
+    use crate::{CudaAction, CudaRecoveryFailure, DataErrorKind, SyncStageRunnerError, TrainingSessionFailure, backtrace_head_lines};
     use std::sync::Arc;
-    use crate::{backtrace_head_lines, CudaAction, CudaRecoveryFailure, DataErrorKind, SyncStageRunnerError, TrainingSessionFailure};
 
     // Only failures that affect application control flow have dedicated variants.
     #[derive(Debug, Clone)]
     pub enum ThoError {
         Data { kind: DataErrorKind, msg: String },
-        Cuda { action: CudaAction, msg: String, backtrace:String /*TODO add tho_debug value to enable */ },
+        Cuda { action: CudaAction, msg: String, backtrace: String /*TODO add tho_debug value to enable */ },
         CudaRecoveryFailed(Arc<CudaRecoveryFailure>), //TODO rename to GpuRestartFailed
         TrainingSessionFailed(Arc<TrainingSessionFailure>),
         AdjusterFailed,
@@ -438,15 +441,11 @@ pub mod tho_error {
         // Missing execution infrastructure cannot be treated as an incompatible data item.
         MissingEndpoint(String),
         SyncStageRunner(SyncStageRunnerError),
-        CudaBeingRecovered, 
+        CudaBeingRecovered,
     }
 
     pub fn cuda_error(action: CudaAction, msg: String) -> ThoError {
-        ThoError::Cuda {
-            action,
-            msg,
-            backtrace: backtrace_head_lines(10)
-        }
+        ThoError::Cuda { action, msg, backtrace: backtrace_head_lines(10) }
     }
 }
 
@@ -471,7 +470,7 @@ pub struct TrainingSessionFailure {
 // Generated configuration implementations use anyhow without requiring a downstream dependency.
 pub use anyhow;
 
-pub type ThoosaError = ThoError;//TODO used in macros, remove
+pub type ThoosaError = ThoError; //TODO used in macros, remove
 
 impl Display for SyncStageRunnerError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
@@ -501,7 +500,7 @@ impl From<SyncStageRunnerError> for ThoError {
 impl Display for ThoError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Cuda { action, msg, backtrace } => write!(f, "CUDA {action:?}: {msg}"),//run_worker: e=
+            Self::Cuda { action, msg, .. } => write!(f, "CUDA {action:?}: {msg}"), //run_worker: e=
             Self::CudaRecoveryFailed(failure) => {
                 write!(f, "CUDA recovery failed; original error: {:#}", failure.original)?;
                 if let Some(error) = &failure.recovery {
@@ -511,7 +510,9 @@ impl Display for ThoError {
             }
             Self::TrainingSessionFailed(failure) => {
                 write!(f, "training session invalidated; original error: {:#}", failure.original)?;
-                if let Some(error) = &failure.recovery { write!(f, "; cleanup error: {error:#}")?; }
+                if let Some(error) = &failure.recovery {
+                    write!(f, "; cleanup error: {error:#}")?;
+                }
                 Ok(())
             }
             Self::Data { kind, msg } => write!(f, "{kind:?}: {msg}"),
@@ -568,7 +569,11 @@ impl ThoError {
 
     // for injecting recoverable failures in stage and runner tests.
     pub fn oom() -> Self {
-        Self::Cuda { action: CudaAction::HandleOOM, msg: "out of memory".into(), backtrace: "".to_string() }
+        Self::Cuda {
+            action: CudaAction::HandleOOM,
+            msg: "out of memory".into(),
+            backtrace: "".to_string(),
+        }
     }
 
     pub fn is_oom(&self) -> bool {
@@ -578,7 +583,7 @@ impl ThoError {
             Self::SyncStageRunner(SyncStageRunnerError::JobError { inner, .. }) => inner.is_oom(),
             Self::Anyhow(anyhow) => {
                 let is_oom = cuda_cause_from_msg(&anyhow.to_string()).is_retryable_oom();
-                if is_oom{
+                if is_oom {
                     debug!("thoosa_shared::ThoError::is_retryable_oom: anyhow contains oom: {anyhow:?} type={}", anyhow.type_name());
                 }
                 is_oom
@@ -596,7 +601,7 @@ impl ThoError {
             Self::SyncStageRunner(SyncStageRunnerError::JobError { inner, .. }) => inner.is_retryable_oom(),
             Self::Anyhow(anyhow) => {
                 let is_oom = cuda_cause_from_msg(&anyhow.to_string()).is_retryable_oom();
-                if is_oom{
+                if is_oom {
                     debug!("thoosa_shared::ThoError::is_retryable_oom: anyhow contains oom: {anyhow:?} type={}", anyhow.type_name());
                 }
                 is_oom
@@ -612,7 +617,7 @@ impl ThoError {
             Self::SyncStageRunner(SyncStageRunnerError::JobError { inner, .. }) => inner.needs_cuda_recovery(),
             Self::Anyhow(anyhow) => {
                 let needs_reset = cuda_cause_from_msg(&anyhow.to_string()).needs_cuda_recovery();
-                if needs_reset{
+                if needs_reset {
                     warn!("thoosa_shared::ThoError::needs_cuda_restart: anyhow contains oom: {anyhow:?} type={}", anyhow.type_name());
                 }
                 needs_reset
@@ -695,7 +700,6 @@ pub fn register_error_adapter(adapter: fn(anyhow::Error) -> anyhow::Error) {
 
 impl From<anyhow::Error> for ThoError {
     fn from(error: anyhow::Error) -> Self {
-
         let error = if Self::typed_error(&error).is_none() {
             match EXTERNAL_ERROR_ADAPTER.get() {
                 Some(adapter) => adapter(error),
@@ -716,11 +720,9 @@ pub fn last_trace_line(backtrace: &Backtrace) -> Option<String> {
     backtrace.to_string().lines().rev().map(str::trim).find(|line| !line.is_empty()).map(ToOwned::to_owned)
 }
 
-pub fn n_trace_line(backtrace: &Backtrace, n:usize) -> String {
-    backtrace.to_string().lines().map(str::trim).filter(|line| !line.is_empty()).take(n).map(|v|format!("{v}\n")).collect()
+pub fn n_trace_line(backtrace: &Backtrace, n: usize) -> String {
+    backtrace.to_string().lines().map(str::trim).filter(|line| !line.is_empty()).take(n).map(|v| format!("{v}\n")).collect()
 }
-
-
 
 /// Classifies known CUDA Runtime API `cudaError_t` and CUDA Driver API `CUresult`
 /// numeric codes.
@@ -892,76 +894,43 @@ pub fn cuda_cause_from_error_code(code: i32) -> ThoError {
 
         // Runtime: cudaErrorInvalidValue = 1
         // Driver:  CUDA_ERROR_INVALID_VALUE = 1
-        1 => cuda_cause(
-            CudaAction::Other,
-            "CUDA error 1: invalid value; likely API misuse, bad argument, bad shape/index, or stale handle",
-        ),
+        1 => cuda_cause(CudaAction::Other, "CUDA error 1: invalid value; likely API misuse, bad argument, bad shape/index, or stale handle"),
 
         // Runtime: cudaErrorInitializationError = 3
         // Driver:  CUDA_ERROR_NOT_INITIALIZED = 3
-        3 => cuda_cause(
-            CudaAction::Other,
-            "CUDA error 3: initialization/not-initialized error; check driver/runtime/context initialization",
-        ),
+        3 => cuda_cause(CudaAction::Other, "CUDA error 3: initialization/not-initialized error; check driver/runtime/context initialization"),
 
         // Runtime: cudaErrorCudartUnloading = 4
         // Driver:  CUDA_ERROR_DEINITIALIZED = 4
-        4 => cuda_cause(
-            CudaAction::Other,
-            "CUDA error 4: CUDA runtime/driver is deinitializing; usually process shutdown or teardown ordering",
-        ),
+        4 => cuda_cause(CudaAction::Other, "CUDA error 4: CUDA runtime/driver is deinitializing; usually process shutdown or teardown ordering"),
 
         // Runtime: cudaErrorInvalidDevice = 100
         // Driver:  CUDA_ERROR_INVALID_DEVICE = 100
-        100 => cuda_cause(
-            CudaAction::NeedsRestart,
-            "CUDA error code=100: No CUDA GPUs are available",
-        ),
+        100 => cuda_cause(CudaAction::NeedsRestart, "CUDA error code=100: No CUDA GPUs are available"),
 
         // Runtime: cudaErrorInvalidDevice = 101
         // Driver:  CUDA_ERROR_INVALID_DEVICE = 101
-        101 => cuda_cause(
-            CudaAction::Other,
-            "CUDA error 101: invalid device; check selected CUDA device index",
-        ),
+        101 => cuda_cause(CudaAction::Other, "CUDA error 101: invalid device; check selected CUDA device index"),
 
         // Runtime: cudaErrorInvalidResourceHandle = 400
         // Driver:  CUDA_ERROR_INVALID_HANDLE = 400
-        400 => cuda_cause(
-            CudaAction::Other,
-            "CUDA error 400: invalid resource/handle; possible stale stream/event/library handle or API misuse",
-        ),
+        400 => cuda_cause(CudaAction::Other, "CUDA error 400: invalid resource/handle; possible stale stream/event/library handle or API misuse"),
 
         // Runtime: cudaErrorNotReady = 600
         // Driver:  CUDA_ERROR_NOT_READY = 600
-        600 => cuda_cause(
-            CudaAction::Other,
-            "CUDA error 600: not ready; async operation has not completed yet",
-        ),
+        600 => cuda_cause(CudaAction::Other, "CUDA error 600: not ready; async operation has not completed yet"),
 
         // Runtime: cudaErrorIllegalState = 401 in newer CUDA runtimes.
-        401 => cuda_cause(
-            CudaAction::Other,
-            "CUDA error 401: illegal state; usually API sequencing/capture/state misuse",
-        ),
+        401 => cuda_cause(CudaAction::Other, "CUDA error 401: illegal state; usually API sequencing/capture/state misuse"),
 
         // Runtime: cudaErrorInvalidConfiguration = 9
-        9 => cuda_cause(
-            CudaAction::Other,
-            "CUDA error 9: invalid kernel launch configuration; fix launch/grid/block/shared-memory parameters",
-        ),
+        9 => cuda_cause(CudaAction::Other, "CUDA error 9: invalid kernel launch configuration; fix launch/grid/block/shared-memory parameters"),
 
         // Runtime: cudaErrorLaunchOutOfResources = 701
         // Driver:  CUDA_ERROR_LAUNCH_OUT_OF_RESOURCES = 701
-        701 => cuda_cause(
-            CudaAction::Other,
-            "CUDA error 701: launch out of resources; reduce block size/register/shared-memory usage or fix custom kernel",
-        ),
+        701 => cuda_cause(CudaAction::Other, "CUDA error 701: launch out of resources; reduce block size/register/shared-memory usage or fix custom kernel"),
 
-        _ => cuda_cause(
-            CudaAction::Other,
-            format!("CUDA error {code}: unclassified CUDA error code"),
-        ),
+        _ => cuda_cause(CudaAction::Other, format!("CUDA error {code}: unclassified CUDA error code")),
     }
 }
 pub fn cuda_cause_from_msg(msg: impl Into<String>) -> ThoError {
@@ -996,245 +965,74 @@ pub fn cuda_cause_from_msg(msg: impl Into<String>) -> ThoError {
     // These are the ones after which I would restart the libtorch GPU worker.
     // ------------------------------------------------------------------------
 
-    if contains_any(
-        &lower,
-        &[
-            "device-side assert triggered",
-            "cudaerrorassert",
-            "cuda_error_assert",
-            "cuda error: device-side assert",
-            "error 710",
-            "code=710",
-            "code 710",
-        ],
-    ) {
+    if contains_any(&lower, &["device-side assert triggered", "cudaerrorassert", "cuda_error_assert", "cuda error: device-side assert", "error 710", "code=710", "code 710"]) {
         return cuda_cause(CudaAction::NeedsRestart, msg);
     }
 
     if contains_any(
         &lower,
-        &[
-            "illegal memory access",
-            "cudaerrorillegaladdress",
-            "cuda_error_illegal_address",
-            "cuda error: an illegal memory access was encountered",
-            "error 700",
-            "code=700",
-            "code 700",
-        ],
+        &["illegal memory access", "cudaerrorillegaladdress", "cuda_error_illegal_address", "cuda error: an illegal memory access was encountered", "error 700", "code=700", "code 700"],
     ) {
         return cuda_cause(CudaAction::NeedsRestart, msg);
     }
 
-    if contains_any(
-        &lower,
-        &[
-            "unspecified launch failure",
-            "cudaerrorlaunchfailure",
-            "cuda_error_launch_failed",
-            "cuda error: unspecified launch failure",
-            "error 719",
-            "code=719",
-            "code 719",
-        ],
-    ) {
+    if contains_any(&lower, &["unspecified launch failure", "cudaerrorlaunchfailure", "cuda_error_launch_failed", "cuda error: unspecified launch failure", "error 719", "code=719", "code 719"]) {
         return cuda_cause(CudaAction::NeedsRestart, msg);
     }
 
-    if contains_any(
-        &lower,
-        &[
-            "launch timed out",
-            "launch timeout",
-            "cudaerrorlaunchtimeout",
-            "cuda_error_launch_timeout",
-            "error 702",
-            "code=702",
-            "code 702",
-        ],
-    ) {
+    if contains_any(&lower, &["launch timed out", "launch timeout", "cudaerrorlaunchtimeout", "cuda_error_launch_timeout", "error 702", "code=702", "code 702"]) {
         return cuda_cause(CudaAction::NeedsRestart, msg);
     }
 
-    if contains_any(
-        &lower,
-        &[
-            "hardware stack error",
-            "cudaerrorhardwarestackerror",
-            "cuda_error_hardware_stack_error",
-            "error 714",
-            "code=714",
-            "code 714",
-        ],
-    ) {
+    if contains_any(&lower, &["hardware stack error", "cudaerrorhardwarestackerror", "cuda_error_hardware_stack_error", "error 714", "code=714", "code 714"]) {
         return cuda_cause(CudaAction::NeedsRestart, msg);
     }
 
-    if contains_any(
-        &lower,
-        &[
-            "illegal instruction",
-            "cudaerrorillegalinstruction",
-            "cuda_error_illegal_instruction",
-            "error 715",
-            "code=715",
-            "code 715",
-        ],
-    ) {
+    if contains_any(&lower, &["illegal instruction", "cudaerrorillegalinstruction", "cuda_error_illegal_instruction", "error 715", "code=715", "code 715"]) {
         return cuda_cause(CudaAction::NeedsRestart, msg);
     }
 
-    if contains_any(
-        &lower,
-        &[
-            "misaligned address",
-            "cudaerrormisalignedaddress",
-            "cuda_error_misaligned_address",
-            "error 716",
-            "code=716",
-            "code 716",
-        ],
-    ) {
+    if contains_any(&lower, &["misaligned address", "cudaerrormisalignedaddress", "cuda_error_misaligned_address", "error 716", "code=716", "code 716"]) {
         return cuda_cause(CudaAction::NeedsRestart, msg);
     }
 
-    if contains_any(
-        &lower,
-        &[
-            "invalid address space",
-            "cudaerrorinvalidaddressspace",
-            "cuda_error_invalid_address_space",
-            "error 717",
-            "code=717",
-            "code 717",
-        ],
-    ) {
+    if contains_any(&lower, &["invalid address space", "cudaerrorinvalidaddressspace", "cuda_error_invalid_address_space", "error 717", "code=717", "code 717"]) {
         return cuda_cause(CudaAction::NeedsRestart, msg);
     }
 
-    if contains_any(
-        &lower,
-        &[
-            "invalid program counter",
-            "invalid pc",
-            "cudaerrorinvalidpc",
-            "cuda_error_invalid_pc",
-            "error 718",
-            "code=718",
-            "code 718",
-        ],
-    ) {
+    if contains_any(&lower, &["invalid program counter", "invalid pc", "cudaerrorinvalidpc", "cuda_error_invalid_pc", "error 718", "code=718", "code 718"]) {
         return cuda_cause(CudaAction::NeedsRestart, msg);
     }
 
-    if contains_any(
-        &lower,
-        &[
-            "context is destroyed",
-            "context was destroyed",
-            "cudaerrorcontextisdestroyed",
-            "cuda_error_context_is_destroyed",
-            "error 709",
-            "code=709",
-            "code 709",
-        ],
-    ) {
+    if contains_any(&lower, &["context is destroyed", "context was destroyed", "cudaerrorcontextisdestroyed", "cuda_error_context_is_destroyed", "error 709", "code=709", "code 709"]) {
         return cuda_cause(CudaAction::NeedsRestart, msg);
     }
 
-    if contains_any(
-        &lower,
-        &[
-            "uncorrectable ecc",
-            "ecc uncorrectable",
-            "cudaerroreccuncorrectable",
-            "cuda_error_ecc_uncorrectable",
-            "error 214",
-            "code=214",
-            "code 214",
-        ],
-    ) {
+    if contains_any(&lower, &["uncorrectable ecc", "ecc uncorrectable", "cudaerroreccuncorrectable", "cuda_error_ecc_uncorrectable", "error 214", "code=214", "code 214"]) {
         return cuda_cause(CudaAction::NeedsRestart, msg);
     }
 
-    if contains_any(
-        &lower,
-        &[
-            "nvlink uncorrectable",
-            "cudaerrornvlinkuncorrectable",
-            "cuda_error_nvlink_uncorrectable",
-            "error 220",
-            "code=220",
-            "code 220",
-        ],
-    ) {
+    if contains_any(&lower, &["nvlink uncorrectable", "cudaerrornvlinkuncorrectable", "cuda_error_nvlink_uncorrectable", "error 220", "code=220", "code 220"]) {
         return cuda_cause(CudaAction::NeedsRestart, msg);
     }
 
-    if contains_any(
-        &lower,
-        &[
-            "contained device exception",
-            "cudaerrorcontained",
-            "error 226",
-            "code=226",
-            "code 226",
-        ],
-    ) {
+    if contains_any(&lower, &["contained device exception", "cudaerrorcontained", "error 226", "code=226", "code 226"]) {
         return cuda_cause(CudaAction::NeedsRestart, msg);
     }
 
-    if contains_any(
-        &lower,
-        &[
-            "tensor memory leak",
-            "cudaerrortensormemoryleak",
-            "error 721",
-            "code=721",
-            "code 721",
-        ],
-    ) {
+    if contains_any(&lower, &["tensor memory leak", "cudaerrortensormemoryleak", "error 721", "code=721", "code 721"]) {
         return cuda_cause(CudaAction::NeedsRestart, msg);
     }
 
-    if contains_any(
-        &lower,
-        &[
-            "mps client terminated",
-            "cudaerrormpsclientterminated",
-            "cuda_error_mps_client_terminated",
-            "error 810",
-            "code=810",
-            "code 810",
-        ],
-    ) {
+    if contains_any(&lower, &["mps client terminated", "cudaerrormpsclientterminated", "cuda_error_mps_client_terminated", "error 810", "code=810", "code 810"]) {
         return cuda_cause(CudaAction::NeedsRestart, msg);
     }
 
-    if contains_any(
-        &lower,
-        &[
-            "external device",
-            "cudaerrorexternaldevice",
-            "error 911",
-            "code=911",
-            "code 911",
-        ],
-    ) {
+    if contains_any(&lower, &["external device", "cudaerrorexternaldevice", "error 911", "code=911", "code 911"]) {
         return cuda_cause(CudaAction::NeedsRestart, msg);
     }
 
-    if contains_any(
-        &lower,
-        &[
-            "cuda error: unknown error",
-            "cudaerrorunknown",
-            "cuda_error_unknown",
-            "error 999",
-            "code=999",
-            "code 999",
-        ],
-    ) {
+    if contains_any(&lower, &["cuda error: unknown error", "cudaerrorunknown", "cuda_error_unknown", "error 999", "code=999", "code 999"]) {
         return cuda_cause(CudaAction::NeedsRestart, msg);
     }
 
@@ -1247,27 +1045,11 @@ pub fn cuda_cause_from_msg(msg: impl Into<String>) -> ThoError {
     // deterministic API/config bug.
     // ------------------------------------------------------------------------
 
-    if contains_any(
-        &lower,
-        &[
-            "cudnn_status_internal_error",
-            "cudnn_status_execution_failed",
-            "cudnn_status_mapping_error",
-            "cudnn error: cudnn_status_internal_error",
-        ],
-    ) {
+    if contains_any(&lower, &["cudnn_status_internal_error", "cudnn_status_execution_failed", "cudnn_status_mapping_error", "cudnn error: cudnn_status_internal_error"]) {
         return cuda_cause(CudaAction::NeedsRestart, msg);
     }
 
-    if contains_any(
-        &lower,
-        &[
-            "cublas_status_execution_failed",
-            "cublas_status_internal_error",
-            "cublas_status_mapping_error",
-            "cublas error",
-        ],
-    ) {
+    if contains_any(&lower, &["cublas_status_execution_failed", "cublas_status_internal_error", "cublas_status_mapping_error", "cublas error"]) {
         return cuda_cause(CudaAction::NeedsRestart, msg);
     }
 
@@ -1328,7 +1110,6 @@ pub fn cuda_cause_from_msg(msg: impl Into<String>) -> ThoError {
 fn contains_any(haystack: &str, needles: &[&str]) -> bool {
     needles.iter().any(|needle| haystack.contains(needle))
 }
-
 
 macro_rules! impl_from_external_error {
     ($($ty:ty),+ $(,)?) => {
@@ -1404,7 +1185,6 @@ impl_from_external_error!(ogg::OggReadError);
 #[cfg(feature = "hound-error")]
 impl_from_external_error!(hound::Error);
 
-
 #[derive(Debug, Eq, Hash, PartialEq, Clone)]
 pub struct MotifSlice {
     pub motif_id: u32,
@@ -1414,11 +1194,7 @@ pub struct MotifSlice {
 
 impl MotifSlice {
     pub fn new(motif_id: u32, slise_idx: i64, channel: u16) -> Self {
-        Self {
-            motif_id,
-            slice_idx: slise_idx,
-            channel,
-        }
+        Self { motif_id, slice_idx: slise_idx, channel }
     }
 
     #[inline]
@@ -1443,11 +1219,7 @@ pub fn random_saw(n: usize) -> Vec<f32> {
 
     (0..n / step / 2)
         .map(|_| rng.random_range(-10. ..10.))
-        .flat_map(|v| {
-            (0..step)
-                .map(move |i| v * i as f32)
-                .chain((0..step).map(move |i| step as f32 * v - v * i as f32))
-        })
+        .flat_map(|v| (0..step).map(move |i| v * i as f32).chain((0..step).map(move |i| step as f32 * v - v * i as f32)))
         .collect::<Vec<f32>>()
 }
 
@@ -1460,10 +1232,7 @@ pub fn saw_with_steps(n: usize, steps: usize, max_y: f32) -> Vec<f32> {
     let def_step = n / steps;
 
     loop {
-        let mut dx = min(
-            n - x,
-            (def_step as f32 * rng.random_range(0.5..1.5)) as usize,
-        );
+        let mut dx = min(n - x, (def_step as f32 * rng.random_range(0.5..1.5)) as usize);
         if dx % 2 == 0 {
             dx += 1;
         }
@@ -1490,85 +1259,35 @@ pub fn saw_with_steps(n: usize, steps: usize, max_y: f32) -> Vec<f32> {
     y
 }
 
-pub fn sig_three_imp(
-    n: u32,
-    max_y: f32,
-    σ_range: Option<Range<f32>>,
-    f_range: Option<Range<f32>>,
-) -> Vec<f32> {
+pub fn sig_three_imp(n: u32, max_y: f32, σ_range: Option<Range<f32>>, f_range: Option<Range<f32>>) -> Vec<f32> {
     let (σ, f) = σ_f_params(σ_range, f_range);
 
     join_with_offset::<f32>(
         0.,
         1.0,
         &[
-            (
-                (0.1 * n as f32) as usize,
-                pulse_v_fit(0., σ, (0.3 * n as f32) as i64, f, 100., max_y),
-            ),
-            (
-                (0.0 * n as f32) as usize,
-                pulse_v_fit(0., σ, (0.2 * n as f32) as i64, f, 100., max_y),
-            ),
-            (
-                (0.0 * n as f32) as usize,
-                pulse_v_fit(0., σ, (0.3 * n as f32) as i64, f, 100., max_y),
-            ),
+            ((0.1 * n as f32) as usize, pulse_v_fit(0., σ, (0.3 * n as f32) as i64, f, 100., max_y)),
+            ((0.0 * n as f32) as usize, pulse_v_fit(0., σ, (0.2 * n as f32) as i64, f, 100., max_y)),
+            ((0.0 * n as f32) as usize, pulse_v_fit(0., σ, (0.3 * n as f32) as i64, f, 100., max_y)),
         ],
         saw_with_steps(n as usize, 20, 0.2 * max_y),
     )
 }
 
-pub fn sig_two_imp(
-    n: u32,
-    max_y: f32,
-    σ_range: Option<Range<f32>>,
-    f_range: Option<Range<f32>>,
-    _offset: f32,
-) -> Vec<f32> {
+pub fn sig_two_imp(n: u32, max_y: f32, σ_range: Option<Range<f32>>, f_range: Option<Range<f32>>, _offset: f32) -> Vec<f32> {
     let (σ, f) = σ_f_params(σ_range, f_range);
 
     join_with_offset::<f32>(
         0.,
         1.0,
-        &[
-            (
-                (0.1 * n as f32) as usize,
-                pulse_v_fit(0., σ, (0.4 * n as f32) as i64, f, 100., max_y),
-            ),
-            (
-                (0.0 * n as f32) as usize,
-                pulse_v_fit(0., σ, (0.4 * n as f32) as i64, f, 100., max_y),
-            ),
-        ],
+        &[((0.1 * n as f32) as usize, pulse_v_fit(0., σ, (0.4 * n as f32) as i64, f, 100., max_y)), ((0.0 * n as f32) as usize, pulse_v_fit(0., σ, (0.4 * n as f32) as i64, f, 100., max_y))],
         saw_with_steps(n as usize, 20, 0.2 * max_y),
     )
 }
 
-pub fn sig_one_imp(
-    n: u32,
-    max_y: f32,
-    σ_range: Option<Range<f32>>,
-    f_range: Option<Range<f32>>,
-    offset: f32,
-) -> Vec<f32> {
+pub fn sig_one_imp(n: u32, max_y: f32, σ_range: Option<Range<f32>>, f_range: Option<Range<f32>>, offset: f32) -> Vec<f32> {
     let (σ, f) = σ_f_params(σ_range, f_range);
-    join_with_offset::<f32>(
-        0.,
-        1.0,
-        &[(
-            (offset * n as f32) as usize,
-            pulse_v_fit(
-                0.,
-                σ,
-                ((1.0 - 2. * offset) * n as f32) as i64,
-                f,
-                100.,
-                max_y,
-            ),
-        )],
-        saw_with_steps(n as usize, 20, 0.2 * max_y),
-    )
+    join_with_offset::<f32>(0., 1.0, &[((offset * n as f32) as usize, pulse_v_fit(0., σ, ((1.0 - 2. * offset) * n as f32) as i64, f, 100., max_y))], saw_with_steps(n as usize, 20, 0.2 * max_y))
 }
 
 fn σ_f_params(σ_range: Option<Range<f32>>, f_range: Option<Range<f32>>) -> (f32, f32) {
@@ -1583,46 +1302,28 @@ pub fn saw(n: u32) -> Vec<f32> {
 }
 
 pub fn pulses_in_const(n: u32, pulses: &[(usize, Vec<f32>)]) -> Vec<f32> {
-    let pulses_len: usize = pulses
-        .iter()
-        .map(|(offset, pulse)| *offset + pulse.len())
-        .sum();
+    let pulses_len: usize = pulses.iter().map(|(offset, pulse)| *offset + pulse.len()).sum();
 
     std::iter::repeat(0.)
         .take(n as usize)
         .zip(
             pulses
                 .into_iter()
-                .flat_map(|(offset, pulse)| {
-                    std::iter::repeat(0f32)
-                        .take(*offset)
-                        .chain(pulse.into_iter().map(|v| *v))
-                })
+                .flat_map(|(offset, pulse)| std::iter::repeat(0f32).take(*offset).chain(pulse.into_iter().map(|v| *v)))
                 .chain(std::iter::repeat(0f32).take(n as usize - pulses_len)),
         )
         .map(|(v1, v2)| 0.001 * v1 + v2)
         .collect::<Vec<f32>>()
 }
 
-pub fn pulse_in_rand(
-    n: u32,
-    pulses: &[(usize, Vec<f32>)],
-    random_amplitude: f32,
-    pulse_scale: f32,
-    max_slope: f32,
-) -> Vec<f32> {
+pub fn pulse_in_rand(n: u32, pulses: &[(usize, Vec<f32>)], random_amplitude: f32, pulse_scale: f32, max_slope: f32) -> Vec<f32> {
     let random = test_utils::random_v(n, random_amplitude, max_slope);
     let _pulses_len: usize = pulses.iter().map(|(offset, _pulse)| *offset).sum();
 
     join_with_offset::<f32>(0., pulse_scale, pulses, random)
 }
 
-pub fn join_with_offset<T: Debug>(
-    def: T,
-    scale: T,
-    pulses: &[(usize, Vec<T>)],
-    main: Vec<T>,
-) -> Vec<T>
+pub fn join_with_offset<T: Debug>(def: T, scale: T, pulses: &[(usize, Vec<T>)], main: Vec<T>) -> Vec<T>
 where
     T: Copy + Clone + Mul<Output = T> + std::ops::Add<Output = T> + PartialEq + Default,
 {
@@ -1632,15 +1333,8 @@ where
         .zip(
             pulses
                 .into_iter()
-                .flat_map(|(offset, pulse)| {
-                    std::iter::repeat(def)
-                        .take(*offset)
-                        .chain(pulse.into_iter().map(|v| *v))
-                })
-                .chain(
-                    std::iter::repeat(def)
-                        .take(main_len - pulses.last().map(|p| p.0 + p.1.len()).unwrap_or(0)),
-                ),
+                .flat_map(|(offset, pulse)| std::iter::repeat(def).take(*offset).chain(pulse.into_iter().map(|v| *v)))
+                .chain(std::iter::repeat(def).take(main_len - pulses.last().map(|p| p.0 + p.1.len()).unwrap_or(0))),
         )
         .map(|(main_v, pulse_v)| {
             if pulse_v != def {
@@ -1662,25 +1356,15 @@ pub fn gauss_i(μ: f32, σ: f32, n: i64) -> impl Iterator<Item = f32> {
 }
 
 pub fn gauss_scaled(μ: f32, σ: f32, n: i64, max_x: f32, max_y: f32) -> Vec<f32> {
-    (0..n)
-        .map(move |i| -max_x / 2. + i as f32 * max_x / n as f32)
-        .map(move |x| (-0.5 * ((x - μ) / σ).powi(2)).exp())
-        .map(|y| y * max_y)
-        .collect()
+    (0..n).map(move |i| -max_x / 2. + i as f32 * max_x / n as f32).map(move |x| (-0.5 * ((x - μ) / σ).powi(2)).exp()).map(|y| y * max_y).collect()
 }
 
 pub fn pulse_v_fit(μ: f32, σ: f32, n: i64, f: f32, max_x: f32, max_y: f32) -> Vec<f32> {
-    gauss_scaled(μ, σ, n, max_x, max_y)
-        .into_iter()
-        .enumerate()
-        .map(|(i, x)| x * (f * 2. * PI * i as f32 / n as f32).sin())
-        .collect::<Vec<_>>()
+    gauss_scaled(μ, σ, n, max_x, max_y).into_iter().enumerate().map(|(i, x)| x * (f * 2. * PI * i as f32 / n as f32).sin()).collect::<Vec<_>>()
 }
 
 pub fn sin_v(n: u32, p: f32) -> Vec<f32> {
-    (0..n)
-        .map(|x| 4. * (PI * (x as f32) / p).sin())
-        .collect::<Vec<f32>>()
+    (0..n).map(|x| 4. * (PI * (x as f32) / p).sin()).collect::<Vec<f32>>()
 }
 
 pub fn sin_v_f(n: u32, f: f32, sample_rate: f32) -> Vec<f32> {
@@ -1693,13 +1377,9 @@ pub fn sin_v_f(n: u32, f: f32, sample_rate: f32) -> Vec<f32> {
 }
 
 pub fn comp_sin(n: i64) -> impl Iterator<Item = f32> {
-    (0..n).map(|x| x as f32).map(move |x| {
-        30. * (PI / 100. * x).sin()
-            + 4. * (PI / 50. * x.powf(1.2)).sin()
-            + 8. * (PI / 25. * x.powf(1.2)).sin()
-            + 12. * (PI / 12. * x.powf(1.2)).sin()
-            + 6. * (PI / 6. * x.powf(1.2)).sin()
-    })
+    (0..n)
+        .map(|x| x as f32)
+        .map(move |x| 30. * (PI / 100. * x).sin() + 4. * (PI / 50. * x.powf(1.2)).sin() + 8. * (PI / 25. * x.powf(1.2)).sin() + 12. * (PI / 12. * x.powf(1.2)).sin() + 6. * (PI / 6. * x.powf(1.2)).sin())
 }
 
 pub fn comp_sin_v(n: i64) -> Vec<f32> {
@@ -1707,10 +1387,7 @@ pub fn comp_sin_v(n: i64) -> Vec<f32> {
 }
 
 pub fn comp_sin_k(n: i64, k_v: Vec<f32>, scale: f32) -> impl Iterator<Item = f32> {
-    (0..n)
-        .map(|x| x as f32)
-        .map(move |x| k_v.iter().map(|k| k * (PI / k * x.powf(1.2)).sin()).sum())
-        .map(move |x: f32| x * scale)
+    (0..n).map(|x| x as f32).map(move |x| k_v.iter().map(|k| k * (PI / k * x.powf(1.2)).sin()).sum()).map(move |x: f32| x * scale)
 }
 
 pub fn comp_sin_k_v(n: i64, k_v: Vec<f32>, scale: f32) -> Vec<f32> {
@@ -1718,12 +1395,8 @@ pub fn comp_sin_k_v(n: i64, k_v: Vec<f32>, scale: f32) -> Vec<f32> {
 }
 
 pub fn pulse_v(μ: f32, σ: f32, n: i64, f: f32) -> Vec<f32> {
-    gauss_i(μ, σ, n)
-        .enumerate()
-        .map(|(i, x)| (f * 2. * PI * i as f32 / n as f32).sin() * x)
-        .collect::<Vec<_>>()
+    gauss_i(μ, σ, n).enumerate().map(|(i, x)| (f * 2. * PI * i as f32 / n as f32).sin() * x).collect::<Vec<_>>()
 }
-
 
 pub fn parse_key_val<T, U>(s: &str) -> Result<(T, U), Box<dyn Error + Send + Sync + 'static>>
 where
@@ -1732,9 +1405,7 @@ where
     U: FromStr,
     U::Err: Error + Send + Sync + 'static,
 {
-    let pos = s
-        .find('=')
-        .ok_or_else(|| format!("invalid KEY=value: no `=` found in `{s}`"))?;
+    let pos = s.find('=').ok_or_else(|| format!("invalid KEY=value: no `=` found in `{s}`"))?;
     Ok((s[..pos].parse()?, s[pos + 1..].parse()?))
 }
 
@@ -1742,7 +1413,7 @@ where
 pub enum RangeOrValue<V, T: FieldName = String> {
     Range {
         range: Range<V>,
-        step: Option<(V, u32)>,//(value, number of digits to round to)
+        step: Option<(V, u32)>, //(value, number of digits to round to)
     },
     Value(V),
     Dynamic(Arc<dyn Fn(&[NamedVal<T>]) -> RangeOrValue<V> + Send + Sync>),
@@ -1761,10 +1432,7 @@ impl<V: Debug, T: FieldName> Debug for RangeOrValue<V, T> {
 impl<V: PartialEq, T: FieldName> PartialEq for RangeOrValue<V, T> {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (
-                Self::Range { range: lhs_range, step: lhs_step },
-                Self::Range { range: rhs_range, step: rhs_step },
-            ) => lhs_range == rhs_range && lhs_step == rhs_step,
+            (Self::Range { range: lhs_range, step: lhs_step }, Self::Range { range: rhs_range, step: rhs_step }) => lhs_range == rhs_range && lhs_step == rhs_step,
             (Self::Value(lhs), Self::Value(rhs)) => lhs == rhs,
             (Self::Dynamic(lhs), Self::Dynamic(rhs)) => Arc::ptr_eq(lhs, rhs),
             _ => false,
@@ -1822,55 +1490,34 @@ where
             let start: V = start.parse().map_err(serde::de::Error::custom)?;
             let end: V = end.parse().map_err(serde::de::Error::custom)?;
 
-            return Ok(RangeOrValue::Range {
-                range: start..end,
-                step: None,
-            });
+            return Ok(RangeOrValue::Range { range: start..end, step: None });
         } else {
-            return Ok(RangeOrValue::Value(
-                s.parse().map_err(serde::de::Error::custom)?,
-            ));
+            return Ok(RangeOrValue::Value(s.parse().map_err(serde::de::Error::custom)?));
         }
 
         Err(serde::de::Error::custom("Invalid format for RangeOrValue"))
     }
 }
 
-pub fn add_range_or_value<'a, V: 'a + 'static, T: FieldName + 'static>(
-    name: T,
-    v: &'a RangeOrValue<V, T>,
-    const_params: &mut Vec<NamedVal<T>>,
-    grid_params: &mut Vec<NamedRange<T>>,
-    opt_params: &mut Vec<Hyperparameter<T>>,
-) where
+pub fn add_range_or_value<'a, V: 'a + 'static, T: FieldName + 'static>(name: T, v: &'a RangeOrValue<V, T>, const_params: &mut Vec<NamedVal<T>>, grid_params: &mut Vec<NamedRange<T>>, opt_params: &mut Vec<Hyperparameter<T>>)
+where
     for<'b> Val: From<&'b V>,
     for<'b> Hyperparameter<T>: From<(T, &'b Range<V>)>,
 {
     match v {
-        RangeOrValue::Range {
-            range,
-            step: step_op,
-        } => match step_op {
+        RangeOrValue::Range { range, step: step_op } => match step_op {
             None => {
                 opt_params.push((name, range).into());
             }
             Some((step, mul)) => {
-                grid_params.push(NamedRange::new(
-                    name,
-                    (&range.start).into()..(&range.end).into(),
-                    (step.into(), *mul),
-                ));
+                grid_params.push(NamedRange::new(name, (&range.start).into()..(&range.end).into(), (step.into(), *mul)));
             }
         },
         RangeOrValue::Value(v) => {
             const_params.push(NamedVal::from((name, v.into())));
         }
         RangeOrValue::Dynamic(resolve) => {
-            grid_params.push(NamedRange::from_grid_value_sets(vec![GridValueSet::with_pending_fields(
-                vec![],
-                vec![],
-                vec![PendingOptField::from_range_or_value(name, Arc::clone(resolve))],
-            )]));
+            grid_params.push(NamedRange::from_grid_value_sets(vec![GridValueSet::with_pending_fields(vec![], vec![], vec![PendingOptField::from_range_or_value(name, Arc::clone(resolve))])]));
         }
     }
 }
@@ -1934,12 +1581,9 @@ impl<T: FieldName> IntoIterator for RangeOrValue<f64, T> {
             RangeOrValue::Range { range, step } => {
                 if let Some((step, mul)) = step {
                     Box::new(
-                        ((range.start * <u32 as Into<f64>>::into(mul)) as i32
-                            ..(range.end * <u32 as Into<f64>>::into(mul)) as i32)
+                        ((range.start * <u32 as Into<f64>>::into(mul)) as i32..(range.end * <u32 as Into<f64>>::into(mul)) as i32)
                             .step_by((step * <u32 as Into<f64>>::into(mul)) as usize)
-                            .map(move |v| {
-                                <i32 as Into<f64>>::into(v) / <u32 as Into<f64>>::into(mul)
-                            }),
+                            .map(move |v| <i32 as Into<f64>>::into(v) / <u32 as Into<f64>>::into(mul)),
                     )
                 } else {
                     Box::new([range.start, range.end].into_iter())
@@ -1977,7 +1621,6 @@ where
     {
         Self::Dynamic(Arc::new(resolve))
     }
-
 }
 
 impl<T: FieldName> From<f64> for RangeOrValue<f64, T> {
@@ -2015,14 +1658,7 @@ where
     V: PartialEq + Into<RangeOrValue<V, T>>,
 {
     fn from(r: Range<V>) -> Self {
-        if r.start == r.end {
-            r.start.into()
-        } else {
-            RangeOrValue::Range {
-                range: r,
-                step: None,
-            }
-        }
+        if r.start == r.end { r.start.into() } else { RangeOrValue::Range { range: r, step: None } }
     }
 }
 
@@ -2040,9 +1676,7 @@ pub fn parse_resources(s: &str) -> anyhow::Result<ResourceType> {
     };
 
     if kind == "list" {
-        Ok(ResourceType::List(
-            value.split(",").map(|v| v.to_string()).collect(),
-        ))
+        Ok(ResourceType::List(value.split(",").map(|v| v.to_string()).collect()))
     } else if kind == "set" {
         Ok(ResourceType::Set(value.to_string()))
     } else if kind == "group" {
@@ -2089,7 +1723,9 @@ pub fn clc_step(input_n: u32, motif_width: u32, slices_num: u32) -> anyhow::Resu
     anyhow::ensure!(slices_num > 0, "requested window count must be positive");
     let span = u64::from(input_n - motif_width);
     // A single window needs a step beyond the remaining span, with no padding.
-    if slices_num == 1 { return Ok((u32::try_from(span + 1)?, 0)); }
+    if slices_num == 1 {
+        return Ok((u32::try_from(span + 1)?, 0));
+    }
     let intervals = u64::from(slices_num - 1);
     let step = span.div_ceil(intervals).max(1);
     let pad = u32::try_from(step * intervals - span)?;
@@ -2097,21 +1733,16 @@ pub fn clc_step(input_n: u32, motif_width: u32, slices_num: u32) -> anyhow::Resu
     Ok((u32::try_from(step)?, pad))
 }
 
-
 pub fn cdt() -> String {
     chrono::offset::Local::now().to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
 pub fn cdt_for_dir() -> String {
-
     let mut rng = rand::rng();
 
     let ts = cdt();
     let ts = ts.trim_matches('"'); // remove leading/trailing quotes if present
-    let ts = ts
-        .replace(':', "_")
-        .replace('+', "_")
-        .replace('"', ""); // remove any remaining quotes
+    let ts = ts.replace(':', "_").replace('+', "_").replace('"', ""); // remove any remaining quotes
 
     format!("{ts}_{}", rng.next_u32())
 }
@@ -2147,7 +1778,6 @@ where
     Ok(buf)
 }
 
-
 pub fn make_combos<V: Clone>(iters: impl Iterator<Item = impl Iterator<Item = V>>) -> Vec<Vec<V>> {
     let mut combos: Vec<Vec<V>> = vec![vec![]];
 
@@ -2175,10 +1805,7 @@ pub fn round_to_digits(value: f64, digits: u32) -> f64 {
 }
 
 pub fn arg_prefix(prev_prefix: Option<&str>, prefix: &str) -> String {
-    prev_prefix
-        .map(|v| v.to_string() + "-")
-        .unwrap_or("".to_string())
-        + prefix
+    prev_prefix.map(|v| v.to_string() + "-").unwrap_or("".to_string()) + prefix
 }
 
 pub fn camel_to_snake(input: &str) -> String {
@@ -2186,14 +1813,7 @@ pub fn camel_to_snake(input: &str) -> String {
 
     let mut chars = input.chars();
 
-    snake.push(
-        chars
-            .next()
-            .expect("input should have at least one character")
-            .to_lowercase()
-            .next()
-            .unwrap(),
-    );
+    snake.push(chars.next().expect("input should have at least one character").to_lowercase().next().unwrap());
 
     for ch in chars {
         if ch.is_uppercase() {
@@ -2260,16 +1880,7 @@ pub fn avg_hist(values: &[f64], n_bins: usize) -> Vec<(f64, u32)> {
         value_bins[bin_index].push(value);
     }
 
-    count_bins
-        .into_iter()
-        .zip(value_bins)
-        .map(|(count, v)| {
-            (
-                v.into_iter().sum::<f64>() / (count as f64 + f64::EPSILON),
-                count,
-            )
-        })
-        .collect()
+    count_bins.into_iter().zip(value_bins).map(|(count, v)| (v.into_iter().sum::<f64>() / (count as f64 + f64::EPSILON), count)).collect()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -2324,11 +1935,7 @@ mod shared_tests {
     use crate::hyperparameter::FieldName;
     use crate::pulse_v;
     use crate::val::NamedVal;
-    use crate::{FuturesOrdering,
-                RangeOrValue, ResourceType, SyncStageRunnerError, ThoError, TrainingSessionFailure,
-                add_prefix, arg_prefix, avg_hist, batch_windows, camel_to_snake, clc_num_batches, group_slices,
-                make_combos, snake_to_camel, test_utils,
-    };
+    use crate::{FuturesOrdering, RangeOrValue, ResourceType, SyncStageRunnerError, ThoError, TrainingSessionFailure, add_prefix, arg_prefix, avg_hist, batch_windows, camel_to_snake, clc_num_batches, group_slices, make_combos, snake_to_camel, test_utils};
     use clap::{Args, Parser};
     use log::debug;
     use std::collections::HashSet;
@@ -2364,14 +1971,15 @@ mod shared_tests {
                     thoosa_shared::CollectionErrorPolicy::Propagate,
                     "test_collect_futures_with_progress_runs_during_unrelated_cuda_recovery",
                 )
-                    .await
+                .await
             })
         };
 
         let results = tokio::time::timeout(Duration::from_secs(2), collect)
             .await
             .expect("unrelated recovery must not block the collector")
-            .expect("collector task should not panic").expect("all work must succeed");
+            .expect("collector task should not panic")
+            .expect("all work must succeed");
         assert_eq!(results.len(), 4);
         assert_eq!(started.load(Ordering::SeqCst), 4);
         assert!(gate.is_recovering());
@@ -2381,20 +1989,10 @@ mod shared_tests {
     #[test]
     fn test_join_with_offset() {
         let pulse = pulse_v(50., 10., 100, 20.);
-        let v = super::join_with_offset::<f32>(
-            0.,
-            10.0,
-            &[(100, pulse.clone())],
-            super::random_saw(550),
-        );
+        let v = super::join_with_offset::<f32>(0., 10.0, &[(100, pulse.clone())], super::random_saw(550));
         assert_eq!(550, v.len());
 
-        let v = super::join_with_offset::<f32>(
-            0.,
-            10.0,
-            &[(100, pulse.clone())],
-            super::random_saw(2200),
-        );
+        let v = super::join_with_offset::<f32>(0., 10.0, &[(100, pulse.clone())], super::random_saw(2200));
         assert_eq!(2200, v.len());
     }
 
@@ -2418,14 +2016,7 @@ mod shared_tests {
 
     #[test]
     fn test_group_slices() {
-        let pairs: Vec<(String, String)> = vec![
-            ("a".into(), "b".into()),
-            ("a".into(), "c".into()),
-            ("e".into(), "f".into()),
-            ("b".into(), "d".into()),
-            ("f".into(), "g".into()),
-            ("x".into(), "y".into()),
-        ];
+        let pairs: Vec<(String, String)> = vec![("a".into(), "b".into()), ("a".into(), "c".into()), ("e".into(), "f".into()), ("b".into(), "d".into()), ("f".into(), "g".into()), ("x".into(), "y".into())];
 
         let mut groups = group_slices(pairs.into_iter());
 
@@ -2444,21 +2035,13 @@ mod shared_tests {
 
     #[test]
     fn test_group_motifs_separated() {
-        let pairs: Vec<(String, String)> = vec![
-            ("l".into(), "m".into()),
-            ("a".into(), "x".into()),
-            ("a".into(), "y".into()),
-            ("b".into(), "w".into()),
-            ("b".into(), "v".into()),
-            ("a".into(), "b".into()),
-        ];
+        let pairs: Vec<(String, String)> = vec![("l".into(), "m".into()), ("a".into(), "x".into()), ("a".into(), "y".into()), ("b".into(), "w".into()), ("b".into(), "v".into()), ("a".into(), "b".into())];
 
         let groups = group_slices(pairs.into_iter());
 
         assert_eq!(groups.len(), 2);
 
-        let mut values: Vec<HashSet<String>> =
-            groups.values().into_iter().map(|v| v.clone()).collect();
+        let mut values: Vec<HashSet<String>> = groups.values().into_iter().map(|v| v.clone()).collect();
         values.sort_by(|a, b| b.len().cmp(&a.len()));
 
         let mut group_0 = values.get_mut(0).unwrap().iter().collect::<Vec<_>>();
@@ -2478,10 +2061,7 @@ mod shared_tests {
 
         let batches = batch_windows(input_n, motif_width, step, 10).unwrap();
 
-        assert_eq!(
-            vec![0, 100, 200, 300, 400, 500, 600, 700, 800, 900],
-            batches.0[0]
-        );
+        assert_eq!(vec![0, 100, 200, 300, 400, 500, 600, 700, 800, 900], batches.0[0]);
 
         assert_eq!(batches.0.len(), 1);
         assert!(batches.1.is_empty());
@@ -2495,18 +2075,9 @@ mod shared_tests {
 
         let batches = batch_windows(input_n, motif_width, step, 10).unwrap();
 
-        assert_eq!(
-            vec![0, 100, 200, 300, 400, 500, 600, 700, 800, 900],
-            batches.0[0]
-        );
-        assert_eq!(
-            vec![1000, 1100, 1200, 1300, 1400, 1500, 1600, 1700, 1800, 1900],
-            batches.0[1]
-        );
-        assert_eq!(
-            vec![2000, 2100, 2200, 2300, 2400, 2500, 2600, 2700, 2800, 2900],
-            batches.0[2]
-        );
+        assert_eq!(vec![0, 100, 200, 300, 400, 500, 600, 700, 800, 900], batches.0[0]);
+        assert_eq!(vec![1000, 1100, 1200, 1300, 1400, 1500, 1600, 1700, 1800, 1900], batches.0[1]);
+        assert_eq!(vec![2000, 2100, 2200, 2300, 2400, 2500, 2600, 2700, 2800, 2900], batches.0[2]);
         assert_eq!(vec![3000, 3100, 3200, 3300, 3400], batches.1)
     }
 
@@ -2541,11 +2112,7 @@ mod shared_tests {
     fn test_tho_error_context_preserves_recovery() {
         use anyhow::Context;
 
-        for (error, oom, retryable, reset) in [
-            (ThoError::oom(), true, true, false),
-            (ThoError::from_cuda_error("launch kernel", 700), false, false, true),
-            (ThoError::AdjusterFailed, false, true, false),
-        ] {
+        for (error, oom, retryable, reset) in [(ThoError::oom(), true, true, false), (ThoError::from_cuda_error("launch kernel", 700), false, false, true), (ThoError::AdjusterFailed, false, true, false)] {
             let job = ThoError::from(SyncStageRunnerError::JobError { job_id: 42, inner: Box::new(error) });
             let wrapped: ThoError = Err::<(), _>(job).context("run stage").unwrap_err().into();
             let shared = wrapped.clone().context("worker request");
@@ -2559,10 +2126,7 @@ mod shared_tests {
 
     #[test]
     fn test_training_session_failure_retains_oom_without_retry() {
-        for (original, recovery) in [
-            (ThoError::oom(), None),
-            (ThoError::new("forward failed"), Some(ThoError::oom())),
-        ] {
+        for (original, recovery) in [(ThoError::oom(), None), (ThoError::new("forward failed"), Some(ThoError::oom()))] {
             let error = ThoError::TrainingSessionFailed(Arc::new(TrainingSessionFailure { original, recovery }));
             let job: ThoError = SyncStageRunnerError::JobError { job_id: 42, inner: Box::new(error.clone()) }.into();
             let wrapped = job.context("training request").clone().context("worker reply");
@@ -2588,14 +2152,12 @@ mod shared_tests {
         assert!(!error.is_retryable_oom(), "is_retryable_oom");
         assert!(error.needs_cuda_recovery(), "needs_cuda_restart");
 
-        let error:ThoError = anyhow::anyhow!("read failed").context("CUDA out of memory").into();
+        let error: ThoError = anyhow::anyhow!("read failed").context("CUDA out of memory").into();
         assert!(matches!(error.what(), ThoError::Anyhow(_)));
         assert!(error.is_oom(), "is_oom");
         assert!(error.is_retryable_oom(), "is_retryable_oom");
         assert!(!error.needs_cuda_recovery(), "needs_cuda_restart");
     }
-
-
 
     #[test]
     fn test_resources_param() -> anyhow::Result<()> {
@@ -2607,20 +2169,13 @@ mod shared_tests {
             resources: ResourceType,
         }
 
-        let params =
-            TestParams::try_parse_from(vec!["", "--resources=list:aaa,bbb,ccc"].into_iter())
-                .context("parse resources args (list)")?;
+        let params = TestParams::try_parse_from(vec!["", "--resources=list:aaa,bbb,ccc"].into_iter()).context("parse resources args (list)")?;
 
-        assert_eq!(
-            ResourceType::List(vec!["aaa".into(), "bbb".into(), "ccc".into()]),
-            params.resources
-        );
-        let params = TestParams::try_parse_from(vec!["", "--resources=set:aaa"].into_iter())
-            .context("parse resources args (set)")?;
+        assert_eq!(ResourceType::List(vec!["aaa".into(), "bbb".into(), "ccc".into()]), params.resources);
+        let params = TestParams::try_parse_from(vec!["", "--resources=set:aaa"].into_iter()).context("parse resources args (set)")?;
         assert_eq!(ResourceType::Set("aaa".into()), params.resources);
 
-        let params = TestParams::try_parse_from(vec!["", "--resources=group:bbb"].into_iter())
-            .context("parse resources args (group)")?;
+        let params = TestParams::try_parse_from(vec!["", "--resources=group:bbb"].into_iter()).context("parse resources args (group)")?;
         assert_eq!(ResourceType::Group("bbb".into()), params.resources);
 
         Ok(())
@@ -2629,39 +2184,13 @@ mod shared_tests {
     #[test]
     fn test_make_combos() {
         assert_eq!(
-            [
-                ["a1", "b1", "c1"],
-                ["a2", "b1", "c1"],
-                ["a3", "b1", "c1"],
-                ["a1", "b1", "c2"],
-                ["a2", "b1", "c2"],
-                ["a3", "b1", "c2"]
-            ]
-            .into_iter()
-            .map(|v| v.to_vec())
-            .collect::<Vec<_>>(),
-            make_combos(
-                [
-                    vec!["a1", "a2", "a3"].into_iter(),
-                    vec!["b1"].into_iter(),
-                    vec!["c1", "c2"].into_iter()
-                ]
-                .into_iter()
-            )
+            [["a1", "b1", "c1"], ["a2", "b1", "c1"], ["a3", "b1", "c1"], ["a1", "b1", "c2"], ["a2", "b1", "c2"], ["a3", "b1", "c2"]].into_iter().map(|v| v.to_vec()).collect::<Vec<_>>(),
+            make_combos([vec!["a1", "a2", "a3"].into_iter(), vec!["b1"].into_iter(), vec!["c1", "c2"].into_iter()].into_iter())
         );
 
-        assert_eq!(
-            [["a1", "b1",], ["a2", "b1",]]
-                .into_iter()
-                .map(|v| v.to_vec())
-                .collect::<Vec<_>>(),
-            make_combos([vec!["a1", "a2"].into_iter(), vec!["b1"].into_iter(),].into_iter())
-        );
+        assert_eq!([["a1", "b1",], ["a2", "b1",]].into_iter().map(|v| v.to_vec()).collect::<Vec<_>>(), make_combos([vec!["a1", "a2"].into_iter(), vec!["b1"].into_iter(),].into_iter()));
 
-        assert_eq!(
-            [["a1"]].into_iter().map(|v| v.to_vec()).collect::<Vec<_>>(),
-            make_combos([vec!["a1"].into_iter(),].into_iter())
-        );
+        assert_eq!([["a1"]].into_iter().map(|v| v.to_vec()).collect::<Vec<_>>(), make_combos([vec!["a1"].into_iter(),].into_iter()));
     }
 
     #[test]
@@ -2732,18 +2261,12 @@ mod shared_tests {
         impl FieldName for ParentStructBFields {}
 
         fn fill_parent_a(params: &mut Vec<NamedVal<ParentStructAFields>>) {
-            params.push(NamedVal::new::<ParentStructAFields, i32>(
-                ParentStructAFields::Field0.into(),
-                0.into(),
-            ));
+            params.push(NamedVal::new::<ParentStructAFields, i32>(ParentStructAFields::Field0.into(), 0.into()));
             fill_sub_struct(params, |v| ParentStructAFields::SubStructA(v));
         }
 
         fn fill_parent_b(params: &mut Vec<NamedVal<ParentStructBFields>>) {
-            params.push(NamedVal::new::<ParentStructBFields, i32>(
-                ParentStructBFields::Field0.into(),
-                1.into(),
-            ));
+            params.push(NamedVal::new::<ParentStructBFields, i32>(ParentStructBFields::Field0.into(), 1.into()));
             fill_sub_struct(params, |v| ParentStructBFields::SubStructB(v));
         }
 
@@ -2751,14 +2274,8 @@ mod shared_tests {
         where
             F: Fn(SubStructFields) -> T,
         {
-            params.push(NamedVal::new::<T, i32>(
-                append(SubStructFields::FieldA).into(),
-                0.into(),
-            ));
-            params.push(NamedVal::new::<T, i32>(
-                append(SubStructFields::FieldB).into(),
-                1.into(),
-            ));
+            params.push(NamedVal::new::<T, i32>(append(SubStructFields::FieldA).into(), 0.into()));
+            params.push(NamedVal::new::<T, i32>(append(SubStructFields::FieldB).into(), 1.into()));
         }
 
         let mut params_a = vec![];
@@ -2770,24 +2287,12 @@ mod shared_tests {
         debug!("params_a: {params_a:?}");
         debug!("params_b: {params_b:?}");
 
-        assert_eq!(
-            params_a[1].path(),
-            &ParentStructAFields::SubStructA(SubStructFields::FieldA),
-        );
-        assert_eq!(
-            params_a[2].path(),
-            &ParentStructAFields::SubStructA(SubStructFields::FieldB),
-        );
+        assert_eq!(params_a[1].path(), &ParentStructAFields::SubStructA(SubStructFields::FieldA),);
+        assert_eq!(params_a[2].path(), &ParentStructAFields::SubStructA(SubStructFields::FieldB),);
 
-        assert_eq!(
-            params_b[1].path(),
-            &ParentStructBFields::SubStructB(SubStructFields::FieldA),
-        );
+        assert_eq!(params_b[1].path(), &ParentStructBFields::SubStructB(SubStructFields::FieldA),);
 
-        assert_eq!(
-            params_b[2].path(),
-            &ParentStructBFields::SubStructB(SubStructFields::FieldB),
-        );
+        assert_eq!(params_b[2].path(), &ParentStructBFields::SubStructB(SubStructFields::FieldB),);
     }
 
     #[test]
@@ -2806,14 +2311,8 @@ mod shared_tests {
         where
             F: Fn(String) -> String,
         {
-            params.push(NamedVal::new::<String, i32>(
-                append("FieldA".to_string()).into(),
-                0.into(),
-            ));
-            params.push(NamedVal::new::<String, i32>(
-                append("FieldB".to_string()).into(),
-                1.into(),
-            ));
+            params.push(NamedVal::new::<String, i32>(append("FieldA".to_string()).into(), 0.into()));
+            params.push(NamedVal::new::<String, i32>(append("FieldB".to_string()).into(), 1.into()));
         }
 
         let mut params_a = vec![];
@@ -2848,36 +2347,34 @@ mod shared_tests {
 
 pub fn replace_extension<'a>(path: &'a PathBuf, new_extension: &'a str) -> (&'a str, PathBuf) {
     let parent = path.parent().expect("parent");
-    let file_stem = path
-        .file_stem()
-        .expect("file_stem")
-        .to_str()
-        .expect("to_str");
+    let file_stem = path.file_stem().expect("file_stem").to_str().expect("to_str");
     let json = format!("{}.{}", file_stem, new_extension);
     let json = parent.join(json);
     (file_stem, json)
 }
 
-#[async_trait]//TODO it doesn't need to be dyn compatible, remove async_trait and change dst_device form usize to D:Into<ThoDevice> ?
+#[async_trait] //TODO it doesn't need to be dyn compatible, remove async_trait and change dst_device form usize to D:Into<ThoDevice> ?
 #[delegatable_trait]
 #[automock]
 pub trait CopyToDevice {
-    async fn copy_to_device(&self, tho_dst_device: usize) -> Result<Self, ThoError> where Self:Sized;
+    async fn copy_to_device(&self, tho_dst_device: usize) -> Result<Self, ThoError>
+    where
+        Self: Sized;
 }
 
-
-#[async_trait]//TODO it doesn't need to be dyn compatible, remove async_trait and change dst_device form usize to D:Into<ThoDevice> ?
+#[async_trait] //TODO it doesn't need to be dyn compatible, remove async_trait and change dst_device form usize to D:Into<ThoDevice> ?
 #[delegatable_trait]
 #[automock]
 pub trait MoveToDevice {
-    async fn move_to_device(&mut self, tho_dst_device: usize) -> Result<(), ThoError> where Self:Sized;
+    async fn move_to_device(&mut self, tho_dst_device: usize) -> Result<(), ThoError>
+    where
+        Self: Sized;
 }
 
 #[macro_export]
 macro_rules! panic_to_err_async {
     ($expr:expr) => {{
-
-        let result = futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(async {$expr})).await;
+        let result = futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(async { $expr })).await;
 
         match result {
             //no panic
@@ -2886,21 +2383,20 @@ macro_rules! panic_to_err_async {
                     Ok(val) => {
                         log::debug!("panic_to_err_async: val: {val:?}");
                         Ok(val)
-                    },
+                    }
                     Err(err) => {
                         log::debug!("panic_to_err_async: err: {err:?}");
                         // Erase backend-specific errors before entering the shared error adapter.
-                        Err(thoosa_shared::ThoError::from(err))//don't wrap err into extra thoosa_shared::anyhow::Error::from(err) - it hides original stack trace
+                        Err(thoosa_shared::ThoError::from(err)) //don't wrap err into extra thoosa_shared::anyhow::Error::from(err) - it hides original stack trace
                     }
                 }
-            },
+            }
             //panic
             Err(e) => {
                 if let Some(msg) = e.downcast_ref::<String>() {
                     log::debug!("panic_to_err_async: String: {msg}");
                     let msg1 = msg.as_str();
                     Err(ThoError::new(msg1))
-
                 } else if let Some(msg) = e.downcast_ref::<&str>() {
                     log::debug!("panic_to_err_async: str: {msg}");
                     let msg1 = *msg;
@@ -2932,38 +2428,29 @@ macro_rules! panic_to_err {
 
                 // } else if let Some(thoosa_error) = e.downcast_ref::<ThoosaError>() {
                 //     Err(*thoosa_error)
-
                 } else if let Some(msg) = e.downcast_ref::<&str>() {
                     log::debug!("thoosa_err str: {msg}");
-                    let msg1 = *msg;Err(ThoError::new(msg1))
+                    let msg1 = *msg;
+                    Err(ThoError::new(msg1))
                 } else {
                     log::debug!("thoosa_err unknown: {e:?}");
-                    let msg = format!("{e:?}");Err(ThoError::new(msg))
+                    let msg = format!("{e:?}");
+                    Err(ThoError::new(msg))
                 }
             }
         }
     }};
 }
 
-
-pub fn shuffle_and_chunk_with_rng<R: rand::Rng + ?Sized>(
-    n: usize,
-    batch_size:u32,
-    rng: &mut R,
-) -> Vec<Box<[usize]>> {
-
+pub fn shuffle_and_chunk_with_rng<R: rand::Rng + ?Sized>(n: usize, batch_size: u32, rng: &mut R) -> Vec<Box<[usize]>> {
     let mut vals: Vec<usize> = (0..n).collect();
     vals.shuffle(rng);
 
     let usable_len = n / batch_size as usize * batch_size as usize;
     vals.truncate(usable_len);
 
-    vals.chunks_exact(batch_size as usize)
-        .map(|chunk| chunk.to_vec().into_boxed_slice())
-        .collect()
+    vals.chunks_exact(batch_size as usize).map(|chunk| chunk.to_vec().into_boxed_slice()).collect()
 }
-
-
 
 /// Returns up to `n` *references* to randomly chosen distinct elements (no clones).
 pub fn sample_n_refs<'a, T, R: Rng + ?Sized>(v: &'a [T], n: usize, rng: &mut R) -> Vec<&'a T> {
@@ -2983,26 +2470,17 @@ pub fn sample_n_owned<T, R: Rng + ?Sized>(mut v: Vec<T>, n: usize, rng: &mut R) 
 }
 
 pub fn now_ms() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system time before Unix epoch")
-        .as_millis()
+    SystemTime::now().duration_since(UNIX_EPOCH).expect("system time before Unix epoch").as_millis()
 }
 
 #[cfg(test)]
 #[test]
-pub fn test_shuffle_and_chunk_with_rng(){
+pub fn test_shuffle_and_chunk_with_rng() {
     let mut rng = StdRng::seed_from_u64(42);
 
-    let chunks = shuffle_and_chunk_with_rng(10,3, &mut rng);
+    let chunks = shuffle_and_chunk_with_rng(10, 3, &mut rng);
 
-
-    assert_eq!(
-        vec![[8, 6, 3].to_vec().into_boxed_slice(),
-             [2, 1, 5].to_vec().into_boxed_slice(),
-             [9, 7, 4].to_vec().into_boxed_slice()],
-        chunks
-    )
+    assert_eq!(vec![[8, 6, 3].to_vec().into_boxed_slice(), [2, 1, 5].to_vec().into_boxed_slice(), [9, 7, 4].to_vec().into_boxed_slice()], chunks)
 }
 
 #[inline]
@@ -3016,9 +2494,5 @@ pub fn os_thread_id() -> u64 {
 
 pub fn backtrace_head_lines(n: usize) -> String {
     let bt = Backtrace::capture();
-    format!("{bt:?}")
-        .lines()
-        .take(n)
-        .collect::<Vec<_>>()
-        .join("\n")
+    format!("{bt:?}").lines().take(n).collect::<Vec<_>>().join("\n")
 }

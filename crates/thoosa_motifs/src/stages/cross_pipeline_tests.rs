@@ -1,4 +1,3 @@
-use thoosa_common::tch_error::tch_result;
 use super::*;
 use crate::motifs_store::MockMotifsStoreBuilder;
 use crate::stages::cross_batch_clc::{CrossUnfoldClc, UnfoldParams};
@@ -13,6 +12,7 @@ use thoosa_common::runner::common::{MockRunCtx, mock_run_ctx};
 use thoosa_common::runner::global_ctx::{GlobalCtx, mock_global_ctx::MockGlobalCtxBuilder};
 use thoosa_common::runner::oom_handler::{NoContexts, NoRunCtxAdjuster};
 use thoosa_common::runner::run_ctx::RunCtxImpl;
+use thoosa_common::tch_error::tch_result;
 use thoosa_common::tho_device::ThoDevice;
 use tokio::sync::Notify;
 
@@ -24,7 +24,9 @@ struct Block(usize);
 impl Input for Block {}
 impl Output for Block {}
 impl CrossClcResultMerge for Block {
-    fn merge_batch_1(self, _other: Self) -> Result<Self, ThoError> { Ok(self) }
+    fn merge_batch_1(self, _other: Self) -> Result<Self, ThoError> {
+        Ok(self)
+    }
 }
 
 async fn check_pipeline(fail_consumer: bool) -> Result<(), ThoError> {
@@ -43,53 +45,83 @@ async fn check_pipeline(fail_consumer: bool) -> Result<(), ThoError> {
     let consumed = Arc::new(parking_lot::Mutex::new(Vec::new()));
     let (release, wait) = std::sync::mpsc::channel();
     let wait = parking_lot::Mutex::new(wait);
-    let receiver = Arc::new(mock_cross_loader_receiver::build::<CrossUnfoldClcOutput<Block>, MockRunCtx>().with_receive_fn({
-        let started = started.clone();
-        let completed = completed.clone();
-        let consumed = consumed.clone();
-        move |input, _| {
-            let iter_0 = input.iter_0();
-            let iter_1 = input.iter_1();
-            let id = input.id().clone();
-            let block = input.clc_result();
-            let index = block.0;
-            consumed.lock().push(index);
-            if index == 0 {
-                started.notify_one();
-                wait.lock().recv_timeout(Duration::from_secs(10)).expect("next comparison must overlap this consumer");
-                completed.store(true, Ordering::SeqCst);
-                if fail_consumer { return ConsumeResult::Failed { input: CrossUnfoldClcOutput::new(block, iter_0, iter_1, id), error: ThoError::new("consumer failed") }; }
-            }
-            ConsumeResult::Ok(())
-        }
-    }).finish());
-    let calculation = Arc::new(mock_cross_loader_clc::build::<Block, MockRunCtx>().with_run_batch_fn({
-        let completed = completed.clone();
-        let calculated = calculated.clone();
-        let calculated_next = calculated_next.clone();
-        move |_, _| {
-            let index = calculated.fetch_add(1, Ordering::SeqCst);
-            if index == 1 { calculated_next.notify_one(); }
-            if index == 2 { assert!(completed.load(Ordering::SeqCst), "only one block may run ahead of consumption"); }
-            Ok(CrossUnfoldClcOutput::new(Block(index), SlicesIter::new(1, vec![]), SlicesIter::new(1, vec![]), "pipeline".into()))
-        }
-    }).finish());
+    let receiver = Arc::new(
+        mock_cross_loader_receiver::build::<CrossUnfoldClcOutput<Block>, MockRunCtx>()
+            .with_receive_fn({
+                let started = started.clone();
+                let completed = completed.clone();
+                let consumed = consumed.clone();
+                move |input, _| {
+                    let iter_0 = input.iter_0();
+                    let iter_1 = input.iter_1();
+                    let id = input.id().clone();
+                    let block = input.clc_result();
+                    let index = block.0;
+                    consumed.lock().push(index);
+                    if index == 0 {
+                        started.notify_one();
+                        wait.lock().recv_timeout(Duration::from_secs(10)).expect("next comparison must overlap this consumer");
+                        completed.store(true, Ordering::SeqCst);
+                        if fail_consumer {
+                            return ConsumeResult::Failed {
+                                input: CrossUnfoldClcOutput::new(block, iter_0, iter_1, id),
+                                error: ThoError::new("consumer failed"),
+                            };
+                        }
+                    }
+                    ConsumeResult::Ok(())
+                }
+            })
+            .finish(),
+    );
+    let calculation = Arc::new(
+        mock_cross_loader_clc::build::<Block, MockRunCtx>()
+            .with_run_batch_fn({
+                let completed = completed.clone();
+                let calculated = calculated.clone();
+                let calculated_next = calculated_next.clone();
+                move |_, _| {
+                    let index = calculated.fetch_add(1, Ordering::SeqCst);
+                    if index == 1 {
+                        calculated_next.notify_one();
+                    }
+                    if index == 2 {
+                        assert!(completed.load(Ordering::SeqCst), "only one block may run ahead of consumption");
+                    }
+                    Ok(CrossUnfoldClcOutput::new(Block(index), SlicesIter::new(1, vec![]), SlicesIter::new(1, vec![]), "pipeline".into()))
+                }
+            })
+            .finish(),
+    );
     let store = MockMotifsStoreBuilder::new().build();
-    let cross_loader = CrossLoader::<Simple, _, _, _, _, _>::new(1, loader.clone(), &store, calculation, {
-        let receiver = receiver.clone();
-        move |_| receiver.clone()
-    }, 2, |block| async { Ok(block) }.boxed(), |_| async { Ok(()) }.boxed(), CrossUnfoldClcOutputMergeMode::GpuMerge, 0);
+    let cross_loader = CrossLoader::<Simple, _, _, _, _, _>::new(
+        1,
+        loader.clone(),
+        &store,
+        calculation,
+        {
+            let receiver = receiver.clone();
+            move |_| receiver.clone()
+        },
+        2,
+        |block| async { Ok(block) }.boxed(),
+        |_| async { Ok(()) }.boxed(),
+        CrossUnfoldClcOutputMergeMode::GpuMerge,
+        0,
+    );
     let outer = loader.run_cached(resources[0].clone(), mock_run_ctx::default(0)).await?;
     // The first consumer cannot finish until the next comparison has run. This
     // detects serial execution without timing assertions, and failure must drain.
-    let (result, ()) = tokio::join!(
-        cross_loader.run_inner_batches(&resources, vec![outer], vec![resources[0].clone()], 0, 0, 2, receiver, mock_run_ctx::default(0)),
-        async {
-            tokio::time::timeout(Duration::from_secs(10), async { started.notified().await; calculated_next.notified().await; }).await.expect("pipeline made no progress");
-            assert!(!completed.load(Ordering::SeqCst));
-            release.send(()).expect("consumer still running");
-        }
-    );
+    let (result, ()) = tokio::join!(cross_loader.run_inner_batches(&resources, vec![outer], vec![resources[0].clone()], 0, 0, 2, receiver, mock_run_ctx::default(0)), async {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            started.notified().await;
+            calculated_next.notified().await;
+        })
+        .await
+        .expect("pipeline made no progress");
+        assert!(!completed.load(Ordering::SeqCst));
+        release.send(()).expect("consumer still running");
+    });
     assert!(completed.load(Ordering::SeqCst));
     if fail_consumer {
         assert!(result.unwrap_err().to_string().contains("consumer failed"));
@@ -103,29 +135,35 @@ async fn check_pipeline(fail_consumer: bool) -> Result<(), ThoError> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_discovery_pipeline_overlap_and_order() -> Result<(), ThoError> { check_pipeline(false).await }
+async fn test_discovery_pipeline_overlap_and_order() -> Result<(), ThoError> {
+    check_pipeline(false).await
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_discovery_pipeline_drains_failed_consumer() -> Result<(), ThoError> { check_pipeline(true).await }
+async fn test_discovery_pipeline_drains_failed_consumer() -> Result<(), ThoError> {
+    check_pipeline(true).await
+}
 
 async fn check_prepared_outer() -> Result<(), ThoError> {
     let mut ctx = RunCtxImpl::new(1, "prepared_outer");
     let params = UnfoldParams::new(1, 3, 2);
     let preparation = PrepareCrossBatch::new(params, 1).await?;
-    let calculation = CrossUnfoldClc::new_dyn_for_find_motifs(FindMotifsCrossUnfoldClcInit::new(
-        crate::distance::SimilarityMetric::default(), true, 1,
-        FindMotifsMasksCtxInit::ExactS { euc_dist: 100.0, channels: 1 }, params,
-    ), 1).await?;
-    let loader = Arc::new(RawTensorLoader::<RunCtxImpl>::new(|resource, _| {
-        // A short filtered resource must keep its zero-sized boundary between
-        // valid resources; caching must not shift the resulting slice IDs.
-        let len = if resource.id() == 2 { 1 } else { 7 };
-        let values: Vec<f32> = (0..len).map(|i| (i * i + resource.id()) as f32).collect();
-        ThoTensor::new(format!("prepared_resource_{}", resource.id()).into(), tch_result(tch_result(Tensor::f_from_slice(&values))?.f_view([1, len as i64]))?)
-    }, ThoDevice::from(0usize)));
+    let calculation = CrossUnfoldClc::new_dyn_for_find_motifs(FindMotifsCrossUnfoldClcInit::new(crate::distance::SimilarityMetric::default(), true, 1, FindMotifsMasksCtxInit::ExactS { euc_dist: 100.0, channels: 1 }, params), 1).await?;
+    let loader = Arc::new(RawTensorLoader::<RunCtxImpl>::new(
+        |resource, _| {
+            // A short filtered resource must keep its zero-sized boundary between
+            // valid resources; caching must not shift the resulting slice IDs.
+            let len = if resource.id() == 2 { 1 } else { 7 };
+            let values: Vec<f32> = (0..len).map(|i| (i * i + resource.id()) as f32).collect();
+            ThoTensor::new(format!("prepared_resource_{}", resource.id()).into(), tch_result(tch_result(Tensor::f_from_slice(&values))?.f_view([1, len as i64]))?)
+        },
+        ThoDevice::from(0usize),
+    ));
     let resources: Vec<Arc<Resource>> = (1..=5).map(|i| Arc::new((i, 1, format!("prepared_{i}").as_str(), 7).into())).collect();
     let mut tensors = Vec::new();
-    for resource in &resources { tensors.push(loader.clone().run_cached(resource.clone(), ctx.branch(false)).await?); }
+    for resource in &resources {
+        tensors.push(loader.clone().run_cached(resource.clone(), ctx.branch(false)).await?);
+    }
     let input = Arc::new(CrossInputSelectorWrap::new("outer".into(), tensors[..3].to_vec(), vec![], resources[..3].to_vec(), vec![], CacheArea::default()));
     let cache = Arc::new(TmpCached::new("test_prepared_outer").await);
     let prepared = Arc::new(cache.insert_guarded(NoRetry::new(vec![], None).run(&preparation, input, ctx.branch(false), NoContexts).await?));
@@ -147,7 +185,17 @@ async fn check_prepared_outer() -> Result<(), ThoError> {
         input.prepared_outer = Some(prepared.clone());
         let reused = NoRetry::new(vec![], None).run(&calculation, Arc::new(input), ctx.branch(false), NoContexts).await?;
         assert_eq!(reused.iter_0().collect::<Vec<_>>(), expected_slices);
-        assert_eq!(expected_slices, vec![thoosa_shared::TensorIdSliceIdx(1, 0), thoosa_shared::TensorIdSliceIdx(1, 2), thoosa_shared::TensorIdSliceIdx(1, 4), thoosa_shared::TensorIdSliceIdx(3, 0), thoosa_shared::TensorIdSliceIdx(3, 2), thoosa_shared::TensorIdSliceIdx(3, 4)]);
+        assert_eq!(
+            expected_slices,
+            vec![
+                thoosa_shared::TensorIdSliceIdx(1, 0),
+                thoosa_shared::TensorIdSliceIdx(1, 2),
+                thoosa_shared::TensorIdSliceIdx(1, 4),
+                thoosa_shared::TensorIdSliceIdx(3, 0),
+                thoosa_shared::TensorIdSliceIdx(3, 2),
+                thoosa_shared::TensorIdSliceIdx(3, 4)
+            ]
+        );
         let actual = reused.clc_result().to_cpu().await?.into_indices_iter()?.collect::<Vec<_>>();
         match_count += actual.len();
         assert_eq!(actual, expected);

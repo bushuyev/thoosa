@@ -1,4 +1,3 @@
-use thoosa_common::tch_error::tch_result;
 use crate as thoosa_common;
 use anyhow::Context as _;
 use log::debug;
@@ -9,6 +8,7 @@ use std::time::Duration;
 use tch::Device::Cpu;
 use tch::Kind::Float;
 use tch::{Device, Kind, Tensor};
+use thoosa_common::tch_error::tch_result;
 use thoosa_shared::futures_limits::{COPY_D2H, COPY_H2D};
 use thoosa_shared::{CudaActivityScope, FuturesOrdering, ThoError, collect_futures_with_progress};
 use thoosa_shims::context::ThoCudaContext;
@@ -39,16 +39,8 @@ pub(crate) fn make_chunks(tensor_mem_size: usize, buf_size: usize, label: &str) 
     let last = tensor_mem_size % buf_size;
 
     Ok((0..chunks)
-        .map(|i| CopyChunk {
-            index: i,
-            offset: i * buf_size,
-            len: buf_size,
-        })
-        .chain((last != 0).then_some(CopyChunk {
-            index: chunks,
-            offset: chunks * buf_size,
-            len: last,
-        }))
+        .map(|i| CopyChunk { index: i, offset: i * buf_size, len: buf_size })
+        .chain((last != 0).then_some(CopyChunk { index: chunks, offset: chunks * buf_size, len: last }))
         .collect())
 }
 
@@ -64,19 +56,13 @@ pub struct PinnedHostBuffer {
 
 impl PinnedHostBuffer {
     pub fn new(len: usize, flags: u32) -> Result<Self, ThoError> {
-
         let mut raw: *mut c_void = std::ptr::null_mut();
         // let flags = CU_MEMHOSTALLOC_WRITECOMBINED;
-        let res = unsafe {
-            thoosa_shims::memcpy::tho_cu_mem_host_alloc(&mut raw, len, flags)
-        };
+        let res = unsafe { thoosa_shims::memcpy::tho_cu_mem_host_alloc(&mut raw, len, flags) };
 
         check_cuda_status(res, "cuMemHostAlloc")?;
 
-        Ok(Self {
-            ptr: raw as *mut u8,
-            len,
-        })
+        Ok(Self { ptr: raw as *mut u8, len })
     }
 
     pub fn as_ptr(&self) -> *const u8 {
@@ -97,32 +83,27 @@ unsafe impl Sync for PinnedHostBuffer {}
 
 impl Drop for PinnedHostBuffer {
     fn drop(&mut self) {
-
         if self.ptr.is_null() {
             return;
         }
 
-        let res = unsafe {
-            thoosa_shims::memcpy::tho_cu_mem_free_host(self.ptr as *mut c_void)
-        };
+        let res = unsafe { thoosa_shims::memcpy::tho_cu_mem_free_host(self.ptr as *mut c_void) };
 
         if res != 4 &&//CUDA error 4: CUDA runtime/driver is deinitializing; usually process shutdown or teardown ordering
-            let Err(err) = check_cuda_status(res, "cuMemFreeHost") {
+            let Err(err) = check_cuda_status(res, "cuMemFreeHost")
+        {
             log::error!("{err:?}");
         }
     }
 }
 // test-only imports moved into test modules
 
-
 //free_mem, total_mem
 pub fn cuda_mem_for_device(cuda_device: usize) -> (usize, usize) {
     use cust::sys::cuMemGetInfo_v2;
 
     let ctx = ThoCudaContext::new(cuda_device as i32).expect("failed to create CUDA context");
-    ctx
-        .bind_to_thread()
-        .expect("failed to bind CUDA context while querying memory usage");
+    ctx.bind_to_thread().expect("failed to bind CUDA context while querying memory usage");
 
     let mut free: usize = 0;
     let mut total: usize = 0;
@@ -138,10 +119,10 @@ pub fn cuda_mem() -> (usize, usize) {
 }
 
 ///for cases when only size and type is known
-pub fn tensor_mem_size(init_type: Kind, size: &[i64]) -> usize {//TODO rename to not confuse with one from thoosa_common::utils and move
+pub fn tensor_mem_size(init_type: Kind, size: &[i64]) -> usize {
+    //TODO rename to not confuse with one from thoosa_common::utils and move
     size.iter().fold(1, |a, v| a * (*v as usize)) * init_type.elt_size_in_bytes()
 }
-
 
 #[allow(dead_code)]
 pub fn speed_gib_per_s(bytes: u64, time_ms: u64) -> f64 {
@@ -174,18 +155,31 @@ pub struct CopyBufferPool {
 
 impl CopyBufferPool {
     pub fn new(buffers: impl IntoIterator<Item = (PinnedHostBuffer, Arc<ThoCudaStream>)>) -> Self {
-        Self { buffers: Pool::from_iter(buffers), failure: tokio::sync::watch::channel(None).0 }
+        Self {
+            buffers: Pool::from_iter(buffers),
+            failure: tokio::sync::watch::channel(None).0,
+        }
     }
 
-    pub fn remaining_capacity(&self) -> usize { self.buffers.remaining_capacity() }
+    pub fn remaining_capacity(&self) -> usize {
+        self.buffers.remaining_capacity()
+    }
 
     fn check(&self) -> Result<(), ThoError> {
-        match self.failure.borrow().as_ref() { Some(error) => Err(error.clone()), None => Ok(()) }
+        match self.failure.borrow().as_ref() {
+            Some(error) => Err(error.clone()),
+            None => Ok(()),
+        }
     }
 
     fn fail(&self, error: ThoError) {
         self.failure.send_if_modified(|failure| {
-            if failure.is_some() { false } else { *failure = Some(error); true }
+            if failure.is_some() {
+                false
+            } else {
+                *failure = Some(error);
+                true
+            }
         });
     }
 
@@ -217,11 +211,17 @@ enum CopyAllocation {
 
 impl CopyStorage {
     fn tensor(tensor: Tensor) -> Result<Self, ThoError> {
-        if !tensor.is_contiguous() { return Err(ThoError::new("chunked CUDA copy requires contiguous tensor storage")); }
+        if !tensor.is_contiguous() {
+            return Err(ThoError::new("chunked CUDA copy requires contiguous tensor storage"));
+        }
         let byte_len = tensor.numel().checked_mul(tensor.kind().elt_size_in_bytes()).ok_or_else(|| ThoError::new("tensor copy byte size overflow"))?;
         let address = tensor.data_ptr() as usize;
         address.checked_add(byte_len).ok_or_else(|| ThoError::new("tensor copy address overflow"))?;
-        Ok(Self { address, byte_len, allocation: parking_lot::Mutex::new(CopyAllocation::Tensor(tensor)) })
+        Ok(Self {
+            address,
+            byte_len,
+            allocation: parking_lot::Mutex::new(CopyAllocation::Tensor(tensor)),
+        })
     }
 
     /// # Safety
@@ -231,9 +231,15 @@ impl CopyStorage {
     /// request completes or this process exits. A mapping alone does not prevent
     /// the peer from recycling an arena range.
     unsafe fn external(address: usize, byte_len: usize, owner: impl Send + 'static) -> Result<Self, ThoError> {
-        if address == 0 && byte_len != 0 { return Err(ThoError::new("null copy allocation")); }
+        if address == 0 && byte_len != 0 {
+            return Err(ThoError::new("null copy allocation"));
+        }
         address.checked_add(byte_len).ok_or_else(|| ThoError::new("copy allocation address overflow"))?;
-        Ok(Self { address, byte_len, allocation: parking_lot::Mutex::new(CopyAllocation::External(Box::new(owner))) })
+        Ok(Self {
+            address,
+            byte_len,
+            allocation: parking_lot::Mutex::new(CopyAllocation::External(Box::new(owner))),
+        })
     }
 }
 
@@ -246,7 +252,9 @@ struct CopyTransfer {
 
 impl CopyTransfer {
     fn new(source: CopyStorage, destination: CopyStorage) -> Result<Arc<Self>, ThoError> {
-        if source.byte_len != destination.byte_len { return Err(ThoError::new("copy allocation sizes differ")); }
+        if source.byte_len != destination.byte_len {
+            return Err(ThoError::new("copy allocation sizes differ"));
+        }
         Ok(Arc::new(Self { source, destination }))
     }
 
@@ -275,7 +283,9 @@ impl<T> CopyCompletion<T> {
             self.pool.fail(completion.result.as_ref().unwrap_err().clone());
             // Keep all DMA allocations, including a worker mapping, alive when
             // neither synchronization attempt establishes physical completion.
-            if let Some(resources) = self.resources.take() { std::mem::forget(resources); }
+            if let Some(resources) = self.resources.take() {
+                std::mem::forget(resources);
+            }
         }
         completion.result
     }
@@ -285,7 +295,9 @@ impl<T> Drop for CopyCompletion<T> {
     fn drop(&mut self) {
         if self.submitted {
             let completion = crate::cuda_copier::complete_cuda_stream(self.stream.synchronize(), || self.stream.synchronize());
-            if let Err(error) = self.finish(completion) { log::debug!("CUDA copy unwind synchronization failed: {error:#}"); }
+            if let Err(error) = self.finish(completion) {
+                log::debug!("CUDA copy unwind synchronization failed: {error:#}");
+            }
         }
     }
 }
@@ -320,7 +332,9 @@ fn d2h_batches(lengths: impl IntoIterator<Item = usize>, capacity: usize) -> Res
     let mut batch = Vec::new();
     let mut used = 0;
     for (tensor, length) in lengths.into_iter().enumerate() {
-        if length != 0 && capacity == 0 { return Err(ThoError::new("batched D2H requires a non-zero copy buffer")); }
+        if length != 0 && capacity == 0 {
+            return Err(ThoError::new("batched D2H requires a non-zero copy buffer"));
+        }
         let mut offset = 0;
         while offset < length {
             let len = (capacity - used).min(length - offset);
@@ -333,25 +347,31 @@ fn d2h_batches(lengths: impl IntoIterator<Item = usize>, capacity: usize) -> Res
             }
         }
     }
-    if !batch.is_empty() { batches.push(batch); }
+    if !batch.is_empty() {
+        batches.push(batch);
+    }
     Ok(batches)
 }
 
 // A strided source needs a logical copy, not a raw byte copy. Materialize it on
 // CPU synchronously so no newly queued GPU packing work escapes its stream.
 fn prepare_d2h_batch_source(source: Tensor, device: Device) -> Result<(Tensor, bool), ThoError> {
-    if source.device() != device && source.device() != Cpu { return Err(ThoError::new("D2H source belongs to another device")); }
+    if source.device() != device && source.device() != Cpu {
+        return Err(ThoError::new("D2H source belongs to another device"));
+    }
     let source = if source.is_contiguous() { source } else { tch_result(tch_result(source.f_to(Cpu))?.f_contiguous())? };
     let on_cpu = source.device() == Cpu;
     Ok((source, on_cpu))
 }
 
 async fn copy_d2h_transfers(gate: &Arc<thoosa_shared::CudaActivityGate>, transfers: Arc<Vec<(Arc<CopyTransfer>, bool)>>, buf_size: usize, pool: &Arc<CopyBufferPool>) -> Result<(), ThoError> {
-    CudaActivityScope::for_operation(gate)?.run(async {
-        pool.check()?;
-        let batches = d2h_batches(transfers.iter().map(|(transfer, _)| transfer.source.byte_len), buf_size)?;
-        let count = batches.len();
-        collect_futures_with_progress(batches.into_iter().map(|batch| {
+    CudaActivityScope::for_operation(gate)?
+        .run(async {
+            pool.check()?;
+            let batches = d2h_batches(transfers.iter().map(|(transfer, _)| transfer.source.byte_len), buf_size)?;
+            let count = batches.len();
+            collect_futures_with_progress(
+                batches.into_iter().map(|batch| {
                     let transfers = Arc::clone(&transfers);
                     let pool = Arc::clone(pool);
                     async move {
@@ -359,19 +379,28 @@ async fn copy_d2h_transfers(gate: &Arc<thoosa_shared::CudaActivityGate>, transfe
                         let copy_pool = Arc::clone(&pool);
                         let result = spawn_copy_chunk(transfers, buffer, move |transfers, buffer| {
                             let stream = Arc::clone(&buffer.1);
-                            let mut completion = CopyCompletion { resources: Some((Arc::clone(transfers), buffer)), submitted: false, pool: copy_pool, stream: Arc::clone(&stream) };
+                            let mut completion = CopyCompletion {
+                                resources: Some((Arc::clone(transfers), buffer)),
+                                submitted: false,
+                                pool: copy_pool,
+                                stream: Arc::clone(&stream),
+                            };
                             let buffer = &completion.resources.as_ref().expect("batch copy resources").1;
                             let pinned = buffer.0.as_mut_ptr();
                             let _guard = ThoStreamGuard::new(stream.as_ref())?;
                             let submitted = (|| -> Result<(), ThoError> {
                                 for slice in &batch {
-                                    if slice.pinned_offset + slice.len > buffer.0.len() { return Err(ThoError::new("batch exceeds pinned buffer")); }
+                                    if slice.pinned_offset + slice.len > buffer.0.len() {
+                                        return Err(ThoError::new("batch exceeds pinned buffer"));
+                                    }
                                     let (transfer, on_cpu) = &transfers[slice.tensor];
                                     let source = transfer.source.address + slice.offset;
                                     // Each slice has disjoint pinned/destination ranges;
                                     // completion retains every allocation through DMA.
                                     if *on_cpu {
-                                        unsafe { std::ptr::copy_nonoverlapping(source as *const u8, pinned.add(slice.pinned_offset), slice.len); }
+                                        unsafe {
+                                            std::ptr::copy_nonoverlapping(source as *const u8, pinned.add(slice.pinned_offset), slice.len);
+                                        }
                                     } else {
                                         completion.submitted = true;
                                         let status = unsafe { thoosa_shims::memcpy::tho_cu_memcpy_dtoh_async(pinned.add(slice.pinned_offset).cast(), source as _, slice.len, stream.as_mut_ptr()) };
@@ -382,35 +411,48 @@ async fn copy_d2h_transfers(gate: &Arc<thoosa_shared::CudaActivityGate>, transfe
                             })();
                             // Drain all submitted slices once, also after a partial
                             // submission failure. Failed batches never publish a snapshot.
-                            let sync = if completion.submitted {
-                                completion.finish(crate::cuda_copier::complete_cuda_stream(stream.synchronize(), || stream.synchronize()))
-                            } else { Ok(()) };
+                            let sync = if completion.submitted { completion.finish(crate::cuda_copier::complete_cuda_stream(stream.synchronize(), || stream.synchronize())) } else { Ok(()) };
                             crate::cuda_copier::finish_cuda_run(submitted, sync)?;
                             for slice in &batch {
                                 let destination = transfers[slice.tensor].0.destination.address + slice.offset;
-                                unsafe { std::ptr::copy_nonoverlapping(pinned.add(slice.pinned_offset), destination as *mut u8, slice.len); }
+                                unsafe {
+                                    std::ptr::copy_nonoverlapping(pinned.add(slice.pinned_offset), destination as *mut u8, slice.len);
+                                }
                             }
                             Ok(())
-                        }).await;
+                        })
+                        .await;
                         crate::cuda_copier::finish_cuda_run(joined_copy_result(result), pool.check())
                     }
-                }), count, FuturesOrdering::Unordered,
-                                      thoosa_shared::CollectionErrorPolicy::Propagate, COPY_D2H).await.map(|_| ())
-    }).await
+                }),
+                count,
+                FuturesOrdering::Unordered,
+                thoosa_shared::CollectionErrorPolicy::Propagate,
+                COPY_D2H,
+            )
+            .await
+            .map(|_| ())
+        })
+        .await
 }
 
 pub(crate) async fn copy_d2h_batch(gate: &Arc<thoosa_shared::CudaActivityGate>, sources: Vec<Tensor>, buf_size: usize, pool: &Arc<CopyBufferPool>) -> Result<Vec<Tensor>, ThoError> {
-    CudaActivityScope::for_operation(gate)?.run(async move {
-        let transfers = sources.into_iter().map(|source| {
-            let (source, on_cpu) = prepare_d2h_batch_source(source, Device::Cuda(gate.device_idx() - 1))?;
-            let destination = tch_result(Tensor::f_empty(source.size(), (source.kind(), Cpu)))?;
-            Ok((CopyTransfer::new(CopyStorage::tensor(source)?, CopyStorage::tensor(destination)?)?, on_cpu))
-        }).collect::<Result<Vec<_>, ThoError>>()?;
-        let transfers = Arc::new(transfers);
-        copy_d2h_transfers(gate, Arc::clone(&transfers), buf_size, pool).await?;
-        let transfers = Arc::try_unwrap(transfers).map_err(|_| ThoError::new("completed D2H batch is still leased"))?;
-        transfers.into_iter().map(|(transfer, _)| transfer.into_tensor()).collect()
-    }).await
+    CudaActivityScope::for_operation(gate)?
+        .run(async move {
+            let transfers = sources
+                .into_iter()
+                .map(|source| {
+                    let (source, on_cpu) = prepare_d2h_batch_source(source, Device::Cuda(gate.device_idx() - 1))?;
+                    let destination = tch_result(Tensor::f_empty(source.size(), (source.kind(), Cpu)))?;
+                    Ok((CopyTransfer::new(CopyStorage::tensor(source)?, CopyStorage::tensor(destination)?)?, on_cpu))
+                })
+                .collect::<Result<Vec<_>, ThoError>>()?;
+            let transfers = Arc::new(transfers);
+            copy_d2h_transfers(gate, Arc::clone(&transfers), buf_size, pool).await?;
+            let transfers = Arc::try_unwrap(transfers).map_err(|_| ThoError::new("completed D2H batch is still leased"))?;
+            transfers.into_iter().map(|(transfer, _)| transfer.into_tensor()).collect()
+        })
+        .await
 }
 
 /// # Safety
@@ -418,33 +460,40 @@ pub(crate) async fn copy_d2h_batch(gate: &Arc<thoosa_shared::CudaActivityGate>, 
 /// destination_owner must retain exclusive access until reply or worker exit,
 /// including cancellation. Every queued slice also retains this mapping owner.
 pub(crate) async unsafe fn copy_d2h_batch_to_ptrs(gate: &Arc<thoosa_shared::CudaActivityGate>, sources: Vec<(Tensor, usize)>, buf_size: usize, pool: &Arc<CopyBufferPool>, destination_owner: Arc<impl Send + Sync + 'static>) -> Result<(), ThoError> {
-    CudaActivityScope::for_operation(gate)?.run(async move {
-        let transfers = sources.into_iter().map(|(source, destination)| {
-            let (source, on_cpu) = prepare_d2h_batch_source(source, Device::Cuda(gate.device_idx() - 1))?;
-            let source = CopyStorage::tensor(source)?;
-            // SAFETY: the caller supplies the range/ownership contract above.
-            let destination = unsafe { CopyStorage::external(destination, source.byte_len, Arc::clone(&destination_owner))? };
-            Ok((CopyTransfer::new(source, destination)?, on_cpu))
-        }).collect::<Result<Vec<_>, ThoError>>()?;
-        copy_d2h_transfers(gate, Arc::new(transfers), buf_size, pool).await
-    }).await
+    CudaActivityScope::for_operation(gate)?
+        .run(async move {
+            let transfers = sources
+                .into_iter()
+                .map(|(source, destination)| {
+                    let (source, on_cpu) = prepare_d2h_batch_source(source, Device::Cuda(gate.device_idx() - 1))?;
+                    let source = CopyStorage::tensor(source)?;
+                    // SAFETY: the caller supplies the range/ownership contract above.
+                    let destination = unsafe { CopyStorage::external(destination, source.byte_len, Arc::clone(&destination_owner))? };
+                    Ok((CopyTransfer::new(source, destination)?, on_cpu))
+                })
+                .collect::<Result<Vec<_>, ThoError>>()?;
+            copy_d2h_transfers(gate, Arc::new(transfers), buf_size, pool).await
+        })
+        .await
 }
 
 #[derive(Clone, Copy)]
-enum CopyDirection { ToCpu, ToCuda }
+enum CopyDirection {
+    ToCpu,
+    ToCuda,
+}
 
-async fn copy_transfer(
-    gate: &Arc<thoosa_shared::CudaActivityGate>,
-    transfer: Arc<CopyTransfer>,
-    buf_size: usize,
-    pool: &Arc<CopyBufferPool>,
-    direction: CopyDirection,
-) -> Result<(), ThoError> {
-    CudaActivityScope::for_operation(gate)?.run(async {
-        let label = match direction { CopyDirection::ToCpu => COPY_D2H, CopyDirection::ToCuda => COPY_H2D };
-        let chunks = make_chunks(transfer.source.byte_len, buf_size, label)?;
-        let count = chunks.len();
-        collect_futures_with_progress(chunks.into_iter().map(|chunk| {
+async fn copy_transfer(gate: &Arc<thoosa_shared::CudaActivityGate>, transfer: Arc<CopyTransfer>, buf_size: usize, pool: &Arc<CopyBufferPool>, direction: CopyDirection) -> Result<(), ThoError> {
+    CudaActivityScope::for_operation(gate)?
+        .run(async {
+            let label = match direction {
+                CopyDirection::ToCpu => COPY_D2H,
+                CopyDirection::ToCuda => COPY_H2D,
+            };
+            let chunks = make_chunks(transfer.source.byte_len, buf_size, label)?;
+            let count = chunks.len();
+            collect_futures_with_progress(
+                chunks.into_iter().map(|chunk| {
                     let transfer = Arc::clone(&transfer);
                     let pool = Arc::clone(pool);
                     async move {
@@ -452,9 +501,16 @@ async fn copy_transfer(
                         let copy_pool = Arc::clone(&pool);
                         let result = spawn_copy_chunk(transfer, buffer, move |transfer, buffer| {
                             let stream = Arc::clone(&buffer.1);
-                            let mut completion = CopyCompletion { resources: Some((Arc::clone(transfer), buffer)), submitted: false, pool: copy_pool, stream: Arc::clone(&stream) };
+                            let mut completion = CopyCompletion {
+                                resources: Some((Arc::clone(transfer), buffer)),
+                                submitted: false,
+                                pool: copy_pool,
+                                stream: Arc::clone(&stream),
+                            };
                             let buffer = &completion.resources.as_ref().expect("copy resources").1;
-                            if chunk.len > buffer.0.len() { return Err(ThoError::new("copy chunk exceeds pinned buffer")); }
+                            if chunk.len > buffer.0.len() {
+                                return Err(ThoError::new("copy chunk exceeds pinned buffer"));
+                            }
                             let pinned = buffer.0.as_mut_ptr();
                             let _guard = ThoStreamGuard::new(stream.as_ref())?;
                             let source = transfer.source.address + chunk.offset;
@@ -467,7 +523,9 @@ async fn copy_transfer(
                                     unsafe { thoosa_shims::memcpy::tho_cu_memcpy_dtoh_async(pinned.cast(), source as _, chunk.len, stream.as_mut_ptr()) }
                                 }
                                 CopyDirection::ToCuda => {
-                                    unsafe { std::ptr::copy_nonoverlapping(source as *const u8, pinned, chunk.len); }
+                                    unsafe {
+                                        std::ptr::copy_nonoverlapping(source as *const u8, pinned, chunk.len);
+                                    }
                                     completion.submitted = true;
                                     unsafe { thoosa_shims::memcpy::tho_cu_memcpy_htod_async(destination as _, pinned.cast(), chunk.len, stream.as_mut_ptr()) }
                                 }
@@ -477,102 +535,113 @@ async fn copy_transfer(
                             let sync = completion.finish(crate::cuda_copier::complete_cuda_stream(stream.synchronize(), || stream.synchronize()));
                             crate::cuda_copier::finish_cuda_run(check_cuda_status(submitted, "CUDA copy submission"), sync)?;
                             if matches!(direction, CopyDirection::ToCpu) {
-                                unsafe { std::ptr::copy_nonoverlapping(pinned, destination as *mut u8, chunk.len); }
+                                unsafe {
+                                    std::ptr::copy_nonoverlapping(pinned, destination as *mut u8, chunk.len);
+                                }
                             }
                             Ok(())
-                        }).await;
+                        })
+                        .await;
                         // The collector drains all chunks and prioritizes fatal failures,
                         // including a task panic alongside a failed stream completion.
                         crate::cuda_copier::finish_cuda_run(joined_copy_result(result), pool.check())
                     }
-                }), count, FuturesOrdering::Unordered,
-                                      thoosa_shared::CollectionErrorPolicy::Propagate, label).await.map(|_| ())
-    }).await
+                }),
+                count,
+                FuturesOrdering::Unordered,
+                thoosa_shared::CollectionErrorPolicy::Propagate,
+                label,
+            )
+            .await
+            .map(|_| ())
+        })
+        .await
 }
 
 /// Own both tensors throughout the asynchronous transfer, including cancellation.
-#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="cuda_utils::copy_d2h"))]
-pub async fn copy_d2h(
-    gate: &Arc<thoosa_shared::CudaActivityGate>,
-    source: Tensor,
-    buf_size: usize,
-    pool: &Arc<CopyBufferPool>,
-) -> Result<Tensor, ThoError> {
-    CudaActivityScope::for_operation(gate)?.run(async move {
-        pool.check()?;
-        if source.device() != Device::Cuda(gate.device_idx() - 1) { return Err(ThoError::new("D2H source belongs to another device")); }
-        // LibTorch handles small or strided tensors synchronously while this
-        // frame owns the source. Only contiguous ranges enter the chunk engine.
-        if !source.is_contiguous() || tensor_mem_size(source.kind(), &source.size()) < buf_size { return Ok(tch_result(source.f_to(Cpu))?); }
-        let destination = tch_result(Tensor::f_empty(source.size(), (source.kind(), Cpu)))?;
-        let transfer = CopyTransfer::new(CopyStorage::tensor(source)?, CopyStorage::tensor(destination)?)?;
-        copy_transfer(gate, Arc::clone(&transfer), buf_size, pool, CopyDirection::ToCpu).await?;
-        transfer.into_tensor()
-    }).await
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "cuda_utils::copy_d2h"))]
+pub async fn copy_d2h(gate: &Arc<thoosa_shared::CudaActivityGate>, source: Tensor, buf_size: usize, pool: &Arc<CopyBufferPool>) -> Result<Tensor, ThoError> {
+    CudaActivityScope::for_operation(gate)?
+        .run(async move {
+            pool.check()?;
+            if source.device() != Device::Cuda(gate.device_idx() - 1) {
+                return Err(ThoError::new("D2H source belongs to another device"));
+            }
+            // LibTorch handles small or strided tensors synchronously while this
+            // frame owns the source. Only contiguous ranges enter the chunk engine.
+            if !source.is_contiguous() || tensor_mem_size(source.kind(), &source.size()) < buf_size {
+                return Ok(tch_result(source.f_to(Cpu))?);
+            }
+            let destination = tch_result(Tensor::f_empty(source.size(), (source.kind(), Cpu)))?;
+            let transfer = CopyTransfer::new(CopyStorage::tensor(source)?, CopyStorage::tensor(destination)?)?;
+            copy_transfer(gate, Arc::clone(&transfer), buf_size, pool, CopyDirection::ToCpu).await?;
+            transfer.into_tensor()
+        })
+        .await
 }
 
 /// Own both tensors throughout the asynchronous transfer, including cancellation.
-#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="cuda_utils::copy_h2d"))]
-pub async fn copy_h2d(
-    gate: &Arc<thoosa_shared::CudaActivityGate>,
-    source: Tensor,
-    buf_size: usize,
-    pool: &Arc<CopyBufferPool>,
-    dst_tho_device_idx: usize,
-) -> Result<Tensor, ThoError> {
-    CudaActivityScope::for_operation(gate)?.run(async move {
-        pool.check()?;
-        if source.device() != Cpu || dst_tho_device_idx != gate.device_idx() { return Err(ThoError::new("invalid H2D source or destination device")); }
-        let device = Device::Cuda(dst_tho_device_idx - 1);
-        if !source.is_contiguous() || tensor_mem_size(source.kind(), &source.size()) < buf_size { return Ok(tch_result(source.f_to(device))?); }
-        let destination = tch_result(Tensor::f_empty(source.size(), (source.kind(), device)))?;
-        let transfer = CopyTransfer::new(CopyStorage::tensor(source)?, CopyStorage::tensor(destination)?)?;
-        copy_transfer(gate, Arc::clone(&transfer), buf_size, pool, CopyDirection::ToCuda).await?;
-        transfer.into_tensor()
-    }).await
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "cuda_utils::copy_h2d"))]
+pub async fn copy_h2d(gate: &Arc<thoosa_shared::CudaActivityGate>, source: Tensor, buf_size: usize, pool: &Arc<CopyBufferPool>, dst_tho_device_idx: usize) -> Result<Tensor, ThoError> {
+    CudaActivityScope::for_operation(gate)?
+        .run(async move {
+            pool.check()?;
+            if source.device() != Cpu || dst_tho_device_idx != gate.device_idx() {
+                return Err(ThoError::new("invalid H2D source or destination device"));
+            }
+            let device = Device::Cuda(dst_tho_device_idx - 1);
+            if !source.is_contiguous() || tensor_mem_size(source.kind(), &source.size()) < buf_size {
+                return Ok(tch_result(source.f_to(device))?);
+            }
+            let destination = tch_result(Tensor::f_empty(source.size(), (source.kind(), device)))?;
+            let transfer = CopyTransfer::new(CopyStorage::tensor(source)?, CopyStorage::tensor(destination)?)?;
+            copy_transfer(gate, Arc::clone(&transfer), buf_size, pool, CopyDirection::ToCuda).await?;
+            transfer.into_tensor()
+        })
+        .await
 }
 
 /// # Safety
 /// source_owner must retain the readable CPU range implied by size/kind, with no
 /// concurrent writes, until it is dropped, including after future cancellation.
 /// For IPC, the parent must retain its arena allocation until reply or worker exit.
-#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="cuda_utils::copy_h2d_from_ptr"))]
-pub(crate) async unsafe fn copy_h2d_from_ptr(
-    gate: &Arc<thoosa_shared::CudaActivityGate>, kind: Kind, buf_size: usize,
-    pool: &Arc<CopyBufferPool>,
-    dst_tho_device_idx: usize, source: usize, size: &[i64], source_owner: impl Send + 'static,
-) -> Result<Tensor, ThoError> {
-    CudaActivityScope::for_operation(gate)?.run(async move {
-        pool.check()?;
-        if dst_tho_device_idx != gate.device_idx() { return Err(ThoError::new("H2D destination belongs to another device")); }
-        let destination = CopyStorage::tensor(tch_result(Tensor::f_empty(size, (kind, Device::Cuda(dst_tho_device_idx - 1))))?)?;
-        // SAFETY: this function's caller supplies the source allocation contract.
-        let source = unsafe { CopyStorage::external(source, destination.byte_len, source_owner)? };
-        let transfer = CopyTransfer::new(source, destination)?;
-        copy_transfer(gate, Arc::clone(&transfer), buf_size, pool, CopyDirection::ToCuda).await?;
-        transfer.into_tensor()
-    }).await
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "cuda_utils::copy_h2d_from_ptr"))]
+pub(crate) async unsafe fn copy_h2d_from_ptr(gate: &Arc<thoosa_shared::CudaActivityGate>, kind: Kind, buf_size: usize, pool: &Arc<CopyBufferPool>, dst_tho_device_idx: usize, source: usize, size: &[i64], source_owner: impl Send + 'static) -> Result<Tensor, ThoError> {
+    CudaActivityScope::for_operation(gate)?
+        .run(async move {
+            pool.check()?;
+            if dst_tho_device_idx != gate.device_idx() {
+                return Err(ThoError::new("H2D destination belongs to another device"));
+            }
+            let destination = CopyStorage::tensor(tch_result(Tensor::f_empty(size, (kind, Device::Cuda(dst_tho_device_idx - 1))))?)?;
+            // SAFETY: this function's caller supplies the source allocation contract.
+            let source = unsafe { CopyStorage::external(source, destination.byte_len, source_owner)? };
+            let transfer = CopyTransfer::new(source, destination)?;
+            copy_transfer(gate, Arc::clone(&transfer), buf_size, pool, CopyDirection::ToCuda).await?;
+            transfer.into_tensor()
+        })
+        .await
 }
 
 /// # Safety
 /// destination_owner must retain a writable CPU range covering source's bytes,
 /// without other accesses, until it is dropped, including after cancellation.
 /// For IPC, the parent must retain its arena allocation until reply or worker exit.
-#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="cuda_utils::copy_d2h_to_ptr"))]
-pub(crate) async unsafe fn copy_d2h_to_ptr(
-    gate: &Arc<thoosa_shared::CudaActivityGate>, source: Tensor, buf_size: usize,
-    pool: &Arc<CopyBufferPool>,
-    destination: usize, destination_owner: impl Send + 'static,
-) -> Result<(), ThoError> {
-    CudaActivityScope::for_operation(gate)?.run(async move {
-        pool.check()?;
-        if source.device() != Device::Cuda(gate.device_idx() - 1) { return Err(ThoError::new("D2H source belongs to another device")); }
-        let source = CopyStorage::tensor(source)?;
-        // SAFETY: this function's caller supplies the destination allocation contract.
-        let destination = unsafe { CopyStorage::external(destination, source.byte_len, destination_owner)? };
-        let transfer = CopyTransfer::new(source, destination)?;
-        copy_transfer(gate, transfer, buf_size, pool, CopyDirection::ToCpu).await
-    }).await
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "cuda_utils::copy_d2h_to_ptr"))]
+pub(crate) async unsafe fn copy_d2h_to_ptr(gate: &Arc<thoosa_shared::CudaActivityGate>, source: Tensor, buf_size: usize, pool: &Arc<CopyBufferPool>, destination: usize, destination_owner: impl Send + 'static) -> Result<(), ThoError> {
+    CudaActivityScope::for_operation(gate)?
+        .run(async move {
+            pool.check()?;
+            if source.device() != Device::Cuda(gate.device_idx() - 1) {
+                return Err(ThoError::new("D2H source belongs to another device"));
+            }
+            let source = CopyStorage::tensor(source)?;
+            // SAFETY: this function's caller supplies the destination allocation contract.
+            let destination = unsafe { CopyStorage::external(destination, source.byte_len, destination_owner)? };
+            let transfer = CopyTransfer::new(source, destination)?;
+            copy_transfer(gate, transfer, buf_size, pool, CopyDirection::ToCpu).await
+        })
+        .await
 }
 
 //TODO OOM handling
@@ -595,17 +664,12 @@ pub fn pack_bits_bool(b: &Tensor) -> Result<Tensor, ThoError> {
     let x_u8 = tch_result(tch_result(flat.f_view([-1, 8]))?.f_to_kind(Kind::Uint8))?;
 
     // 4) Weights (MSB->LSB).
-    let w_i64 = tch_result(tch_result(Tensor::from_slice(&[128u8, 64, 32, 16, 8, 4, 2, 1])
-        .f_to_device(dev))?
-        .f_to_kind(Kind::Int64))?;
+    let w_i64 = tch_result(tch_result(Tensor::from_slice(&[128u8, 64, 32, 16, 8, 4, 2, 1]).f_to_device(dev))?.f_to_kind(Kind::Int64))?;
 
     // 5) Dot(each row, weights) -> one byte per row.
-    Ok(tch_result(tch_result(tch_result(tch_result(tch_result(x_u8
-        .f_to_kind(Kind::Int64))?
-        .f_mul(&w_i64))?
-        .f_sum_dim_intlist(1, /*keepdim=*/false, Kind::Int64))?
-        .f_to_kind(Kind::Uint8))?
-        .f_contiguous())?)
+    Ok(tch_result(
+        tch_result(tch_result(tch_result(tch_result(x_u8.f_to_kind(Kind::Int64))?.f_mul(&w_i64))?.f_sum_dim_intlist(1, /*keepdim=*/ false, Kind::Int64))?.f_to_kind(Kind::Uint8))?.f_contiguous(),
+    )?)
 }
 
 /// Unpack bytes back to Bool bits (MSB-first).
@@ -614,9 +678,7 @@ pub fn unpack_bits_u8(bytes: &Tensor, original_bits: Option<i64>) -> Tensor {
     let dev = bytes.device();
 
     // 1) Bit masks, MSB->LSB, shape [1,8] for broadcast.
-    let masks = Tensor::from_slice(&[128u8, 64, 32, 16, 8, 4, 2, 1])
-        .to_device(dev)
-        .unsqueeze(0); // [1,8], u8
+    let masks = Tensor::from_slice(&[128u8, 64, 32, 16, 8, 4, 2, 1]).to_device(dev).unsqueeze(0); // [1,8], u8
 
     // 2) Broadcast to [M,8] and do **bitwise** AND (Tensor–Tensor).
     let expanded = bytes.unsqueeze(1); // [M,1], u8
@@ -629,11 +691,7 @@ pub fn unpack_bits_u8(bytes: &Tensor, original_bits: Option<i64>) -> Tensor {
 
     // 4) Flatten and trim optional padding.
     let bits = per_bit_bool.reshape([-1]); //.to_kind(Kind::Bool);
-    if let Some(k) = original_bits {
-        bits.narrow(0, 0, k).contiguous()
-    } else {
-        bits.contiguous()
-    }
+    if let Some(k) = original_bits { bits.narrow(0, 0, k).contiguous() } else { bits.contiguous() }
 }
 
 #[allow(dead_code)]
@@ -652,8 +710,7 @@ pub fn equal_bytes(a: &Tensor, b: &Tensor) -> bool {
     unsafe { std::slice::from_raw_parts(pa, nbytes) == std::slice::from_raw_parts(pb, nbytes) }
 }
 
-
-pub fn fail_with_unrecoverable_error(){
+pub fn fail_with_unrecoverable_error() {
     debug!("test_copy_ipc_cuda_worker_propagates_oom: do_run");
     // run with: CUDA_LAUNCH_BLOCKING=1 RUST_BACKTRACE=1 cargo run
     let device = Device::Cuda(0);
@@ -681,14 +738,12 @@ pub fn fail_with_unrecoverable_error(){
 #[cfg(test)]
 #[allow(unused_imports, unused_variables, dead_code)]
 mod tests {
-    use crate::tch_error::tch_result;
     use crate::cuda_copier::CudaCopier;
-    use crate::cuda_utils::{
-        PinnedHostBuffer, copy_d2h, copy_h2d, cuda_mem, equal_bytes, pack_bits_bool, speed_gb_per_s, unpack_bits_u8,
-    };
+    use crate::cuda_utils::{PinnedHostBuffer, copy_d2h, copy_h2d, cuda_mem, equal_bytes, pack_bits_bool, speed_gb_per_s, unpack_bits_u8};
     use crate::dims::AnyDims;
     use crate::runner::global_ctx::GlobalCtx;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
+    use crate::tch_error::tch_result;
     use crate::tho_device::ThoDevice;
     use crate::tho_tensor::ThoTensor;
     use crate::utils::lin_for_size;
@@ -761,7 +816,7 @@ mod tests {
         futures_limits().force(COPY_H2D, 10);
         futures_limits().force(COPY_D2H, 10);
 
-        let ctx:&'static CudaCopier = Box::leak(Box::new(CudaCopier::make_instance_for_cuda_device(0, 0.2, 16)?));
+        let ctx: &'static CudaCopier = Box::leak(Box::new(CudaCopier::make_instance_for_cuda_device(0, 0.2, 16)?));
 
         let (d2h, h2d) = run_test_copy_from_ptr(ctx, 3, 10).await;
         info!("\n Copy d2h speed: {d2h:#2} GB/s, h2d speed {h2d:#2} GB/s");
@@ -770,7 +825,7 @@ mod tests {
         Ok(())
     }
 
-    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="run_test_copy_from_ptr"))]
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "run_test_copy_from_ptr"))]
     async fn run_test_copy_from_ptr(ctx: &'static CudaCopier, threads: u8, runs: u8) -> (f64, f64) {
         let (_free_mem, total_mem) = cuda_mem();
 
@@ -783,49 +838,24 @@ mod tests {
         let d2h_time = Arc::new(AtomicU64::new(0));
         let h2d_time = Arc::new(AtomicU64::new(0));
 
-
         (0..threads)
             .map(|thread_i| {
                 let d2h_time = d2h_time.clone();
                 let h2d_time = h2d_time.clone();
 
-                run_copy_(
-                    thread_i,
-                    input_n as i64,
-                    dim_1 as i64,
-                    runs,
-                    Float,
-                    Arc::clone(&d2h_time),
-                    Arc::clone(&h2d_time),
-                    ctx,
-                )
+                run_copy_(thread_i, input_n as i64, dim_1 as i64, runs, Float, Arc::clone(&d2h_time), Arc::clone(&h2d_time), ctx)
             })
             .collect::<JoinSet<Result<(), ThoError>>>()
             .join_all()
             .await;
 
-        let total_copied_mem_size_kb =
-            input_n * dim_1 * init_type.elt_size_in_bytes() as u64 * runs as u64 * threads as u64;
+        let total_copied_mem_size_kb = input_n * dim_1 * init_type.elt_size_in_bytes() as u64 * runs as u64 * threads as u64;
 
-        (
-            speed_gb_per_s(total_copied_mem_size_kb, d2h_time.load(Relaxed)),
-            speed_gb_per_s(total_copied_mem_size_kb, h2d_time.load(Relaxed))
-        )
+        (speed_gb_per_s(total_copied_mem_size_kb, d2h_time.load(Relaxed)), speed_gb_per_s(total_copied_mem_size_kb, h2d_time.load(Relaxed)))
     }
 
-    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="run_copy_"))]
-    async fn run_copy_(
-        _thread_i: u8,
-        input_n: i64,
-        dim_1: i64,
-        runs: u8,
-        init_type: Kind,
-
-        d2h_time: Arc<AtomicU64>,
-        h2d_time: Arc<AtomicU64>,
-        ctx: &CudaCopier,
-    ) -> Result<(), ThoError> {
-
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "run_copy_"))]
+    async fn run_copy_(_thread_i: u8, input_n: i64, dim_1: i64, runs: u8, init_type: Kind, d2h_time: Arc<AtomicU64>, h2d_time: Arc<AtomicU64>, ctx: &CudaCopier) -> Result<(), ThoError> {
         for _t in 0..runs {
             let dim_0 = random_range(0.5 * input_n as f64..1.5 * input_n as f64) as i64;
             let mut src_t = Tensor::rand([dim_0, dim_1], (Float, Cpu));
@@ -833,7 +863,6 @@ mod tests {
             let inst_0 = Instant::now();
             let tensor = ctx.copy(tch_result(src_t.f_alias())?, 1).await?;
             h2d_time.fetch_add(inst_0.elapsed().as_millis() as u64, Relaxed);
-
 
             let inst_0 = Instant::now();
             let tensor = ctx.copy(tensor, 0).await?;
@@ -848,7 +877,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 64)]
-    async fn test_small_one_copy_types() ->Result<(), ThoError>{
+    async fn test_small_one_copy_types() -> Result<(), ThoError> {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
             init_cpp_logging();
@@ -856,9 +885,7 @@ mod tests {
         ();
 
         let cu_ctx = ThoCudaContext::new(0).expect("failed to create CUDA context");
-        cu_ctx
-            .bind_to_thread()
-            .expect("failed to bind CUDA context for test_small_one_copy_types");
+        cu_ctx.bind_to_thread().expect("failed to bind CUDA context for test_small_one_copy_types");
 
         let (free_mem, _total_mem) = cuda_mem();
 
@@ -871,17 +898,8 @@ mod tests {
 
         let buf_size = elts_in_buff * init_type.elt_size_in_bytes() + 17; //64 * 1024 * 1024; // total_size/ buffs as i64;
 
-
-        for tensor_kind in [
-            Kind::Uint8,
-            Kind::Int16,
-            Kind::Int,
-            Kind::Int64,
-            Kind::Double,
-        ] {
-            let src_t = Tensor::rand(&[10, 1], (Float, Cuda(0)))
-                .multiply_scalar(10.)
-                .totype(tensor_kind);
+        for tensor_kind in [Kind::Uint8, Kind::Int16, Kind::Int, Kind::Int64, Kind::Double] {
+            let src_t = Tensor::rand(&[10, 1], (Float, Cuda(0))).multiply_scalar(10.).totype(tensor_kind);
 
             println!("src_t=\t{src_t}");
 
@@ -889,13 +907,9 @@ mod tests {
                 &Arc::new(thoosa_shared::CudaActivityGate::new(1)),
                 tch_result(src_t.f_alias())?,
                 buf_size,
-                &Arc::new(super::CopyBufferPool::new((0..buffs).map(|_i| {
-                    (
-                        PinnedHostBuffer::new(buf_size, 0).unwrap(),
-                        Arc::new(ThoCudaStream::from_pool(0, true).unwrap()),
-                    )
-                }))),
-            ).await?;
+                &Arc::new(super::CopyBufferPool::new((0..buffs).map(|_i| (PinnedHostBuffer::new(buf_size, 0).unwrap(), Arc::new(ThoCudaStream::from_pool(0, true).unwrap()))))),
+            )
+            .await?;
 
             println!("dst=\t{dst}");
 
@@ -903,14 +917,10 @@ mod tests {
                 &Arc::new(thoosa_shared::CudaActivityGate::new(1)),
                 dst,
                 buf_size,
-                &Arc::new(super::CopyBufferPool::new((0..buffs).map(|_i| {
-                    (
-                        PinnedHostBuffer::new(buf_size, CU_MEMHOSTALLOC_WRITECOMBINED).unwrap(),
-                        Arc::new(ThoCudaStream::from_pool(0, true).unwrap()),
-                    )
-                }))),
+                &Arc::new(super::CopyBufferPool::new((0..buffs).map(|_i| (PinnedHostBuffer::new(buf_size, CU_MEMHOSTALLOC_WRITECOMBINED).unwrap(), Arc::new(ThoCudaStream::from_pool(0, true).unwrap()))))),
                 1,
-            ).await?;
+            )
+            .await?;
 
             assert!(src_t.allclose(&dst, 0.01, 0.01, false));
         }
@@ -918,15 +928,13 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 64)]
-    async fn heavy_one_copy_types() -> Result<(), ThoError>{
+    async fn heavy_one_copy_types() -> Result<(), ThoError> {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
 
         let cu_ctx = ThoCudaContext::new(0).expect("failed to create CUDA context");
-        cu_ctx
-            .bind_to_thread()
-            .expect("failed to bind CUDA context for heavy_one_copy_types");
+        cu_ctx.bind_to_thread().expect("failed to bind CUDA context for heavy_one_copy_types");
 
         let (free_mem, _total_mem) = cuda_mem();
 
@@ -941,13 +949,7 @@ mod tests {
 
         let buf_size = elts_in_buff * init_type.elt_size_in_bytes() + 17; //64 * 1024 * 1024; // total_size/ buffs as i64;
 
-        for tensor_kind in [
-            Kind::Uint8,
-            Kind::Int16,
-            Kind::Int,
-            Kind::Int64,
-            Kind::Double,
-        ] {
+        for tensor_kind in [Kind::Uint8, Kind::Int16, Kind::Int, Kind::Int64, Kind::Double] {
             let src_t = lin_for_size(1., [input_n, dim_1], tensor_kind, &Cuda(0))?;
 
             println!("src_t=\t{src_t}");
@@ -956,13 +958,11 @@ mod tests {
                 &Arc::new(thoosa_shared::CudaActivityGate::new(1)),
                 tch_result(src_t.f_alias())?,
                 buf_size,
-                &Arc::new(super::CopyBufferPool::new((0..buffs).map(|_i| {
-                    (
-                        PinnedHostBuffer::new(buf_size as usize, CU_MEMHOSTALLOC_WRITECOMBINED).unwrap(),
-                        Arc::new(ThoCudaStream::from_pool(0, true).unwrap()),
-                    )
-                }))),
-            ).await?;
+                &Arc::new(super::CopyBufferPool::new(
+                    (0..buffs).map(|_i| (PinnedHostBuffer::new(buf_size as usize, CU_MEMHOSTALLOC_WRITECOMBINED).unwrap(), Arc::new(ThoCudaStream::from_pool(0, true).unwrap()))),
+                )),
+            )
+            .await?;
 
             println!("dst=\t{dst}");
 
@@ -970,14 +970,10 @@ mod tests {
                 &Arc::new(thoosa_shared::CudaActivityGate::new(1)),
                 dst,
                 buf_size,
-                &Arc::new(super::CopyBufferPool::new((0..buffs).map(|_i| {
-                    (
-                        PinnedHostBuffer::new(buf_size as usize, 0).unwrap(),
-                        Arc::new(ThoCudaStream::from_pool(0, true).unwrap()),
-                    )
-                }))),
+                &Arc::new(super::CopyBufferPool::new((0..buffs).map(|_i| (PinnedHostBuffer::new(buf_size as usize, 0).unwrap(), Arc::new(ThoCudaStream::from_pool(0, true).unwrap()))))),
                 1,
-            ).await?;
+            )
+            .await?;
 
             assert!(src_t.allclose(&dst, 0.01, 0.01, false));
         }
@@ -992,19 +988,12 @@ mod tests {
             // let _lib = libloading::Library::new("/home/bu/dvl/rust/thoosa/crates/target/debug/libthoosa_shims.so").expect("no libtorch_cuda.so");
         }
         let cu_ctx = ThoCudaContext::new(0).expect("failed to create CUDA context");
-        cu_ctx
-            .bind_to_thread()
-            .expect("failed to bind CUDA context for error test");
+        cu_ctx.bind_to_thread().expect("failed to bind CUDA context for error test");
 
         // Setup a small pool
         let buffs = 2usize;
         let buf_size = 1024usize;
-        let bufs_pool = Arc::new(super::CopyBufferPool::new((0..buffs).map(|_| {
-            (
-                PinnedHostBuffer::new(buf_size, 0).unwrap(),
-                Arc::new(ThoCudaStream::from_pool(0, true).unwrap()),
-            )
-        })));
+        let bufs_pool = Arc::new(super::CopyBufferPool::new((0..buffs).map(|_| (PinnedHostBuffer::new(buf_size, 0).unwrap(), Arc::new(ThoCudaStream::from_pool(0, true).unwrap())))));
 
         // Use a CPU pointer as if it were a device pointer — should error
         let bogus_cpu_tensor = Tensor::rand(&[1000, 1000], FLOAT_CPU);
@@ -1012,20 +1001,11 @@ mod tests {
 
         let bogus_device_ptr = bogus_cpu_tensor.data_ptr() as usize; // not a CUdeviceptr
 
-        let res = super::copy_d2h(
-            &Arc::new(thoosa_shared::CudaActivityGate::new(1)),
-            bogus_cpu_tensor,
-            buf_size,
-            &bufs_pool,
-        )
-        .await;
+        let res = super::copy_d2h(&Arc::new(thoosa_shared::CudaActivityGate::new(1)), bogus_cpu_tensor, buf_size, &bufs_pool).await;
 
-        debug!("res={res:?} device={:?}", res.as_ref().map(|v|v.device()));
+        debug!("res={res:?} device={:?}", res.as_ref().map(|v| v.device()));
 
-        assert!(
-            res.is_err(),
-            "expected copy_d2h_from_ptr_result to error for invalid device ptr"
-        );
+        assert!(res.is_err(), "expected copy_d2h_from_ptr_result to error for invalid device ptr");
     }
 
     // #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
@@ -1049,9 +1029,7 @@ mod tests {
                     if i % 2 == 0 {
                         let t_0 = Instant::now();
 
-                        let cuda_t = cuda_copier
-                            .copy(tch_result(t.f_alias())?, 1)
-                            .await?;
+                        let cuda_t = cuda_copier.copy(tch_result(t.f_alias())?, 1).await?;
                         let unfolded = cuda_t.unfold(1, 100, 10).contiguous();
 
                         copy_unfold_time += t_0.elapsed().as_millis();
@@ -1059,19 +1037,13 @@ mod tests {
                         let t_0 = Instant::now();
                         let t = t.unfold(1, 100, 10).contiguous();
 
-                        let cuda_t = cuda_copier
-                            .copy(tch_result(t.f_alias())?, 1)
-                            .await;
+                        let cuda_t = cuda_copier.copy(tch_result(t.f_alias())?, 1).await;
 
                         unfold_copy_time += t_0.elapsed().as_millis();
                     }
                 }
 
-                debug!(
-                    "mem_k={mem_k} buffs={buffs} copy_unfold_time={} unfold_copy_time={}",
-                    copy_unfold_time / runs,
-                    unfold_copy_time / runs
-                );
+                debug!("mem_k={mem_k} buffs={buffs} copy_unfold_time={} unfold_copy_time={}", copy_unfold_time / runs, unfold_copy_time / runs);
 
                 assert!(copy_unfold_time < unfold_copy_time);
             }
@@ -1079,7 +1051,7 @@ mod tests {
 
         Ok(())
     }
-    
+
     #[test]
     fn roundtrip_pack_unpack() -> Result<(), ThoError> {
         use tch::{Device, Kind, Tensor};
@@ -1088,16 +1060,15 @@ mod tests {
         let dev = Device::Cpu;
 
         let n = 1_00; //0_003i64;
-        let mask = Tensor::randint( 2, [n], (Kind::Bool, dev));
+        let mask = Tensor::randint(2, [n], (Kind::Bool, dev));
         let packed = pack_bits_bool(&mask)?;
 
-        let mask_size = mask.numel()*mask.kind().elt_size_in_bytes();
-        let packed_size = packed.numel()*packed.kind().elt_size_in_bytes();
+        let mask_size = mask.numel() * mask.kind().elt_size_in_bytes();
+        let packed_size = packed.numel() * packed.kind().elt_size_in_bytes();
 
         let unpacked = unpack_bits_u8(&packed, Some(n));
 
-        let unpacked_size = unpacked.numel()*unpacked.kind().elt_size_in_bytes();
-
+        let unpacked_size = unpacked.numel() * unpacked.kind().elt_size_in_bytes();
 
         assert!(mask.allclose(&unpacked, 0.01, 0.01, false), "roundtrip mismatch");
         // assert!(mask.allclose(&unpack_bits_u8(&packed, None), 0.01, 0.01, false), "roundtrip mismatch");
@@ -1105,7 +1076,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn roundtrip_pack_unpack_copy() -> Result<(), ThoError>{
+    async fn roundtrip_pack_unpack_copy() -> Result<(), ThoError> {
         use tch::{Device, Kind, Tensor};
         let global_mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
         unsafe {
@@ -1118,13 +1089,13 @@ mod tests {
 
         let n = 12_345; //0_003i64;
         let channels = 20;
-        let mask = Tensor::randint( 2, [channels * n], (Kind::Bool, Cuda(0))).view((channels, n));
+        let mask = Tensor::randint(2, [channels * n], (Kind::Bool, Cuda(0))).view((channels, n));
         let size = mask.size();
         let packed_mask = pack_bits_bool(&mask)?;
         let packed = GlobalCtx::global().cuda_actor(1usize).copy(packed_mask.into(), 0.into()).await?.into_local()?;
 
-        let mask_size = mask.numel()*mask.kind().elt_size_in_bytes();
-        let packed_size = packed.numel()*packed.kind().elt_size_in_bytes();
+        let mask_size = mask.numel() * mask.kind().elt_size_in_bytes();
+        let packed_size = packed.numel() * packed.kind().elt_size_in_bytes();
 
         let numelts = size.iter().fold(1, |mut a, v| {
             a *= v;
@@ -1132,7 +1103,7 @@ mod tests {
         });
         let unpacked = unpack_bits_u8(&packed, Some(numelts)).view((channels, n));
 
-        let unpacked_size = unpacked.numel()*unpacked.kind().elt_size_in_bytes();
+        let unpacked_size = unpacked.numel() * unpacked.kind().elt_size_in_bytes();
 
         // println!("mask=\n{mask} unpacked=\n{unpacked} \n={numelts}");
 
@@ -1141,12 +1112,11 @@ mod tests {
 
         Ok(())
     }
-
 }
 
 pub fn maybe_cuda_mem(device: &Device) -> Option<(usize, usize)> {
     match device {
-        Device::Cuda(_) if  Device::cuda_if_available().is_cuda() => Some(cuda_mem()),
+        Device::Cuda(_) if Device::cuda_if_available().is_cuda() => Some(cuda_mem()),
         _ => None,
     }
 }
@@ -1154,7 +1124,7 @@ pub fn maybe_cuda_mem(device: &Device) -> Option<(usize, usize)> {
 #[cfg(test)]
 mod transfer_lifetime_tests {
     use super::*;
-        use std::sync::Weak;
+    use std::sync::Weak;
 
     #[test]
     fn test_d2h_batches_coalesce_small_tensors_and_split_large_ones() -> Result<(), ThoError> {
@@ -1199,7 +1169,9 @@ mod transfer_lifetime_tests {
         sources.push(tch_result(Tensor::f_from_slice(&[42i64, 7]))?);
         expected.push(tch_result(Tensor::f_from_slice(&[42i64, 7]))?);
         let saved = copy_d2h_batch(&gate, tch_result(sources.iter().map(Tensor::f_alias).collect::<Result<_, _>>())?, capacity, &pool).await?;
-        for source in &mut sources { let _ = tch_result(source.f_zero_())?; }
+        for source in &mut sources {
+            let _ = tch_result(source.f_zero_())?;
+        }
         let newer = copy_d2h_batch(&gate, sources, capacity, &pool).await?;
         for ((saved, newer), expected) in saved.iter().zip(&newer).zip(&expected) {
             assert_eq!(saved.kind(), expected.kind());
@@ -1213,16 +1185,17 @@ mod transfer_lifetime_tests {
     }
 
     fn tensor_transfer() -> Result<Arc<CopyTransfer>, ThoError> {
-        CopyTransfer::new(
-            CopyStorage::tensor(tch_result(Tensor::f_from_slice(&[1u8, 2, 3, 4, 5, 6, 7, 8]))?)?,
-            CopyStorage::tensor(tch_result(Tensor::f_zeros([8], (Kind::Uint8, Cpu)))?)?,
-        )
+        CopyTransfer::new(CopyStorage::tensor(tch_result(Tensor::f_from_slice(&[1u8, 2, 3, 4, 5, 6, 7, 8]))?)?, CopyStorage::tensor(tch_result(Tensor::f_zeros([8], (Kind::Uint8, Cpu)))?)?)
     }
 
     async fn released(weak: &Weak<CopyTransfer>) {
         tokio::time::timeout(Duration::from_secs(5), async {
-            while weak.upgrade().is_some() { tokio::task::yield_now().await; }
-        }).await.expect("completed chunks must release transfer allocations");
+            while weak.upgrade().is_some() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("completed chunks must release transfer allocations");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1246,16 +1219,21 @@ mod transfer_lifetime_tests {
                     wait.recv_timeout(Duration::from_secs(5)).context("release cancelled copy chunk")?;
                     // Exercise the actual retained addresses after the collector
                     // has been cancelled. Each chunk owns a disjoint destination.
-                    unsafe { std::ptr::copy_nonoverlapping((transfer.source.address + index * 4) as *const u8, (transfer.destination.address + index * 4) as *mut u8, 4); }
+                    unsafe {
+                        std::ptr::copy_nonoverlapping((transfer.source.address + index * 4) as *const u8, (transfer.destination.address + index * 4) as *mut u8, 4);
+                    }
                     let _ = done.send(());
                     Ok(())
-                }).await;
+                })
+                .await;
                 Ok::<_, ThoError>(joined_copy_result(result))
             });
         }
         drop(transfer);
         let parent = tokio::spawn(collect_futures_with_progress(chunks.into_iter(), 2, FuturesOrdering::Unordered, thoosa_shared::CollectionErrorPolicy::Propagate, "test cancelled copy chunks"));
-        for _ in 0..2 { tokio::time::timeout(Duration::from_secs(5), starts.recv()).await?.unwrap(); }
+        for _ in 0..2 {
+            tokio::time::timeout(Duration::from_secs(5), starts.recv()).await?.unwrap();
+        }
         parent.abort();
         assert!(parent.await.unwrap_err().is_cancelled());
         assert!(weak.upgrade().is_some(), "cancellation must retain both tensor allocations");
@@ -1291,10 +1269,13 @@ mod transfer_lifetime_tests {
                 spawn_copy_chunk(transfer, (), move |transfer, ()| {
                     let _ = started.send(());
                     wait.recv_timeout(Duration::from_secs(5)).context("release shutdown copy chunk")?;
-                    unsafe { std::ptr::copy_nonoverlapping(transfer.source.address as *const u8, transfer.destination.address as *mut u8, 8); }
+                    unsafe {
+                        std::ptr::copy_nonoverlapping(transfer.source.address as *const u8, transfer.destination.address as *mut u8, 8);
+                    }
                     let _ = done.send(());
                     Ok(())
-                }).await
+                })
+                .await
             });
             runtime.block_on(start).unwrap();
             runtime.shutdown_timeout(Duration::ZERO);
@@ -1327,9 +1308,15 @@ mod transfer_lifetime_tests {
             // Unwinding after submission still owns both allocations until the
             // completion guard has drained the real CUDA stream.
             let stream = Arc::clone(&buffer.1);
-            let _completion = CopyCompletion { resources: Some((Arc::clone(transfer), buffer)), submitted: true, pool: failed_pool, stream };
+            let _completion = CopyCompletion {
+                resources: Some((Arc::clone(transfer), buffer)),
+                submitted: true,
+                pool: failed_pool,
+                stream,
+            };
             panic!("copy panicked after submitting DMA")
-        }).await;
+        })
+        .await;
         assert!(result.unwrap_err().is_panic());
         assert!(weak.upgrade().is_none(), "successful drain must release storage despite the host panic");
         drop(tokio::time::timeout(Duration::from_secs(5), waiting).await.unwrap()?);
@@ -1350,7 +1337,12 @@ mod transfer_lifetime_tests {
         let transfer = tensor_transfer()?;
         let weak = Arc::downgrade(&transfer);
         let stream = Arc::clone(&buffer.1);
-        let mut completion = CopyCompletion { resources: Some((transfer, buffer)), submitted: true, pool: Arc::clone(&pool), stream };
+        let mut completion = CopyCompletion {
+            resources: Some((transfer, buffer)),
+            submitted: true,
+            pool: Arc::clone(&pool),
+            stream,
+        };
         // Both drain attempts fail without a fatal code. Do not invent one, but
         // still retain potentially live storage and reject ordinary reuse.
         let drained = crate::cuda_copier::complete_cuda_stream(Err(ThoError::oom()), || Err(ThoError::oom()));
@@ -1372,9 +1364,7 @@ mod transfer_lifetime_tests {
         // A deliberately unaligned chunk size exercises final partial chunks and
         // copies split inside an element without allocating a large test tensor.
         let buf_size = 17;
-        let pool = Arc::new(CopyBufferPool::new((0..2).map(|_| {
-            Ok((PinnedHostBuffer::new(buf_size, 0)?, Arc::new(ThoCudaStream::from_pool(0, true)?)))
-        }).collect::<Result<Vec<_>, ThoError>>()?));
+        let pool = Arc::new(CopyBufferPool::new((0..2).map(|_| Ok((PinnedHostBuffer::new(buf_size, 0)?, Arc::new(ThoCudaStream::from_pool(0, true)?)))).collect::<Result<Vec<_>, ThoError>>()?));
         for kind in [Kind::Uint8, Kind::Int64, Kind::Float, Kind::Double] {
             for size in [0, 1, 31, 257] {
                 let source = tch_result(tch_result(Tensor::f_arange(size, (Kind::Int64, Cpu)))?.f_to_kind(kind))?;

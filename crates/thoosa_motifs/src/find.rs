@@ -10,14 +10,14 @@ use std::sync::Arc;
 use std::{f64, mem};
 use tch::{IndexOp, Tensor};
 use thoosa_common::utils::*;
+use thoosa_shared::ResourceType;
 use thoosa_shared::TensorIdSliceIdx;
 use thoosa_shared::avg_hist;
-use thoosa_shared::ResourceType;
 
 use plotters::prelude::BLACK;
 use thoosa_common::resources::{SavableResult, Simple};
 use thoosa_common::transforms::filters::clc_frequencies;
-use thoosa_common::ws::{FsWorkspace};
+use thoosa_common::ws::FsWorkspace;
 use thoosa_cpu_data_derive::CpuData;
 
 use thoosa_shared::applicables_runner::Output;
@@ -46,38 +46,26 @@ impl FindMotifsArgs {
 
 #[derive(Debug, Args, Clone)]
 pub struct FixedFindMotifsConfig {
-
     #[arg(long, default_value_t = 10_000)]
-    pub max_chunk_size: u32, //max number of entries in tensor batches 
+    pub max_chunk_size: u32, //max number of entries in tensor batches
 
     #[arg(long, default_value_t = false)]
     pub keep_slice_matches: bool, //sql
-
 }
 
 impl FixedFindMotifsConfig {
-    pub fn new(
-        max_chunk_size: u32,
-        keep_slice_matches: bool,
-    ) -> Self {
-        Self {
-            max_chunk_size,
-            keep_slice_matches,
-        }
+    pub fn new(max_chunk_size: u32, keep_slice_matches: bool) -> Self {
+        Self { max_chunk_size, keep_slice_matches }
     }
 }
 
-
 #[derive(Debug, Clone, CpuData)]
 #[cpu_data(shallow)]
-pub struct FindMotifsSavableResult {
-}
-
-
+pub struct FindMotifsSavableResult {}
 
 impl FindMotifsSavableResult {
     pub fn new() -> Self {
-        Self {  }
+        Self {}
     }
 }
 
@@ -87,12 +75,7 @@ impl SavableResult for FindMotifsSavableResult {
     type Workspace = dyn crate::motifs_ws::MotifsWorkspace;
     type R = u32;
 
-    async fn save(
-        &mut self,
-        _store: &Arc<dyn MotifsStore>,
-        _ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
-        _p: Self::P<'_>
-    ) -> anyhow::Result<u32> {
+    async fn save(&mut self, _store: &Arc<dyn MotifsStore>, _ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, _p: Self::P<'_>) -> anyhow::Result<u32> {
         //RunConfig is pre saved in run_grid and found motifs are saved by DistsTracker
         Ok(0)
     }
@@ -105,7 +88,7 @@ impl Output for FindMotifsSavableResult {}
 // The store owns its observations; test fixtures need no borrowed production lifetime.
 pub struct SimpleMotifTracker {
     last: Option<SlicesMatch>,
-    motifs: Vec<SlicesMatch>,                //i_0, match_0, match_1, dist
+    motifs: Vec<SlicesMatch>, //i_0, match_0, match_1, dist
     dumper: Option<Box<dyn MotifTrackerStore>>,
     min_slices_counts: Option<u32>,
     max_slices_counts: Option<u32>,
@@ -114,28 +97,24 @@ pub struct SimpleMotifTracker {
 const CAPACITY: usize = 10_000_000;
 
 impl SimpleMotifTracker {
-    pub fn new(
-        dumper: Box<dyn MotifTrackerStore>,
-        min_slices_counts: Option<u32>,
-        max_slices_counts: Option<u32>,
-    ) -> SimpleMotifTracker {
+    pub fn new(dumper: Box<dyn MotifTrackerStore>, min_slices_counts: Option<u32>, max_slices_counts: Option<u32>) -> SimpleMotifTracker {
         Self {
             last: None,
-            motifs: Vec::with_capacity(CAPACITY),//TODO config + merge Vec::with_capacity + dump when capacity reached from origin/codex/fractional_splitter_async_consume
+            motifs: Vec::with_capacity(CAPACITY), //TODO config + merge Vec::with_capacity + dump when capacity reached from origin/codex/fractional_splitter_async_consume
             dumper: Some(dumper),
             min_slices_counts,
             max_slices_counts,
         }
     }
 
-    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SimpleMotifTracker::track"))]
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "SimpleMotifTracker::track"))]
     pub fn track(&mut self, i_0: TensorIdSliceIdx, i_1: TensorIdSliceIdx, dist: f32) {
         trace!("SimpMotifTracker::track: i_0={i_0:?} i_1={i_1:?} dist={dist}");
         self.motifs.push(SlicesMatch(i_0, i_1, dist));
 
         if self.motifs.len() >= self.motifs.capacity() {
             self.dump();
-            self.motifs.reserve(CAPACITY);//default capacity is 0 (created from mem::take in dump.)
+            self.motifs.reserve(CAPACITY); //default capacity is 0 (created from mem::take in dump.)
         }
     }
 
@@ -162,7 +141,7 @@ impl SimpleMotifTracker {
         }
     }
 
-    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SimpleMotifTracker::dump"))]
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "SimpleMotifTracker::dump"))]
     pub fn dump(&mut self) {
         debug!("SimpMotifTracker::dump: self.motifs={}", self.motifs.len());
         if let Some(last) = self.last.take() {
@@ -170,11 +149,7 @@ impl SimpleMotifTracker {
         }
 
         if self.motifs.len() > 0 {
-            self.dumper
-                .as_mut()
-                .expect("dumper")
-                .save_slices(mem::take(&mut self.motifs))
-                .expect("dumper");
+            self.dumper.as_mut().expect("dumper").save_slices(mem::take(&mut self.motifs)).expect("dumper");
         }
     }
 
@@ -186,7 +161,6 @@ impl SimpleMotifTracker {
         self.min_slices_counts
     }
 
-
     pub fn max_slices_counts(&self) -> Option<u32> {
         self.max_slices_counts
     }
@@ -196,7 +170,6 @@ impl SimpleMotifTracker {
         &self.motifs
     }
 }
-
 
 #[derive(Debug, Args, Clone)]
 pub struct SelectMotifsParams {
@@ -225,7 +198,6 @@ impl SelectMotifsArgs {
     }
 }
 
-
 #[cfg(test)]
 mod motif_find_tests {
 
@@ -245,17 +217,24 @@ mod motif_find_tests {
 
     #[test]
     fn test_track_many_preserves_dump_boundaries() {
-        use crate::motif_tracker_store::mock_motif_tracker_store::MockMotifTrackerStoreBuilder;
         use super::SimpleMotifTracker;
+        use crate::motif_tracker_store::mock_motif_tracker_store::MockMotifTrackerStoreBuilder;
 
         // Compare observable persistence, including crossing a full buffer and
         // starting a fresh block after its final explicit dump.
         let single_dumps = Arc::new(Mutex::new(Vec::new()));
         let batch_dumps = Arc::new(Mutex::new(Vec::new()));
         let make_tracker = |dumps: Arc<Mutex<Vec<Vec<SlicesMatch>>>>| {
-            let mut tracker = SimpleMotifTracker::new(MockMotifTrackerStoreBuilder::new()
-                            .with_save_slices(move |matches| { dumps.lock().push(matches); Ok(()) }).build(),
-                                                      Some(2), None);
+            let mut tracker = SimpleMotifTracker::new(
+                MockMotifTrackerStoreBuilder::new()
+                    .with_save_slices(move |matches| {
+                        dumps.lock().push(matches);
+                        Ok(())
+                    })
+                    .build(),
+                Some(2),
+                None,
+            );
             tracker.motifs = Vec::with_capacity(4);
             tracker
         };
@@ -263,7 +242,9 @@ mod motif_find_tests {
         let mut batched = make_tracker(batch_dumps.clone());
         let matches: Vec<_> = (0..19).map(|i| SlicesMatch(TensorIdSliceIdx(1, i), TensorIdSliceIdx(2, i + 1), i as f32 / 4.0)).collect();
         for chunk in matches.chunks(7) {
-            for entry in chunk { single.track(entry.0, entry.1, entry.2); }
+            for entry in chunk {
+                single.track(entry.0, entry.1, entry.2);
+            }
             batched.track_many(chunk.to_vec());
             assert_eq!(single.motifs(), batched.motifs());
             single.dump();
@@ -276,11 +257,8 @@ mod motif_find_tests {
     }
 
     #[test]
-    fn test_z_norm()  -> anyhow::Result<()>{
-        assert_eq!(
-            vec![-1.2247449, 0.0, 1.2247449],
-            to_vec_f32(&z_norm(&Tensor::from_slice(&[1., 2., 3.]), 0i64)?)?
-        );
+    fn test_z_norm() -> anyhow::Result<()> {
+        assert_eq!(vec![-1.2247449, 0.0, 1.2247449], to_vec_f32(&z_norm(&Tensor::from_slice(&[1., 2., 3.]), 0i64)?)?);
 
         Ok(())
     }
@@ -292,28 +270,18 @@ mod motif_find_tests {
 
         assert_eq!(1.0, to_vec_f32(&norm.dot(&norm))?[0]);
 
-        let t = Tensor::vstack(&[
-            Tensor::from_slice(&[1., 2., 3.]),
-            Tensor::from_slice(&[1., 2., 3.]),
-        ]);
+        let t = Tensor::vstack(&[Tensor::from_slice(&[1., 2., 3.]), Tensor::from_slice(&[1., 2., 3.])]);
 
         let norm = norm_2(&t, 1)?;
 
-        assert_eq!(
-            Tensor::from_slice(&[1., 1.]),
-            norm.tensordot(&norm, 1, 1).diag(0)
-        );
+        assert_eq!(Tensor::from_slice(&[1., 1.]), norm.tensordot(&norm, 1, 1).diag(0));
 
         Ok(())
     }
 
     #[test]
     fn test_self_dot() -> anyhow::Result<()> {
-        let t1 = Tensor::from_slice2(&[
-            &[1., 2., 3., 4., 5., 6., 7., 8., 9.],
-            &[10., 20., 30., 40., 50., 60., 70., 80., 90.],
-            &[100., 200., 300., 400., 500., 600., 700., 800., 900.],
-        ]);
+        let t1 = Tensor::from_slice2(&[&[1., 2., 3., 4., 5., 6., 7., 8., 9.], &[10., 20., 30., 40., 50., 60., 70., 80., 90.], &[100., 200., 300., 400., 500., 600., 700., 800., 900.]]);
 
         //(1,2,3) x
         //(1,2,3)
@@ -340,11 +308,7 @@ mod motif_find_tests {
 
     #[test]
     fn test_self_dot_norm() -> anyhow::Result<()> {
-        let t1 = Tensor::from_slice2(&[
-            &[1., 2., 3., 4., 5., 6., 7., 8., 9.],
-            &[10., 20., 30., 40., 50., 60., 70., 80., 90.],
-            &[100., 200., 300., 400., 500., 600., 700., 800., 900.],
-        ]);
+        let t1 = Tensor::from_slice2(&[&[1., 2., 3., 4., 5., 6., 7., 8., 9.], &[10., 20., 30., 40., 50., 60., 70., 80., 90.], &[100., 200., 300., 400., 500., 600., 700., 800., 900.]]);
 
         //(1,2,3) x
         //(1,2,3)
@@ -369,20 +333,10 @@ mod motif_find_tests {
             Self { tensors }
         }
 
-        fn get_slices(
-            &self,
-            i_0: i64,
-            i_1: i64,
-            m: i64,
-            dim: i64,
-        ) -> anyhow::Result<(Tensor, Tensor)> {
-            Ok((
-                self.tensors[0].f_slice(dim, Some(i_0), Some(i_0 + m), 1)?,
-                self.tensors[0].f_slice(dim, Some(i_1), Some(i_1 + m), 1)?,
-            ))
+        fn get_slices(&self, i_0: i64, i_1: i64, m: i64, dim: i64) -> anyhow::Result<(Tensor, Tensor)> {
+            Ok((self.tensors[0].f_slice(dim, Some(i_0), Some(i_0 + m), 1)?, self.tensors[0].f_slice(dim, Some(i_1), Some(i_1 + m), 1)?))
         }
     }
-
 
     #[test]
     pub fn test_simple_motif_tracker() -> anyhow::Result<()> {
@@ -390,7 +344,14 @@ mod motif_find_tests {
         {
             let mut mt = super::SimpleMotifTracker::new(
                 crate::motif_tracker_store::mock_motif_tracker_store::MockMotifTrackerStoreBuilder::new()
-                    .with_save_slices({ let motifs = Arc::clone(&motifs); move |values| { motifs.lock().extend(values); Ok(()) } }).build(),
+                    .with_save_slices({
+                        let motifs = Arc::clone(&motifs);
+                        move |values| {
+                            motifs.lock().extend(values);
+                            Ok(())
+                        }
+                    })
+                    .build(),
                 Some(2),
                 Some(100),
             );
@@ -402,19 +363,9 @@ mod motif_find_tests {
             mt.dump();
         }
         assert_eq!(motifs.lock().len(), 3);
-        assert_eq!(
-            SlicesMatch(TensorIdSliceIdx(0, 10), TensorIdSliceIdx(1, 10), 1.0),
-            motifs.lock()[0]
-        );
-        assert_eq!(
-            SlicesMatch(TensorIdSliceIdx(0, 20), TensorIdSliceIdx(1, 20), 1.0),
-            motifs.lock()[1]
-        );
-        assert_eq!(
-            SlicesMatch(TensorIdSliceIdx(0, 30), TensorIdSliceIdx(1, 30), 1.0),
-            motifs.lock()[2]
-        );
-
+        assert_eq!(SlicesMatch(TensorIdSliceIdx(0, 10), TensorIdSliceIdx(1, 10), 1.0), motifs.lock()[0]);
+        assert_eq!(SlicesMatch(TensorIdSliceIdx(0, 20), TensorIdSliceIdx(1, 20), 1.0), motifs.lock()[1]);
+        assert_eq!(SlicesMatch(TensorIdSliceIdx(0, 30), TensorIdSliceIdx(1, 30), 1.0), motifs.lock()[2]);
 
         Ok(())
     }
@@ -424,11 +375,7 @@ mod motif_find_tests {
         let n = 1_000i64;
 
         let (sig_0_1, sig_0_2) = two_sigs(1_000);
-        debug!(
-            "sig_1.size()={:?}, sig_2.size()={:?}",
-            sig_0_1.size(),
-            sig_0_2.size()
-        );
+        debug!("sig_1.size()={:?}, sig_2.size()={:?}", sig_0_1.size(), sig_0_2.size());
         let _sig_0_c = sig_0_1.copy();
 
         let t_0 = Tensor::vstack(&[sig_0_1, sig_0_2]);
@@ -444,7 +391,14 @@ mod motif_find_tests {
         let motifs = Arc::new(Mutex::new(Vec::new()));
         let mut mt = super::SimpleMotifTracker::new(
             crate::motif_tracker_store::mock_motif_tracker_store::MockMotifTrackerStoreBuilder::new()
-                    .with_save_slices({ let motifs = Arc::clone(&motifs); move |values| { motifs.lock().extend(values); Ok(()) } }).build(),
+                .with_save_slices({
+                    let motifs = Arc::clone(&motifs);
+                    move |values| {
+                        motifs.lock().extend(values);
+                        Ok(())
+                    }
+                })
+                .build(),
             Some(2),
             Some(100),
         );
@@ -460,11 +414,7 @@ mod motif_find_tests {
 
                 let dp = dot_norm(dim, &slice_01, &slice_02)?;
 
-                mt.track(
-                    TensorIdSliceIdx(0, i_0 as u32),
-                    TensorIdSliceIdx(0, i_1 as u32),
-                    dp.double_value(&[0]) as f32,
-                );
+                mt.track(TensorIdSliceIdx(0, i_0 as u32), TensorIdSliceIdx(0, i_1 as u32), dp.double_value(&[0]) as f32);
             }
         }
 
@@ -483,41 +433,22 @@ mod motif_find_tests {
 
         let motifs: Vec<&SlicesMatch> = mt.motifs().iter().filter(|v| v.2 > 0.9).collect();
 
-        assert_eq!(
-            (TensorIdSliceIdx(0, 100), TensorIdSliceIdx(0, 600)),
-            (motifs[0].0.clone(), motifs[0].1.clone())
-        );
-        assert_eq!(
-            (TensorIdSliceIdx(0, 200), TensorIdSliceIdx(0, 700)),
-            (motifs[1].0.clone(), motifs[1].1.clone())
-        );
+        assert_eq!((TensorIdSliceIdx(0, 100), TensorIdSliceIdx(0, 600)), (motifs[0].0.clone(), motifs[0].1.clone()));
+        assert_eq!((TensorIdSliceIdx(0, 200), TensorIdSliceIdx(0, 700)), (motifs[1].0.clone(), motifs[1].1.clone()));
 
         Ok(())
     }
 
     #[test]
     fn test_conv() {
-        let t_0 = Tensor::vstack(&[
-            Tensor::from_slice(&[1., 1., 1., 0., 0., 0.]),
-            Tensor::from_slice(&[2., 2., 2., 0., 0., 0.]),
-        ]); //view((2, 1, 6))
-        let t_1 = Tensor::vstack(&[
-            Tensor::from_slice(&[1., 1., 1.]),
-            Tensor::from_slice(&[2., 2., 2.]),
-        ])
-        .view((2, 1, 3)); //view((2, 1, 3))
+        let t_0 = Tensor::vstack(&[Tensor::from_slice(&[1., 1., 1., 0., 0., 0.]), Tensor::from_slice(&[2., 2., 2., 0., 0., 0.])]); //view((2, 1, 6))
+        let t_1 = Tensor::vstack(&[Tensor::from_slice(&[1., 1., 1.]), Tensor::from_slice(&[2., 2., 2.])]).view((2, 1, 3)); //view((2, 1, 3))
 
         let c = t_0.conv1d(&t_1, None::<Tensor>, 1, 3, 1, 2);
 
         debug!("t_0={:?} t_1={:?} c={:?}", t_0.size(), t_1.size(), c.size());
 
-        assert_eq!(
-            c,
-            Tensor::vstack(&[
-                Tensor::from_slice(&[0., 1., 2., 3., 2., 1., 0., 0., 0., 0.,]),
-                Tensor::from_slice(&[0., 4., 8., 12., 8., 4., 0., 0., 0., 0.,])
-            ])
-        )
+        assert_eq!(c, Tensor::vstack(&[Tensor::from_slice(&[0., 1., 2., 3., 2., 1., 0., 0., 0., 0.,]), Tensor::from_slice(&[0., 4., 8., 12., 8., 4., 0., 0., 0., 0.,])]))
 
         //https://www.rapidtables.com/calc/math/convolution-calculator.html
         //1 1 1 0 0 0 * 1 1 1 = 1  2  3  2  1 0 0 0
@@ -552,10 +483,10 @@ mod motif_find_tests {
         assert_eq!(
             c,
             Tensor::vstack(&[
-                Tensor::from_slice(&[0., 1., 2., 3., 2., 1., 0., 0., 0., 0.,]), // first channel * 1 kernel
-                Tensor::from_slice(&[0., 3., 6., 9., 6., 3., 0., 0., 0., 0.,]), // first channel * 2 kernel
-                Tensor::from_slice(&[0., 4., 8., 12., 8., 4., 0., 0., 0., 0.,]), // second channel * 1 kernel
-                Tensor::from_slice(&[0., 8., 16., 24., 16., 8., 0., 0., 0., 0.,]) // second channel * 2 kernel
+                Tensor::from_slice(&[0., 1., 2., 3., 2., 1., 0., 0., 0., 0.,]),    // first channel * 1 kernel
+                Tensor::from_slice(&[0., 3., 6., 9., 6., 3., 0., 0., 0., 0.,]),    // first channel * 2 kernel
+                Tensor::from_slice(&[0., 4., 8., 12., 8., 4., 0., 0., 0., 0.,]),   // second channel * 1 kernel
+                Tensor::from_slice(&[0., 8., 16., 24., 16., 8., 0., 0., 0., 0.,])  // second channel * 2 kernel
             ])
         );
 
@@ -567,15 +498,9 @@ mod motif_find_tests {
         //1 1 1 0 0 0 * 1 1 1 = 1  2  3  2  1 0 0 0
         //2 2 2 0 0 0 * 2 2 2 = 4  8  12 8  4 0 0 0
     }
-
-
 }
 
-pub async fn plot_resource(
-    resource_config: Simple,
-    ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
-    store: &Arc<dyn MotifsStore>,
-) -> anyhow::Result<()> {
+pub async fn plot_resource(resource_config: Simple, ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, store: &Arc<dyn MotifsStore>) -> anyhow::Result<()> {
     let tensors_path = ws.read().tensors_path().clone();
     let channel = 0; //TODO
 
@@ -605,24 +530,11 @@ pub async fn plot_resource(
         all_tensors
             .into_iter()
             .enumerate()
-            .map(|(i, t)| {
-                (
-                    format!("{i}"),
-                    color_iter.next().unwrap_or(BLACK),
-                    t.iter::<f64>()
-                        .unwrap()
-                        .enumerate()
-                        .map(|(i, v)| (i as f32, v as f32))
-                        .collect::<Vec<(f32, f32)>>(),
-                )
-            })
+            .map(|(i, t)| (format!("{i}"), color_iter.next().unwrap_or(BLACK), t.iter::<f64>().unwrap().enumerate().map(|(i, v)| (i as f32, v as f32)).collect::<Vec<(f32, f32)>>()))
             .collect(),
         format!("Resources={resource_config:?}").as_str(),
         (2000, 1000),
-        &ws.read().plots_path().join(format!(
-            "resources_{:?}.png",
-            resources.iter().map(|r| r.file_stem()).collect::<String>()
-        )),
+        &ws.read().plots_path().join(format!("resources_{:?}.png", resources.iter().map(|r| r.file_stem()).collect::<String>())),
     )?;
 
     Ok(())

@@ -1,19 +1,18 @@
-use crate::runner::purge::CachePurger;
-use log::{debug, error, info, warn};
-#[allow(unused_imports)]
-use mockall::automock;
 use crate::cuda_copier::{CudaActorHandle, CudaLocalActorHandle};
 use crate::ipc::cuda_process::CudaIPCActorHandle;
-use crate::runner::syn_stage_runner::SyncStageRunner;
+use crate::runner::common::cachable::{CachedPurgeOutput, StageCache};
 use crate::runner::cuda_recovery::CudaRecoveryCoordinator;
+use crate::runner::purge::CachePurger;
 use crate::runner::purger::Purger;
+use crate::runner::syn_stage_runner::SyncStageRunner;
 use crate::tho_device::ThoDevice;
 use futures_util::future::BoxFuture;
-use std::collections::HashMap;
-use std::any::{Any, TypeId};
+use log::{debug, error, info, warn};
 use mockall::Any as _;
-use crate::runner::common::cachable::{CachedPurgeOutput, StageCache};
-use thoosa_shared::traits::{Named, Stage, WithId};
+#[allow(unused_imports)]
+use mockall::automock;
+use std::any::{Any, TypeId};
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::os::fd::{FromRawFd, OwnedFd};
 use std::sync::atomic::Ordering::Relaxed;
@@ -21,10 +20,10 @@ use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Arc, OnceLock};
 use thoosa_shared::collect_futures_eta::{CollectEtaInvocationGuard, collect_eta_record_completion};
 use thoosa_shared::tracked_await::t;
+use thoosa_shared::traits::{Named, Stage, WithId};
 use thoosa_shared::{CudaActivityGate, ThoError, async_perf_log, async_read_owned_lock, async_write_owned_lock, perf_log, sync_write_lock};
-use tokio::sync::RwLock as AsyncRwLock;
 use thoosa_shims::arena::{shared_arena_dup_fd, shared_arena_init};
-
+use tokio::sync::RwLock as AsyncRwLock;
 
 /// Compatibility facade. New code retains Runtime or a narrow service handle.
 #[derive(Debug)]
@@ -63,24 +62,21 @@ struct RuntimeFailure {
 #[derive(Debug, Clone)]
 pub struct DeviceExecutionCtx {
     runner: Arc<SyncStageRunner>,
-    pub(crate) actor_handle: CudaActorHandleEnum
+    pub(crate) actor_handle: CudaActorHandleEnum,
 }
 
 impl DeviceExecutionCtx {
     fn cpu() -> Self {
         Self {
-            runner:
-            Arc::new(SyncStageRunner::new_cpu(1024)),
-            actor_handle:CudaActorHandleEnum::None
+            runner: Arc::new(SyncStageRunner::new_cpu(1024)),
+            actor_handle: CudaActorHandleEnum::None,
         }
     }
 
     pub fn ipc_actor(&self) -> Result<Arc<CudaIPCActorHandle>, ThoError> {
         match &self.actor_handle {
             CudaActorHandleEnum::Ipc(handle) => Ok(Arc::clone(&handle)),
-            _=>{
-                Err(ThoError::new("stage installation requires an IPC backend"))
-            }
+            _ => Err(ThoError::new("stage installation requires an IPC backend")),
         }
     }
 
@@ -92,30 +88,33 @@ impl DeviceExecutionCtx {
     }
 
     pub async fn debug_worker(&self) -> Result<(), ThoError> {
-        if let CudaActorHandleEnum::Ipc(actor) = &self.actor_handle { actor.debug_worker().await?; }
+        if let CudaActorHandleEnum::Ipc(actor) = &self.actor_handle {
+            actor.debug_worker().await?;
+        }
         Ok(())
     }
 
     pub fn actor(&self) -> Result<Arc<dyn CudaActorHandle>, ThoError> {
         match &self.actor_handle {
             CudaActorHandleEnum::Local(handle) => Ok(Arc::clone(&handle) as Arc<dyn CudaActorHandle>),
-            CudaActorHandleEnum::Ipc(handle) =>  Ok(Arc::clone(&handle) as Arc<dyn CudaActorHandle>),
-            CudaActorHandleEnum::None => {
-                Err(ThoError::new("Dummy handle"))
-            }
+            CudaActorHandleEnum::Ipc(handle) => Ok(Arc::clone(&handle) as Arc<dyn CudaActorHandle>),
+            CudaActorHandleEnum::None => Err(ThoError::new("Dummy handle")),
         }
     }
 
-
-    pub fn device_idx(&self) -> usize { self.runner.cuda_gate().map_or(0, |gate| gate.device_idx()) }
-    pub fn runner(&self) -> &SyncStageRunner { &self.runner }
+    pub fn device_idx(&self) -> usize {
+        self.runner.cuda_gate().map_or(0, |gate| gate.device_idx())
+    }
+    pub fn runner(&self) -> &SyncStageRunner {
+        &self.runner
+    }
 }
 
 #[derive(Debug, Clone)]
 pub enum CudaActorHandleEnum {
     Local(Arc<CudaLocalActorHandle>),
     Ipc(Arc<CudaIPCActorHandle>),
-    None//dummy CPU
+    None, //dummy CPU
 }
 
 /// One command's identity and lifetime. Services can be shared deliberately,
@@ -131,7 +130,11 @@ impl Runtime {
         anyhow::ensure!(num_devices > 0, "runtime needs a CPU device");
         let gates: Vec<_> = (1..num_devices).map(|i| Arc::new(CudaActivityGate::new(i))).collect();
         let residency = Arc::new(ResidencyService::new(num_devices, false, gates.first().cloned()));
-        let failure = Arc::new(RuntimeFailure { shutting_down: AtomicBool::new(false), failure: tokio::sync::watch::channel(None).0, gates: gates.clone() });
+        let failure = Arc::new(RuntimeFailure {
+            shutting_down: AtomicBool::new(false),
+            failure: tokio::sync::watch::channel(None).0,
+            gates: gates.clone(),
+        });
         let mut devices = vec![DeviceExecutionCtx::cpu()];
         for gate in gates {
             let actor = Arc::new(CudaLocalActorHandle::new(Arc::clone(&gate))?);
@@ -141,10 +144,16 @@ impl Runtime {
 
             devices.push(DeviceExecutionCtx {
                 runner: Arc::new(SyncStageRunner::new_with_recovery(1024, recovery)),
-                actor_handle: handle_enum
+                actor_handle: handle_enum,
             });
         }
-        Ok(Arc::new(Self { devices, residency, failure, is_ipc: false, _arena_fd: None }))
+        Ok(Arc::new(Self {
+            devices,
+            residency,
+            failure,
+            is_ipc: false,
+            _arena_fd: None,
+        }))
     }
     async fn build_ipc(num_devices: usize, cuda_worker_args: Vec<String>) -> anyhow::Result<Arc<Self>> {
         anyhow::ensure!(num_devices > 0, "runtime needs a CPU device");
@@ -152,9 +161,7 @@ impl Runtime {
         // LibTorch's CPU allocator is process-wide. Install it once, then give
         // each runtime and actor its own descriptor instead of reinitializing it.
         static ARENA: OnceLock<Result<(), String>> = OnceLock::new();
-        if let Err(error) = ARENA.get_or_init(|| {
-            if unsafe { shared_arena_init(48 * 1024 * 1024 * 1024) } == 0 { Ok(()) } else { Err("shared_arena_init failed".into()) }
-        }) {
+        if let Err(error) = ARENA.get_or_init(|| if unsafe { shared_arena_init(48 * 1024 * 1024 * 1024) } == 0 { Ok(()) } else { Err("shared_arena_init failed".into()) }) {
             anyhow::bail!("{error}");
         }
 
@@ -168,7 +175,7 @@ impl Runtime {
         let failure = Arc::new(RuntimeFailure {
             shutting_down: AtomicBool::new(false),
             failure: tokio::sync::watch::channel(None).0,
-            gates: gates.clone()
+            gates: gates.clone(),
         });
         let mut devices = vec![DeviceExecutionCtx::cpu()];
         for gate in gates {
@@ -178,10 +185,17 @@ impl Runtime {
             let recovery = Self::recovery(Arc::clone(&gate), handle_enum.clone(), Arc::clone(&residency), Arc::clone(&failure));
 
             devices.push(DeviceExecutionCtx {
-                runner: Arc::new(SyncStageRunner::new_with_recovery(1024, recovery)), actor_handle: handle_enum
+                runner: Arc::new(SyncStageRunner::new_with_recovery(1024, recovery)),
+                actor_handle: handle_enum,
             });
         }
-        Ok(Arc::new(Self { devices, residency, failure, is_ipc: true, _arena_fd: Some(arena_fd) }))
+        Ok(Arc::new(Self {
+            devices,
+            residency,
+            failure,
+            is_ipc: true,
+            _arena_fd: Some(arena_fd),
+        }))
     }
 
     fn recovery(gate: Arc<CudaActivityGate>, actor: CudaActorHandleEnum, residency: Arc<ResidencyService>, failure: Arc<RuntimeFailure>) -> Arc<CudaRecoveryCoordinator> {
@@ -216,9 +230,13 @@ impl Runtime {
             if matches!(actor, CudaActorHandleEnum::Local(_)) {
                 Some(Arc::new(move |error| {
                     failure.shutting_down.store(true, Relaxed);
-                    for gate in &failure.gates { gate.fail_process(error.clone()); }
+                    for gate in &failure.gates {
+                        gate.fail_process(error.clone());
+                    }
                     failure.failure.send_if_modified(|current| {
-                        if current.is_some() { false } else {
+                        if current.is_some() {
+                            false
+                        } else {
                             *current = Some(error);
                             true
                         }
@@ -229,25 +247,45 @@ impl Runtime {
             },
         )
     }
-    pub fn is_shutting_down(&self) -> bool { self.failure.shutting_down.load(Relaxed) }
-    pub fn process_failure(&self) -> Option<ThoError> { self.failure.failure.borrow().clone() }
+    pub fn is_shutting_down(&self) -> bool {
+        self.failure.shutting_down.load(Relaxed)
+    }
+    pub fn process_failure(&self) -> Option<ThoError> {
+        self.failure.failure.borrow().clone()
+    }
     pub async fn wait_for_process_failure(&self) -> ThoError {
         let mut failure = self.failure.failure.subscribe();
         loop {
-            if let Some(error) = failure.borrow_and_update().clone() { return error; }
-            if failure.changed().await.is_err() { return ThoError::new("process failure notifier closed"); }
+            if let Some(error) = failure.borrow_and_update().clone() {
+                return error;
+            }
+            if failure.changed().await.is_err() {
+                return ThoError::new("process failure notifier closed");
+            }
         }
     }
-    pub fn local(num_devices: usize) -> anyhow::Result<Arc<Self>> { Self::build_local(num_devices) }
-    pub async fn ipc(num_devices: usize, worker_args: Vec<String>) -> anyhow::Result<Arc<Self>> { Self::build_ipc(num_devices, worker_args).await }
-    pub fn execution(&self, device: usize) -> DeviceExecutionCtx { self.devices[device].clone() }
-    pub fn residency(&self) -> Arc<ResidencyService> { Arc::clone(&self.residency) }
+    pub fn local(num_devices: usize) -> anyhow::Result<Arc<Self>> {
+        Self::build_local(num_devices)
+    }
+    pub async fn ipc(num_devices: usize, worker_args: Vec<String>) -> anyhow::Result<Arc<Self>> {
+        Self::build_ipc(num_devices, worker_args).await
+    }
+    pub fn execution(&self, device: usize) -> DeviceExecutionCtx {
+        self.devices[device].clone()
+    }
+    pub fn residency(&self) -> Arc<ResidencyService> {
+        Arc::clone(&self.residency)
+    }
     pub async fn shutdown(&self) {
-        if let Err(error) = self.residency.purger.shutdown().await { error!("purger shutdown failed: {error:#}"); }
+        if let Err(error) = self.residency.purger.shutdown().await {
+            error!("purger shutdown failed: {error:#}");
+        }
         self.failure.shutting_down.store(true, Relaxed);
         for device in &self.devices {
             if let Some(actor) = &device.ipc_actor().ok() {
-                if let Err(error) = actor.shutdown().await { error!("actor shutdown failed: {error:#}"); }
+                if let Err(error) = actor.shutdown().await {
+                    error!("actor shutdown failed: {error:#}");
+                }
             }
         }
     }
@@ -255,10 +293,21 @@ impl Runtime {
 
 impl ResidencyService {
     fn new(num_devices: usize, is_ipc: bool, gate: Option<Arc<CudaActivityGate>>) -> Self {
-        Self { managed: super::residency::ManagedResidency::new(num_devices), caches: Arc::new(CacheRegistry::default()), is_all_on_cpu: (0..num_devices).map(|_| AtomicBool::new(false)).collect(), cache_time: AtomicU64::new(0), purger: Arc::new(Purger::new(gate)), is_ipc }
+        Self {
+            managed: super::residency::ManagedResidency::new(num_devices),
+            caches: Arc::new(CacheRegistry::default()),
+            is_all_on_cpu: (0..num_devices).map(|_| AtomicBool::new(false)).collect(),
+            cache_time: AtomicU64::new(0),
+            purger: Arc::new(Purger::new(gate)),
+            is_ipc,
+        }
     }
-    pub fn managed(&self) -> Arc<super::residency::ManagedResidency> { Arc::clone(&self.managed) }
-    pub(crate) fn cleanup(&self) -> Arc<Purger> { Arc::clone(&self.purger) }
+    pub fn managed(&self) -> Arc<super::residency::ManagedResidency> {
+        Arc::clone(&self.managed)
+    }
+    pub(crate) fn cleanup(&self) -> Arc<Purger> {
+        Arc::clone(&self.purger)
+    }
     pub fn cache_registry(&self) -> Arc<CacheRegistry> {
         Arc::clone(&self.caches)
     }
@@ -291,11 +340,7 @@ impl ResidencyService {
     pub fn remove_cache(&self, key: &CacheKey) {
         debug!("ResidencyService::remove_cache: key={:?}", key);
 
-        assert!(
-            perf_log!(sync_write_lock!(self.caches.entries, "key={key:?}"))
-            .remove(key)
-            .is_some()
-        );
+        assert!(perf_log!(sync_write_lock!(self.caches.entries, "key={key:?}")).remove(key).is_some());
 
         debug!("ResidencyService::remove_cache: {:?} lock acquired/released, removed ", key);
     }
@@ -330,11 +375,7 @@ impl ResidencyService {
         let maps = self.caches_snapshot("GlobalCtx::debug_caches: timed out waiting for caches read lock");
         t!(self.debug_caches_snapshot(device_idx, descr, &maps)).await;
     }
-    pub async fn dump_all_to_cpu<'a>(
-        &'a self,
-        tho_device_idx: usize,
-        descr: &str,
-    ) -> Result<(), ThoError> {
+    pub async fn dump_all_to_cpu<'a>(&'a self, tho_device_idx: usize, descr: &str) -> Result<(), ThoError> {
         assert_ne!(tho_device_idx, 0);
 
         debug!("ResidencyService::dump_all_to_cpu: tho_device_idx={tho_device_idx} descr={descr}");
@@ -372,11 +413,7 @@ impl ResidencyService {
 
         Ok(())
     }
-    pub async fn drop_data_on_device<'a>(
-        &'a self,
-        tho_device_idx: usize,
-        descr: &str,
-    ) -> Result<(), ThoError> {
+    pub async fn drop_data_on_device<'a>(&'a self, tho_device_idx: usize, descr: &str) -> Result<(), ThoError> {
         assert_ne!(tho_device_idx, 0);
         info!("ResidencyService::drop_data_on_device: tho_device_idx={tho_device_idx} descr={descr}");
         let maps = self.caches_snapshot("GlobalCtx::drop_data_on_device: timed out waiting for caches read lock");
@@ -396,26 +433,31 @@ impl ResidencyService {
                     warn!("ResidencyService::drop_data_on_device: type_name={type_name} descr={descr} failed with e={e:?}");
                     // Finish invalidating the other caches, but do not resume
                     // work with references whose invalidation failed.
-                    if failure.is_none() { failure = Some(e.context(format!("invalidating device {tho_device_idx} cache {type_name}"))); }
+                    if failure.is_none() {
+                        failure = Some(e.context(format!("invalidating device {tho_device_idx} cache {type_name}")));
+                    }
                 }
             }
 
             collect_eta_record_completion(dump_eta_guard.id());
         }
 
-        if let Err(error) = self.managed.drop_device(tho_device_idx).await { failure.get_or_insert(error); }
-        if let Some(error) = failure { return Err(error); }
+        if let Err(error) = self.managed.drop_device(tho_device_idx).await {
+            failure.get_or_insert(error);
+        }
+        if let Some(error) = failure {
+            return Err(error);
+        }
         self.is_all_on_cpu[tho_device_idx].store(true, Relaxed);
         info!("ResidencyService::drop_data_on_device: tho_device_idx={tho_device_idx} descr={descr} done");
 
         Ok(())
     }
-    pub async fn purge_cpu(&self, retain_last: u64) {//retain_last - caches younger than current cache time - retain_last should not be purged
+    pub async fn purge_cpu(&self, retain_last: u64) {
+        //retain_last - caches younger than current cache time - retain_last should not be purged
         debug!("ResidencyService::purge_cpu: retain_last={retain_last}");
 
-
         let purge_until = self.cache_time.load(Relaxed).saturating_sub(retain_last);
-
 
         if purge_until > 0 {
             let maps = self.caches_snapshot("GlobalCtx::purge_cpu: timed out waiting for caches read lock");
@@ -459,7 +501,7 @@ impl ResidencyService {
         self.is_all_on_cpu[device_idx].store(all_on_cpu, Relaxed);
         all_on_cpu
     }
-    pub fn run_purge_gpu(&self, closures: Vec<Box<dyn Fn()->BoxFuture<'static, Result<(), ThoError>> + Send + Sync>>) ->Result<(), ThoError>{
+    pub fn run_purge_gpu(&self, closures: Vec<Box<dyn Fn() -> BoxFuture<'static, Result<(), ThoError>> + Send + Sync>>) -> Result<(), ThoError> {
         self.purger.run_purge_gpu(closures)
     }
 }
@@ -471,7 +513,7 @@ static GLOBAL_CTX: OnceLock<GlobalCtx> = OnceLock::new();
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CacheKey {
     Typed(TypeId),
-    Named(Arc<str>),//for StageWithState
+    Named(Arc<str>), //for StageWithState
 }
 
 impl CacheKey {
@@ -548,9 +590,7 @@ impl RegisteredCacheHandle {
     }
 
     pub async fn lock_exclusive(&self) -> tokio::sync::OwnedRwLockWriteGuard<()> {
-        async_perf_log!(
-            async_write_owned_lock!(Arc::clone(&self.gate))
-        )
+        async_perf_log!(async_write_owned_lock!(Arc::clone(&self.gate)))
     }
 
     #[cfg(any(test, feature = "mock_global_ctx"))]
@@ -564,21 +604,24 @@ impl RegisteredCacheHandle {
 
 #[cfg_attr(any(test, feature = "mock_global_ctx"), automock)]
 impl GlobalCtx {
-
     // TODO num_devices is to be replaced with Cuda devices list kept in a static const.
     // Currently it's assumed that there is single Cuda(0) device and first device is always CPU. So if num_devices==2 then devices would be [Cpu, Cuda(0)]
-    fn new(num_devices: usize) -> anyhow::Result<Self> { Ok(Self { runtime: Runtime::local(num_devices)? }) }
-    async fn new_ipc(num_devices: usize, args: Vec<String>) -> anyhow::Result<Self> { Ok(Self { runtime: Runtime::ipc(num_devices, args).await? }) }
+    fn new(num_devices: usize) -> anyhow::Result<Self> {
+        Ok(Self { runtime: Runtime::local(num_devices)? })
+    }
+    async fn new_ipc(num_devices: usize, args: Vec<String>) -> anyhow::Result<Self> {
+        Ok(Self { runtime: Runtime::ipc(num_devices, args).await? })
+    }
 
-
-
-
-
-
-
-    pub fn managed_residency(&self) -> Arc<super::residency::ManagedResidency> { self.runtime.residency.managed() }
-    pub fn runtime(&self) -> Arc<Runtime> { Arc::clone(&self.runtime) }
-    pub fn execution(&self, device: usize) -> DeviceExecutionCtx { self.runtime.execution(device) }
+    pub fn managed_residency(&self) -> Arc<super::residency::ManagedResidency> {
+        self.runtime.residency.managed()
+    }
+    pub fn runtime(&self) -> Arc<Runtime> {
+        Arc::clone(&self.runtime)
+    }
+    pub fn execution(&self, device: usize) -> DeviceExecutionCtx {
+        self.runtime.execution(device)
+    }
 
     /// Instance caches use the same gate as dispatch when creating device state.
     pub fn cuda_activity_gate(&self, tho_device_idx: usize) -> Option<Arc<CudaActivityGate>> {
@@ -606,7 +649,9 @@ impl GlobalCtx {
         Ok(())
     }
 
-    pub fn run_purge_gpu(&self, closures: Vec<Box<dyn Fn()->BoxFuture<'static, Result<(), ThoError>> + Send + Sync>>) ->Result<(), ThoError>{ self.runtime.residency.run_purge_gpu(closures) }
+    pub fn run_purge_gpu(&self, closures: Vec<Box<dyn Fn() -> BoxFuture<'static, Result<(), ThoError>> + Send + Sync>>) -> Result<(), ThoError> {
+        self.runtime.residency.run_purge_gpu(closures)
+    }
 
     ///num_devices: number of devices - CPU + GPU count
     pub fn init_devices(num_devices: usize) -> anyhow::Result<&'static GlobalCtx> {
@@ -620,7 +665,7 @@ impl GlobalCtx {
     }
 
     ///num_devices: number of devices - CPU + GPU count
-    pub async fn init_devices_ipc(num_devices: usize/*TODO replace with DeviceInitStruct vec*/, cuda_worker_args: Vec<String>/*TODO move to device init struct*/) -> anyhow::Result<&'static GlobalCtx> {
+    pub async fn init_devices_ipc(num_devices: usize /*TODO replace with DeviceInitStruct vec*/, cuda_worker_args: Vec<String> /*TODO move to device init struct*/) -> anyhow::Result<&'static GlobalCtx> {
         debug!("GlobalCtx::init_devices: num_devices={num_devices}");
 
         if GLOBAL_CTX.set(GlobalCtx::new_ipc(num_devices, cuda_worker_args).await?).is_err() {
@@ -630,26 +675,32 @@ impl GlobalCtx {
         Ok(Self::global())
     }
 
+    pub fn cache_registry(&self) -> Arc<CacheRegistry> {
+        self.runtime.residency.cache_registry()
+    }
 
-    pub fn cache_registry(&self) -> Arc<CacheRegistry> { self.runtime.residency.cache_registry() }
-
-    pub fn register_cache(&self, cache: (String, Arc<dyn CachePurger>)) -> RegisteredCacheHandle { self.runtime.residency.register_cache(cache) }
+    pub fn register_cache(&self, cache: (String, Arc<dyn CachePurger>)) -> RegisteredCacheHandle {
+        self.runtime.residency.register_cache(cache)
+    }
 
     #[cfg(test)]
-    fn caches_snapshot(&self, descr: &'static str) -> CacheSnapshot { self.runtime.residency.caches_snapshot(descr) }
+    fn caches_snapshot(&self, descr: &'static str) -> CacheSnapshot {
+        self.runtime.residency.caches_snapshot(descr)
+    }
 
-
-    pub fn remove_cache(&self, key: &CacheKey) { self.runtime.residency.remove_cache(key) }
+    pub fn remove_cache(&self, key: &CacheKey) {
+        self.runtime.residency.remove_cache(key)
+    }
 
     #[inline]
     pub fn global() -> &'static Self {
         GLOBAL_CTX.get().expect("call `init_devices` first")
     }
 
-    pub fn is_installed() -> bool {//used to check if it's not worker in KeyHolder::drop, replace with KeyHolder::is_main bool field?
+    pub fn is_installed() -> bool {
+        //used to check if it's not worker in KeyHolder::drop, replace with KeyHolder::is_main bool field?
         GLOBAL_CTX.get().is_some()
     }
-
 
     #[cfg(any(test, feature = "mock_global_ctx"))]
     pub fn real_global() -> &'static GlobalCtx {
@@ -661,48 +712,55 @@ impl GlobalCtx {
     }
 
     #[cfg(any(test, feature = "mock_global_ctx"))]
-    pub fn is_all_on_cpu(&self, device_idx: usize) -> bool { self.runtime.residency.is_all_on_cpu(device_idx) }
+    pub fn is_all_on_cpu(&self, device_idx: usize) -> bool {
+        self.runtime.residency.is_all_on_cpu(device_idx)
+    }
 
-    pub async fn reset_all_on_cpu(&self, device_idx: usize) { self.runtime.residency.reset_all_on_cpu(device_idx).await }
+    pub async fn reset_all_on_cpu(&self, device_idx: usize) {
+        self.runtime.residency.reset_all_on_cpu(device_idx).await
+    }
 
-
-
-    pub async fn debug_caches(&self, device_idx: usize, descr: &str) { self.runtime.residency.debug_caches(device_idx, descr).await }
+    pub async fn debug_caches(&self, device_idx: usize, descr: &str) {
+        self.runtime.residency.debug_caches(device_idx, descr).await
+    }
 
     /// Keep only the listed output IDs in each identified cache on the device.
-    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="GlobalCtx::dump_all_to_cpu"))]
-    pub async fn dump_all_to_cpu<'a>(
-        &'a self,
-        tho_device_idx: usize,
-        descr: &str,
-    ) -> Result<(), ThoError> { self.runtime.residency.dump_all_to_cpu(tho_device_idx, descr).await }
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "GlobalCtx::dump_all_to_cpu"))]
+    pub async fn dump_all_to_cpu<'a>(&'a self, tho_device_idx: usize, descr: &str) -> Result<(), ThoError> {
+        self.runtime.residency.dump_all_to_cpu(tho_device_idx, descr).await
+    }
 
-    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="GlobalCtx::dump_all_to_cpu"))]
-    pub async fn drop_data_on_device<'a>(
-        &'a self,
-        tho_device_idx: usize,
-        descr: &str,
-    ) -> Result<(), ThoError> { self.runtime.residency.drop_data_on_device(tho_device_idx, descr).await }
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "GlobalCtx::dump_all_to_cpu"))]
+    pub async fn drop_data_on_device<'a>(&'a self, tho_device_idx: usize, descr: &str) -> Result<(), ThoError> {
+        self.runtime.residency.drop_data_on_device(tho_device_idx, descr).await
+    }
 
+    pub async fn purge_cpu(&self, retain_last: u64) {
+        self.runtime.residency.purge_cpu(retain_last).await
+    }
 
-    pub async fn purge_cpu(&self, retain_last: u64) { self.runtime.residency.purge_cpu(retain_last).await }
+    pub fn do_age(&self) {
+        self.runtime.residency.do_age()
+    }
 
-    pub fn do_age(&self) { self.runtime.residency.do_age() }
+    pub fn cache_age(&self) -> u64 {
+        self.runtime.residency.cache_age()
+    }
 
-    pub fn cache_age(&self) -> u64 { self.runtime.residency.cache_age() }
-
-
-    pub async fn shutdown(&self) { self.runtime.shutdown().await; }
+    pub async fn shutdown(&self) {
+        self.runtime.shutdown().await;
+    }
 
     pub fn process_failure() -> Option<ThoError> {
         GLOBAL_CTX.get().and_then(|ctx| ctx.runtime.process_failure())
     }
 
-    pub async fn wait_for_process_failure() -> ThoError { Self::global().runtime.wait_for_process_failure().await }
-
+    pub async fn wait_for_process_failure() -> ThoError {
+        Self::global().runtime.wait_for_process_failure().await
+    }
 
     #[inline]
-    pub fn is_shutting_down()->bool {
+    pub fn is_shutting_down() -> bool {
         GLOBAL_CTX.get().is_some_and(|ctx| ctx.runtime.failure.shutting_down.load(Relaxed))
     }
 
@@ -713,35 +771,36 @@ impl GlobalCtx {
 }
 
 impl GlobalCtx {
-
     // Forced inspection must yield while waiting for cache locks, including on current-thread runtimes.
-    pub async fn is_all_on_cpu_force_check(&self, device_idx: usize) -> bool { self.runtime.residency.is_all_on_cpu_force_check(device_idx).await }
+    pub async fn is_all_on_cpu_force_check(&self, device_idx: usize) -> bool {
+        self.runtime.residency.is_all_on_cpu_force_check(device_idx).await
+    }
 
     pub fn get_runner(&self, tho_device: usize) -> &SyncStageRunner {
         debug!("GlobalCtx::get_executor: tho_device={tho_device} self.runtime.devices.len={}", self.runtime.devices.len());
         &self.runtime.devices[tho_device].runner
     }
 
-    pub fn cuda_actor<D:Into<ThoDevice>+ 'static>(&self, device:D)-> Arc<dyn CudaActorHandle> {
-        let device:ThoDevice = device.into();
+    pub fn cuda_actor<D: Into<ThoDevice> + 'static>(&self, device: D) -> Arc<dyn CudaActorHandle> {
+        let device: ThoDevice = device.into();
         self.runtime.devices.get(device.tho_device_idx()).and_then(|device| device.actor().ok()).expect(&format!("No CudaActor for device={device:?}"))
     }
 }
 
 #[cfg(any(test, feature = "mock_global_ctx"))]
 pub mod mock_global_ctx {
-    use std::fmt::{Debug, Formatter};
-    use crate::runner::syn_stage_runner::SyncStageRunner;
     use crate::runner::global_ctx::MockGlobalCtx;
     use crate::runner::global_ctx::{GlobalCtx, RegisteredCacheHandle};
+    use crate::runner::syn_stage_runner::SyncStageRunner;
     use log::debug;
+    use std::fmt::{Debug, Formatter};
     use tokio::task::block_in_place;
 
     #[derive(Clone, Copy, Debug)]
     pub enum AcquireBehavior {
         Grant,
         Deny,
-        Boom(&'static str)
+        Boom(&'static str),
     }
 
     #[derive(Debug)]
@@ -766,13 +825,13 @@ pub mod mock_global_ctx {
     }
 
     #[cfg(any(test, feature = "mock_global_ctx"))]
-    pub trait GlobalCtxMockGuard:Debug {}
+    pub trait GlobalCtxMockGuard: Debug {}
 
     #[cfg(any(test, feature = "mock_global_ctx"))]
     struct GlobalCtxMockContexts<G, S, I> {
         _global_context: G,
         _shutdown_context: S,
-        _is_installed_ctx:I
+        _is_installed_ctx: I,
     }
 
     #[cfg(any(test, feature = "mock_global_ctx"))]
@@ -784,20 +843,17 @@ pub mod mock_global_ctx {
         }
     }
 
-
     #[cfg(any(test, feature = "mock_global_ctx"))]
     pub struct MockGlobalCtxBuilder {
         mock: MockGlobalCtx,
-        real: Option<&'static GlobalCtx>
+        real: Option<&'static GlobalCtx>,
     }
 
     #[cfg(any(test, feature = "mock_global_ctx"))]
     impl MockGlobalCtxBuilder {
         pub fn with_reset_all_on_cpu(mut self) -> Self {
             if let Some(real) = self.real {
-
                 let _ = self.mock.expect_reset_all_on_cpu().returning({
-
                     move |device_idx| {
                         tokio::runtime::Handle::current().block_on(real.reset_all_on_cpu(device_idx));
                     }
@@ -810,29 +866,18 @@ pub mod mock_global_ctx {
         }
 
         pub fn with_age(mut self, out: u64) -> Self {
-
-
             if let Some(real) = self.real {
-
                 self.mock.expect_do_age().returning({
-
                     move || {
                         real.do_age();
                     }
                 });
 
-                self.mock.expect_cache_age().returning({
-
-                    move || {
-                        real.cache_age()
-                    }
-                });
-
+                self.mock.expect_cache_age().returning(move || real.cache_age());
             } else {
                 self.mock.expect_do_age();
                 self.mock.expect_cache_age().return_const(out);
             }
-
 
             self
         }
@@ -841,9 +886,7 @@ pub mod mock_global_ctx {
             let managed = self.real.map(|real| real.managed_residency()).unwrap_or_else(|| super::super::residency::ManagedResidency::new(out));
             self.mock.expect_managed_residency().returning(move || std::sync::Arc::clone(&managed));
             if let Some(real) = self.real {
-                self.mock.expect_device_count().returning(move || {
-                    real.device_count()
-                });
+                self.mock.expect_device_count().returning(move || real.device_count());
             } else {
                 self.mock.expect_device_count().return_const(out);
             }
@@ -862,9 +905,7 @@ pub mod mock_global_ctx {
             let registry = self.real.map(|real| real.cache_registry()).unwrap_or_else(|| std::sync::Arc::new(super::CacheRegistry::default()));
             self.mock.expect_cache_registry().returning(move || std::sync::Arc::clone(&registry));
             if let Some(real) = self.real {
-                self.mock.expect_register_cache().returning({
-                    move |cache| real.register_cache(cache)
-                });
+                self.mock.expect_register_cache().returning(move |cache| real.register_cache(cache));
             } else {
                 self.mock.expect_register_cache().returning(|cache| RegisteredCacheHandle::for_tests(cache.0));
             }
@@ -874,9 +915,7 @@ pub mod mock_global_ctx {
 
         pub fn with_remove_cache(mut self) -> Self {
             if let Some(real) = self.real {
-                self.mock.expect_remove_cache().returning({
-                    move |key| real.remove_cache(key)
-                });
+                self.mock.expect_remove_cache().returning(move |key| real.remove_cache(key));
             } else {
                 self.mock.expect_remove_cache();
             }
@@ -912,13 +951,7 @@ pub mod mock_global_ctx {
 
         pub fn with_dump_all_to_cpu(mut self) -> Self {
             if let Some(real) = self.real {
-                let _ = self.mock.expect_dump_all_to_cpu().returning({
-                    move |device_idx, descr| {
-                        block_in_place(|| {
-                            tokio::runtime::Handle::current().block_on(real.dump_all_to_cpu(device_idx, descr))
-                        })
-                    }
-                });
+                let _ = self.mock.expect_dump_all_to_cpu().returning(move |device_idx, descr| block_in_place(|| tokio::runtime::Handle::current().block_on(real.dump_all_to_cpu(device_idx, descr))));
             } else {
                 let _ = self.mock.expect_dump_all_to_cpu();
             }
@@ -938,11 +971,7 @@ pub mod mock_global_ctx {
 
         pub fn with_run_purge_gpu(mut self) -> Self {
             if let Some(real) = self.real {
-                self.mock.expect_run_purge_gpu().times(0..).returning({
-                    move |closures| {
-                        real.run_purge_gpu(closures)
-                    }
-                });
+                self.mock.expect_run_purge_gpu().times(0..).returning(move |closures| real.run_purge_gpu(closures));
             } else {
                 self.mock.expect_run_purge_gpu().times(0..).returning(|_closures| Ok(()));
             }
@@ -950,13 +979,9 @@ pub mod mock_global_ctx {
             self
         }
 
-        pub fn with_is_ipc(mut self, is_ipc:bool) -> Self {
+        pub fn with_is_ipc(mut self, is_ipc: bool) -> Self {
             if let Some(real) = self.real {
-                self.mock.expect_is_ipc().times(0..).returning({
-                    move || {
-                        real.runtime.is_ipc
-                    }
-                });
+                self.mock.expect_is_ipc().times(0..).returning(move || real.runtime.is_ipc);
             } else {
                 let _ = self.mock.expect_is_ipc().times(0..).returning(move || is_ipc);
             }
@@ -964,16 +989,11 @@ pub mod mock_global_ctx {
             self
         }
 
-        pub fn with_is_all_on_cpu(mut self, is_all_on_cpu:bool) -> Self {
+        pub fn with_is_all_on_cpu(mut self, is_all_on_cpu: bool) -> Self {
             if let Some(real) = self.real {
-                self.mock.expect_is_all_on_cpu().times(0..).returning({
-                    move |device_idx| {
-                        real.is_all_on_cpu(device_idx)
-                    }
-                });
+                self.mock.expect_is_all_on_cpu().times(0..).returning(move |device_idx| real.is_all_on_cpu(device_idx));
             } else {
-                let _ = self.mock.expect_is_all_on_cpu().times(0..)
-                    .returning(move |_device_idx| is_all_on_cpu);
+                let _ = self.mock.expect_is_all_on_cpu().times(0..).returning(move |_device_idx| is_all_on_cpu);
             }
 
             self
@@ -984,24 +1004,15 @@ pub mod mock_global_ctx {
             if let Some(real) = self.real {
                 self.mock.expect_debug_caches().times(0..).returning({
                     move |device_idx, descr| {
-                        block_in_place(|| {
-                            tokio::runtime::Handle::current().block_on(
-                                real.debug_caches(device_idx, descr)
-                        )});
-
+                        block_in_place(|| tokio::runtime::Handle::current().block_on(real.debug_caches(device_idx, descr)));
                     }
                 });
             } else {
-                let _ = self.mock.expect_debug_caches().times(0..)
-                    .returning(move |_, _| {
-                        ()
-                    });
+                let _ = self.mock.expect_debug_caches().times(0..).returning(move |_, _| ());
             }
 
             self
         }
-
-
 
         pub fn finish(self) -> MockGlobalCtx {
             self.mock
@@ -1011,16 +1022,9 @@ pub mod mock_global_ctx {
             build_with_params_inner(self, MockGlobalCtxBuildParams::default(), true)
         }
 
-
-
         #[cfg(any(test, feature = "mock_global_ctx"))]
-        pub fn install_global_ctx_mock(
-            use_real_ctx: bool,
-            is_ipc: bool,
-        ) -> impl GlobalCtxMockGuard {
-            use crate::runner::global_ctx::{
-                MockGlobalCtx, mock_global_ctx,
-            };
+        pub fn install_global_ctx_mock(use_real_ctx: bool, is_ipc: bool) -> impl GlobalCtxMockGuard {
+            use crate::runner::global_ctx::{MockGlobalCtx, mock_global_ctx};
 
             debug!("install_global_ctx_mock: use_real_ctx={use_real_ctx} is_ipc={is_ipc}");
             let is_installed_ctx = MockGlobalCtx::is_installed_context();
@@ -1044,10 +1048,7 @@ pub mod mock_global_ctx {
             } else {
                 mock_global_ctx::set_manual_method_real_ctx(None);
 
-                Box::leak(Box::new(build_with_params(
-                    MockGlobalCtxBuildParams::default(),
-                    is_ipc,
-                )))
+                Box::leak(Box::new(build_with_params(MockGlobalCtxBuildParams::default(), is_ipc)))
             };
 
             global_ctx.expect().return_const(global);
@@ -1055,7 +1056,7 @@ pub mod mock_global_ctx {
             GlobalCtxMockContexts {
                 _global_context: global_ctx,
                 _shutdown_context: shutdown_ctx,
-                _is_installed_ctx: is_installed_ctx
+                _is_installed_ctx: is_installed_ctx,
             }
         }
     }
@@ -1084,20 +1085,12 @@ pub mod mock_global_ctx {
     }
 
     pub fn build() -> MockGlobalCtxBuilder {
-        MockGlobalCtxBuilder {
-            mock: MockGlobalCtx::default(),
-            real: None
-        }
+        MockGlobalCtxBuilder { mock: MockGlobalCtx::default(), real: None }
     }
 
     pub fn from_real(global_ctx: &'static GlobalCtx) -> MockGlobalCtxBuilder {
-
-        MockGlobalCtxBuilder {
-            mock: MockGlobalCtx::default(),
-            real: Some(global_ctx)
-        }
+        MockGlobalCtxBuilder { mock: MockGlobalCtx::default(), real: Some(global_ctx) }
     }
-
 
     pub fn build_default() -> MockGlobalCtx {
         build_with_params(MockGlobalCtxBuildParams::default(), false)
@@ -1119,7 +1112,9 @@ impl MockGlobalCtx {
     pub fn get_runner(&self, device: usize) -> &SyncStageRunner {
         // Mockall owns values returned by reference. Delegate explicitly when
         // using real actors so stages and copies share the real device gate.
-        if let Some(real) = mock_global_ctx::manual_method_real_ctx() { return real.get_runner(device); }
+        if let Some(real) = mock_global_ctx::manual_method_real_ctx() {
+            return real.get_runner(device);
+        }
         self.mock_runner(device)
     }
 
@@ -1127,30 +1122,33 @@ impl MockGlobalCtx {
         // Real delegation remains asynchronous instead of blocking in a mock callback.
         if let Some(real) = mock_global_ctx::manual_method_real_ctx() {
             real.is_all_on_cpu_force_check(device_idx).await
-        } else { self.is_all_on_cpu(device_idx) }
+        } else {
+            self.is_all_on_cpu(device_idx)
+        }
     }
 
-    pub fn cuda_actor<D:Into<ThoDevice>+ 'static>(&self, device:D)-> Arc<dyn CudaActorHandle> {
+    pub fn cuda_actor<D: Into<ThoDevice> + 'static>(&self, device: D) -> Arc<dyn CudaActorHandle> {
         // Tests using real CUDA actors must install a runtime that owns every requested device.
         mock_global_ctx::manual_method_real_ctx().expect("configure a real runtime for CUDA actor access").cuda_actor(device)
     }
-
-
 }
 
 #[cfg(test)]
 mod tests {
-    use thoosa_shared::CopyToDevice;
-    use crate::tch_error::tch_result;
     use crate as thoosa_common;
     use crate::dims::AnyDims;
+    use crate::ipc::cuda_wokrer::CudaWorker;
+    use crate::ipc::tests::run_ipc_test;
     use crate::runner::common::cachable::{DevicesWrap, SelectRef};
     use crate::runner::global_ctx::GlobalCtx;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use crate::runner::run_ctx::RunCtxImpl;
     use crate::runner::tmp_cache::TmpCached;
+    use crate::tch_error::tch_result;
+    use crate::tho_device::ThoDevice;
     use crate::tho_tensor::ThoTensor;
-    use futures_util::{FutureExt};
+    use crate::ws::mock_ws_simp;
+    use futures_util::FutureExt;
     use log::debug;
     use parking_lot::RwLock;
     use std::collections::HashMap;
@@ -1160,16 +1158,13 @@ mod tests {
     use std::time::Duration;
     use tch::Tensor;
     use tch::kind::FLOAT_CPU;
+    use thoosa_shared::CopyToDevice;
     use thoosa_shared::ThoError;
     use thoosa_shared::traits::RangeSelector;
     use thoosa_shared::traits::RunCtx;
-    use crate::ipc::cuda_wokrer::CudaWorker;
-    use crate::ipc::tests::run_ipc_test;
-    use crate::tho_device::ThoDevice;
-    use crate::ws::mock_ws_simp;
 
-    use thoosa_shared::comp_id::SynKey;
     use crate::runner::purge::CachePurger;
+    use thoosa_shared::comp_id::SynKey;
 
     mockall::mock! {
         #[derive(Debug)]
@@ -1202,7 +1197,13 @@ mod tests {
         let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let mut ctx = RunCtxImpl::new_in(&second, 0, "owned runtime");
         let completed = Arc::clone(&done);
-        ctx.add_purge_gpu_closure(Box::new(move || { let completed = Arc::clone(&completed); Box::pin(async move { completed.store(true, std::sync::atomic::Ordering::Relaxed); Ok(()) }) }));
+        ctx.add_purge_gpu_closure(Box::new(move || {
+            let completed = Arc::clone(&completed);
+            Box::pin(async move {
+                completed.store(true, std::sync::atomic::Ordering::Relaxed);
+                Ok(())
+            })
+        }));
         drop(ctx);
         second.shutdown().await;
         assert!(done.load(std::sync::atomic::Ordering::Relaxed));
@@ -1223,7 +1224,8 @@ mod tests {
                 assert!(!owner.is_shutting_down(), "accepted cleanup must drain before device teardown");
                 completed.store(true, std::sync::atomic::Ordering::SeqCst);
                 Ok(())
-            }.boxed()
+            }
+            .boxed()
         })])?;
         tokio::time::timeout(Duration::from_secs(5), runtime.shutdown()).await?;
         assert!(completed.load(std::sync::atomic::Ordering::SeqCst));
@@ -1260,11 +1262,15 @@ mod tests {
 
     impl<D: crate::dims::Dims + 'static, const TAG: u8> thoosa_shared::traits::AsyncStage for GenericCacheStage<D, TAG> {
         // This cache-identity fixture is an identity stage when executed.
-        async fn run(self: Arc<Self>, input: Self::In<'static>, _ctx: Self::Ctx) -> Result<Self::Out, ThoError> { Ok(input) }
+        async fn run(self: Arc<Self>, input: Self::In<'static>, _ctx: Self::Ctx) -> Result<Self::Out, ThoError> {
+            Ok(input)
+        }
     }
 
     impl<D: crate::dims::Dims + 'static, const TAG: u8> thoosa_shared::traits::OutId for GenericCacheStage<D, TAG> {
-        fn out_id<'a>(&self, input_id: &SynKey) -> SynKey { input_id.clone() }
+        fn out_id<'a>(&self, input_id: &SynKey) -> SynKey {
+            input_id.clone()
+        }
     }
 
     #[tokio::test]
@@ -1291,10 +1297,14 @@ mod tests {
         let registry = super::CacheRegistry::default();
         let barrier = std::sync::Barrier::new(16);
         let maps = std::thread::scope(|scope| {
-            let handles: Vec<_> = (0..16).map(|_| scope.spawn(|| {
-                barrier.wait();
-                registry.cache_for::<GenericCacheStage<AnyDims, 0>>()
-            })).collect();
+            let handles: Vec<_> = (0..16)
+                .map(|_| {
+                    scope.spawn(|| {
+                        barrier.wait();
+                        registry.cache_for::<GenericCacheStage<AnyDims, 0>>()
+                    })
+                })
+                .collect();
             handles.into_iter().map(|handle| handle.join().unwrap()).collect::<Result<Vec<_>, _>>()
         })?;
         assert!(maps.iter().all(|map| Arc::ptr_eq(map, &maps[0])));
@@ -1351,7 +1361,9 @@ mod tests {
         let runtime = GlobalCtx::new(1)?;
         let map = Arc::new(crate::runner::common::cachable::StageCache::<GenericCacheStage<AnyDims, 0>>::new());
         let handle = runtime.register_cache((format!("temporary_{}", 42), map));
-        let super::CacheKey::Named(name) = handle.key() else { panic!("expected a named cache"); };
+        let super::CacheKey::Named(name) = handle.key() else {
+            panic!("expected a named cache");
+        };
         let weak_name = Arc::downgrade(name);
         let snapshot = runtime.caches_snapshot("owned name lifetime");
         assert!(Arc::ptr_eq(&snapshot[0].1.gate, &handle.gate));
@@ -1368,7 +1380,7 @@ mod tests {
 
     async fn check_handle_leases() -> Result<(), ThoError> {
         use crate::runner::common::cachable::{Cached, StageCache};
-        use thoosa_shared::traits::{Named};
+        use thoosa_shared::traits::Named;
         type First = GenericCacheStage<AnyDims, 0>;
         type Second = GenericCacheStage<AnyDims, 1>;
 
@@ -1416,11 +1428,15 @@ mod tests {
         for (loader, expected) in [(single, 0), (chained, 1)] {
             let output = Arc::clone(&loader).run_cached(outputs[0].clone(), ctx.branch(false)).await?;
             assert!(Arc::ptr_eq(&output, &outputs[expected]));
-            for output in &outputs { drop(output.load_from_any_device_(1).await?); }
+            for output in &outputs {
+                drop(output.load_from_any_device_(1).await?);
+            }
             // Downstream tensor stages only see this wrapper, not its producer.
             let _lease = output.protect(1);
             runtime.dump_all_to_cpu(1, "adapter cache exclusion").await?;
-            for (index, output) in outputs.iter().enumerate() { assert_eq!(output.is_on_device(1), index == expected); }
+            for (index, output) in outputs.iter().enumerate() {
+                assert_eq!(output.is_on_device(1), index == expected);
+            }
         }
 
         drop(outputs[1].load_from_any_device_(1).await?);
@@ -1468,7 +1484,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_mock_execution_contexts_are_per_device() {
-        use super::mock_global_ctx::{build_with_params, MockGlobalCtxBuildParams};
+        use super::mock_global_ctx::{MockGlobalCtxBuildParams, build_with_params};
         let mock = build_with_params(MockGlobalCtxBuildParams { device_count: 3, ..Default::default() }, false);
         assert!(mock.cuda_activity_gate(0).is_none());
         assert!(mock.get_runner(0).cuda_gate().is_none());
@@ -1487,15 +1503,13 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-    async fn test_device_reset_local() -> Result<(), ThoError>{
+    async fn test_device_reset_local() -> Result<(), ThoError> {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
 
-
         GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
-
 
         do_test_device_reset().await?;
 
@@ -1529,7 +1543,6 @@ mod tests {
 
         GlobalCtx::global().dump_all_to_cpu(1, "test").await?;
 
-
         cuda_actor.restart().await?;
         assert_eq!(gate.device_generation().0, generation.0 + 1);
         assert!(GlobalCtx::process_failure().is_none(), "healthy maintenance must not signal terminal local failure");
@@ -1555,20 +1568,11 @@ mod tests {
         run_ipc_test(
             module_path!(),
             async {
-
                 do_test_device_reset().await?;
 
                 Ok(())
             },
-            async |sock_path: OsString| {
-                CudaWorker::run_worker(
-                    sock_path,
-                    &ws,
-                    HashMap::new(),
-                    ThoDevice::from(1usize),
-                ).await
-            },
+            async |sock_path: OsString| CudaWorker::run_worker(sock_path, &ws, HashMap::new(), ThoDevice::from(1usize)).await,
         )
     }
-
 }

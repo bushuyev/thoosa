@@ -1,14 +1,13 @@
 #![allow(unused_parens)]
 #![allow(async_fn_in_trait)]
 
-use std::backtrace::Backtrace;
 use crate as thoosa_common;
+use std::backtrace::Backtrace;
 use std::borrow::Borrow;
 
 use mockall_double::double;
 #[double]
 use thoosa_common::runner::global_ctx::GlobalCtx;
-
 
 use async_trait::async_trait;
 use dashmap::{DashMap, Entry};
@@ -17,19 +16,19 @@ use futures_util::future::{BoxFuture, Shared};
 use log::{debug, trace, warn};
 
 use crate::data_with_extra::DataWithExtra;
+use crate::runner::residency::{ManagedResidency, Registration, ResidencyLease};
 use parking_lot::Mutex;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::fmt::Debug;
 use std::collections::{HashMap, HashSet};
-use crate::runner::residency::{ManagedResidency, Registration, ResidencyLease};
+use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use thoosa_shared::n_trace_line;
+use thoosa_common::runner::sync_stage::ConsumeResult;
 use thoosa_shared::ThoError;
 use thoosa_shared::applicables_runner::{Input, Output};
+use thoosa_shared::n_trace_line;
 use thoosa_shared::tracked_await::t;
-use thoosa_common::runner::sync_stage::ConsumeResult;
 use thoosa_shared::traits::{AsyncStage, Stage, WithId};
 use thoosa_shared::traits::{CachableIdTr, Data, Named, OutId, RunCtx, Select, ThoSelector};
 use thoosa_shared::{CopyToDevice, perf_log, sync_mutex_lock, sync_read_lock, sync_write_lock};
@@ -52,7 +51,6 @@ where
 }
 
 pub trait CachedPurgeOutput: Clone + Send + Sync + 'static {
-
     fn dump_to_cpu<'a>(&'a self, device_idx: usize) -> BoxFuture<'a, Result<(), ThoError>>;
 
     fn cleanup_device<'a>(&'a self, device_idx: usize) -> BoxFuture<'a, Result<(), ThoError>>;
@@ -65,16 +63,13 @@ pub trait CachedPurgeOutput: Clone + Send + Sync + 'static {
 
     fn is_on_cpu_before(&self, purge_until: u64) -> bool;
 
-
     fn mem_size(&self) -> u64;
 }
-
 
 impl<O> CachedPurgeOutput for Arc<DevicesWrap<O>>
 where
     O: Data + Send + Sync + 'static,
 {
-
     fn dump_to_cpu<'a>(&'a self, device_idx: usize) -> BoxFuture<'a, Result<(), ThoError>> {
         DevicesWrap::dump_to_cpu(self.as_ref(), device_idx).boxed()
     }
@@ -106,12 +101,10 @@ where
     }
 }
 
-
 impl<O> CachedPurgeOutput for Arc<O>
 where
-    O: CachedPurgeOutput
+    O: CachedPurgeOutput,
 {
-
     fn dump_to_cpu<'a>(&'a self, _device_idx: usize) -> BoxFuture<'a, Result<(), ThoError>> {
         async { Ok(()) }.boxed()
     }
@@ -128,7 +121,9 @@ where
         device_idx == 0
     }
 
-    fn has_any_data(&self) -> bool { true }
+    fn has_any_data(&self) -> bool {
+        true
+    }
 
     fn is_on_cpu_before(&self, _purge_until: u64) -> bool {
         true
@@ -165,7 +160,9 @@ impl CacheUse {
 }
 
 impl Drop for CacheUse {
-    fn drop(&mut self) { self.release(); }
+    fn drop(&mut self) {
+        self.release();
+    }
 }
 
 /// Shared computations retain the device generation that started them. Recovery
@@ -179,7 +176,8 @@ pub struct CachedFuture<O: Clone> {
 
 impl<O: Clone> CachedFuture<O> {
     pub fn for_device(inner: Shared<BoxFuture<'static, Result<O, ThoError>>>, gate: Option<Arc<thoosa_shared::CudaActivityGate>>) -> Self
-    where O: Send + Sync + 'static,
+    where
+        O: Send + Sync + 'static,
     {
         let activity = match &gate {
             Some(gate) => thoosa_shared::CudaActivityScope::for_operation(gate).map(Some),
@@ -222,8 +220,13 @@ impl<O: Clone> CachedFuture<O> {
                     }
                 }
             };
-            match activity { Some(scope) => scope.run(run).await, None => run.await }
-        }.boxed().shared();
+            match activity {
+                Some(scope) => scope.run(run).await,
+                None => run.await,
+            }
+        }
+        .boxed()
+        .shared();
         // A cache owns its pending future even when every caller cancels. Keep
         // polling it so recovery can drop suspended locks/leases before draining.
         tokio::spawn(inner.clone());
@@ -231,7 +234,12 @@ impl<O: Clone> CachedFuture<O> {
     }
 
     fn with_origin(inner: Shared<BoxFuture<'static, Result<O, ThoError>>>, origin: Option<(Arc<thoosa_shared::CudaActivityGate>, thoosa_shared::CudaDeviceGeneration)>, invalidated: Arc<AtomicBool>) -> Self {
-        Self { inner, origin, invalidated, users: Arc::new(Mutex::new(HashMap::new())) }
+        Self {
+            inner,
+            origin,
+            invalidated,
+            users: Arc::new(Mutex::new(HashMap::new())),
+        }
     }
 
     pub(crate) fn has_cache_users(&self) -> bool {
@@ -239,7 +247,8 @@ impl<O: Clone> CachedFuture<O> {
     }
 
     fn cleanup_registration(&self, device_idx: usize) -> Box<dyn Fn() -> BoxFuture<'static, Result<(), ThoError>> + Send + Sync>
-    where O: CachedPurgeOutput,
+    where
+        O: CachedPurgeOutput,
     {
         let residency = self.users.lock().entry(device_idx).or_default().clone();
         let lease = Arc::new(CacheUse::acquire(residency));
@@ -251,33 +260,51 @@ impl<O: Clone> CachedFuture<O> {
             let residency = Arc::clone(&lease.residency);
             let future = weak.as_ref().and_then(|weak| weak.upgrade());
             async move {
-                if !last || device_idx == 0 || GlobalCtx::is_shutting_down() { return Ok(()); }
-                if residency.users.load(Ordering::Acquire) != 0 { return Ok(()); }
+                if !last || device_idx == 0 || GlobalCtx::is_shutting_down() {
+                    return Ok(());
+                }
+                if residency.users.load(Ordering::Acquire) != 0 {
+                    return Ok(());
+                }
                 if let Some(future) = future {
                     // The last RunCtx may drop just before Shared publishes its
                     // output. Await completion instead of silently skipping it.
-                    if let Ok(data) = future.await { data.cleanup_device(device_idx).await?; }
+                    if let Ok(data) = future.await {
+                        data.cleanup_device(device_idx).await?;
+                    }
                 }
                 Ok(())
-            }.boxed()
+            }
+            .boxed()
         })
     }
 
-    pub fn peek(&self) -> Option<&Result<O, ThoError>> { self.inner.peek() }
+    pub fn peek(&self) -> Option<&Result<O, ThoError>> {
+        self.inner.peek()
+    }
 
-    pub fn ptr_eq(&self, other: &Self) -> bool { self.inner.ptr_eq(&other.inner) }
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        self.inner.ptr_eq(&other.inner)
+    }
 
     pub(crate) fn invalidate_pending_on(&self, device: usize) -> bool {
         if self.origin.as_ref().is_some_and(|(gate, _)| gate.device_idx() == device) && !matches!(self.peek(), Some(Ok(_))) {
             self.invalidated.store(true, Ordering::Release);
             true
-        } else { false }
+        } else {
+            false
+        }
     }
 }
 
 impl<O: Clone> Clone for CachedFuture<O> {
     fn clone(&self) -> Self {
-        Self { inner: self.inner.clone(), origin: self.origin.clone(), invalidated: Arc::clone(&self.invalidated), users: Arc::clone(&self.users) }
+        Self {
+            inner: self.inner.clone(),
+            origin: self.origin.clone(),
+            invalidated: Arc::clone(&self.invalidated),
+            users: Arc::clone(&self.users),
+        }
     }
 }
 
@@ -288,7 +315,9 @@ impl<O: Clone> std::fmt::Debug for CachedFuture<O> {
 }
 
 impl<O: Clone> From<Shared<BoxFuture<'static, Result<O, ThoError>>>> for CachedFuture<O> {
-    fn from(inner: Shared<BoxFuture<'static, Result<O, ThoError>>>) -> Self { Self::with_origin(inner, None, Arc::new(AtomicBool::new(false))) }
+    fn from(inner: Shared<BoxFuture<'static, Result<O, ThoError>>>) -> Self {
+        Self::with_origin(inner, None, Arc::new(AtomicBool::new(false)))
+    }
 }
 
 impl<O: Clone> Future for CachedFuture<O> {
@@ -299,9 +328,7 @@ impl<O: Clone> Future for CachedFuture<O> {
             return std::task::Poll::Ready(Err(ThoError::CudaBeingRecovered));
         }
         let result = std::pin::Pin::new(&mut self.inner).poll(cx);
-        if self.invalidated.load(Ordering::Acquire) {
-            std::task::Poll::Ready(Err(ThoError::CudaBeingRecovered))
-        } else { result }
+        if self.invalidated.load(Ordering::Acquire) { std::task::Poll::Ready(Err(ThoError::CudaBeingRecovered)) } else { result }
     }
 }
 
@@ -311,8 +338,8 @@ pub type StageCache<S> = DashMap<<<S as Stage>::Out as WithId>::ID, CachedFuture
 #[async_trait]
 pub trait Cached: AsyncStage + Named
 where
-    for <'i> Self::In<'i>: WithId + Send + Sync,
-    <Self as Stage>::Out: CachedPurgeOutput +  WithId + Send + Sync + 'static,//
+    for<'i> Self::In<'i>: WithId + Send + Sync,
+    <Self as Stage>::Out: CachedPurgeOutput + WithId + Send + Sync + 'static,
 {
     // Memoization identity is independent of each output handle's residency.
     fn cache_key() -> crate::runner::global_ctx::CacheKey {
@@ -322,17 +349,13 @@ where
     async fn cache() -> Result<Arc<StageCache<Self>>, ThoError>
     where
         Self: Sized,
-        Self::Out:  Sync + Send;
+        Self::Out: Sync + Send;
 
-    async fn run_cached(
-        self: Arc<Self>,
-        input: Self::In<'static>,
-        mut ctx: Self::Ctx,
-    ) -> Result<Self::Out, ThoError>
+    async fn run_cached(self: Arc<Self>, input: Self::In<'static>, mut ctx: Self::Ctx) -> Result<Self::Out, ThoError>
     where
         Self: Sized + OutId,
         for<'a> <Self as Stage>::In<'a>: WithId + Send + Sync,
-        <Self as Stage>::Out: CachedPurgeOutput + Clone + Send + Sync + 'static,//CachedPurgeOutput +
+        <Self as Stage>::Out: CachedPurgeOutput + Clone + Send + Sync + 'static, //CachedPurgeOutput +
         <<Self as Stage>::Out as WithId>::ID: 'static,
     {
         let key = self.out_id(input.id());
@@ -350,7 +373,7 @@ where
                 let future = slot.get().clone();
                 let cleanup = future.cleanup_registration(device_idx);
                 (future, cleanup)
-            },
+            }
             Entry::Vacant(slot) => {
                 let gate = GlobalCtx::global().cuda_activity_gate(device_idx);
 
@@ -376,7 +399,6 @@ where
     }
 }
 
-
 //https://github.com/rust-lang/rust/issues/100013
 /// Async data ownership always includes eviction registration, even outside a cache.
 #[derive(Debug)]
@@ -395,7 +417,7 @@ where
     // by the conditional WithId impl when the wrapper is a Cached AsyncStage output.
     id: Box<dyn CachableIdTr>,
 
-    cached_data: Box<[tokio::sync::RwLock<Option<O>>]>,//cached data never changes
+    cached_data: Box<[tokio::sync::RwLock<Option<O>>]>, //cached data never changes
     inflights: Box<[Mutex<Option<Arc<Notify>>>]>,
     size: O::Metrics,
     mem_size: u64,
@@ -407,8 +429,6 @@ where
     leases: Box<[Arc<AtomicUsize>]>,
     pd: PhantomData<O>,
 }
-
-
 
 #[derive(Debug)]
 pub enum ThoDataRef<'a, D> {
@@ -427,72 +447,68 @@ impl<D> ThoDataRef<'_, D> {
     }
 }
 
-impl <D>  Serialize for ThoDataRef<'_, D>
+impl<D> Serialize for ThoDataRef<'_, D>
 where
-    D:Serialize
+    D: Serialize,
 {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
-        S: Serializer
+        S: Serializer,
     {
         match self {
-            ThoDataRef::Borrowed(d) => {
-                d.serialize(serializer)
-            }
-            ThoDataRef::ReadLocked(d) => {
-                d.serialize(serializer)
-            }
-            ThoDataRef::Owned(v) => {
-                v.serialize(serializer)
-            }
+            ThoDataRef::Borrowed(d) => d.serialize(serializer),
+            ThoDataRef::ReadLocked(d) => d.serialize(serializer),
+            ThoDataRef::Owned(v) => v.serialize(serializer),
         }
     }
 }
 
-impl <'de, D> Deserialize<'de> for ThoDataRef<'_, D>
+impl<'de, D> Deserialize<'de> for ThoDataRef<'_, D>
 where
-    D:Deserialize<'de>
+    D: Deserialize<'de>,
 {
     fn deserialize<Ds>(deserializer: Ds) -> Result<Self, Ds::Error>
     where
-        Ds: Deserializer<'de>
+        Ds: Deserializer<'de>,
     {
         Ok(ThoDataRef::Owned(D::deserialize(deserializer)?))
     }
 }
 
-
-impl <O> BorrowRef for DevicesWrap<O>
+impl<O> BorrowRef for DevicesWrap<O>
 where
     O: Data + CopyToDevice + Send + Sync,
 {
-    type Out<'a> = ThoDataRef<'a, O> where Self: 'a, O:'a;
-    fn protect(&self, device: usize) -> ResidencyLease { DevicesWrap::protect(self, device) }
-
-    fn borrow_ref<'o>(&'o self, to_tho_device_idx: usize) -> impl Future<Output=Result<Self::Out<'o>, ThoError>> + Send
+    type Out<'a>
+        = ThoDataRef<'a, O>
     where
-        Self: 'o
+        Self: 'a,
+        O: 'a;
+    fn protect(&self, device: usize) -> ResidencyLease {
+        DevicesWrap::protect(self, device)
+    }
+
+    fn borrow_ref<'o>(&'o self, to_tho_device_idx: usize) -> impl Future<Output = Result<Self::Out<'o>, ThoError>> + Send
+    where
+        Self: 'o,
     {
         async move {
             let read_guard = self.data.load_from_any_device_(to_tho_device_idx).await?;
-            Ok(ThoDataRef::ReadLocked(RwLockReadGuard::map(
-                read_guard,
-                |val: &O| val,
-            )))
+            Ok(ThoDataRef::ReadLocked(RwLockReadGuard::map(read_guard, |val: &O| val)))
         }
     }
 }
 
-impl <S, O> SelectRef<S> for DevicesWrap<O>
+impl<S, O> SelectRef<S> for DevicesWrap<O>
 where
-    S:ThoSelector + Clone + Debug + Send,
+    S: ThoSelector + Clone + Debug + Send,
     O: Select<S, Output = O> + Data + CopyToDevice + Send + Sync,
 {
     fn select_ref<'o>(&'o self, to_tho_device_idx: usize, selector: Option<S>) -> impl std::future::Future<Output = Result<<Self as BorrowRef>::Out<'o>, ThoError>> + std::marker::Send
     where
-        O:'o,
-        S:'o,
-        Self:'o,
+        O: 'o,
+        S: 'o,
+        Self: 'o,
     {
         async move {
             match selector {
@@ -541,11 +557,9 @@ where
 
                             debug!("DevicesWrap::with_selected_data_ref: data={data:?}");
 
-                            return Ok(ThoDataRef::Owned(data))
-
+                            return Ok(ThoDataRef::Owned(data));
                         }
                         drop(source_read_guard);
-
                     }
 
                     Err(ThoError::NotFound(Some(format!("select_ref: id={:?} selector={selector:?}", self.data.id))))
@@ -555,16 +569,11 @@ where
     }
 }
 
-
-
 impl<'a, D> Borrow<D> for ThoDataRef<'a, D> {
     fn borrow(&self) -> &D {
         self.as_ref()
     }
 }
-
-
-
 
 enum InflightRole {
     Leader(Arc<Notify>),
@@ -634,10 +643,9 @@ where
     }
 }
 
-impl <O> WithId for DevicesWrap<O>
+impl<O> WithId for DevicesWrap<O>
 where
     O: WithId + Data + Send + Sync,
-
 {
     type ID = O::ID;
 
@@ -647,18 +655,9 @@ where
     }
 }
 
+impl<O> Output for DevicesWrap<O> where O: Data + Send + Sync + Output {}
 
-impl  <O> Output for DevicesWrap<O>
-where
-    O: Data + Send + Sync + Output {
-
-}
-
-impl  <O> Input for DevicesWrap<O>
-where
-    O: Data + Send + Sync + Input {
-
-}
+impl<O> Input for DevicesWrap<O> where O: Data + Send + Sync + Input {}
 
 impl<O> DevicesWrap<O>
 where
@@ -681,7 +680,8 @@ where
     }
 
     pub fn wrap_in(o: O, residency: &Arc<ManagedResidency>) -> Self
-    where O: CopyToDevice + WithId + 'static,
+    where
+        O: CopyToDevice + WithId + 'static,
     {
         Self::wrap_inner(o, Some(Arc::new(CopyToDeviceCopier)), residency)
     }
@@ -701,21 +701,9 @@ where
 
         let mut o_op = Some(o);
 
-        let device_futures: Box<[tokio::sync::RwLock<Option<O>>]> = (0..num_devices)
-            .map(|device| {
-                if device == device_ordinal {
-                    tokio::sync::RwLock::new(o_op.take())
-                } else {
-                    tokio::sync::RwLock::new(None)
-                }
-            })
-            .collect::<Vec<_>>()
-            .into_boxed_slice();
+        let device_futures: Box<[tokio::sync::RwLock<Option<O>>]> = (0..num_devices).map(|device| if device == device_ordinal { tokio::sync::RwLock::new(o_op.take()) } else { tokio::sync::RwLock::new(None) }).collect::<Vec<_>>().into_boxed_slice();
 
-        let inflights = (0..num_devices)
-            .map(|_device| Mutex::new(None))
-            .collect::<Vec<_>>()
-            .into_boxed_slice();
+        let inflights = (0..num_devices).map(|_device| Mutex::new(None)).collect::<Vec<_>>().into_boxed_slice();
 
         let data = Arc::new(ResidentData {
             id: Box::new(id),
@@ -734,17 +722,36 @@ where
         Self { data, registration }
     }
 
-
-    pub fn protect(&self, device: usize) -> ResidencyLease { ResidencyLease::acquire(&self.data.leases[device]) }
-    pub fn size(&self) -> &O::Metrics { &self.data.size }
-    pub fn is_on_device(&self, device: usize) -> bool { self.data.is_on_device(device) }
-    pub fn mem_size(&self) -> u64 { self.data.mem_size }
-    pub fn is_on_cpu_before(&self, age: u64) -> bool { self.data.is_on_cpu_before(age) }
-    pub async fn is_all_on_cpu(&self) -> bool { self.data.is_all_on_cpu().await }
-    pub async fn dump_to_cpu(&self, device: usize) -> Result<(), ThoError> { self.data.dump_to_cpu(device).await }
-    async fn cleanup_device(&self, device: usize) -> Result<(), ThoError> { self.data.cleanup_device(device).await }
-    pub async fn drop_device(&self, device: usize) -> Result<(), ThoError> { self.data.drop_device(device).await }
-    pub async fn load_from_any_device_(&self, device: usize) -> Result<RwLockReadGuard<'_, O>, ThoError> { self.data.load_from_any_device_(device).await }
+    pub fn protect(&self, device: usize) -> ResidencyLease {
+        ResidencyLease::acquire(&self.data.leases[device])
+    }
+    pub fn size(&self) -> &O::Metrics {
+        &self.data.size
+    }
+    pub fn is_on_device(&self, device: usize) -> bool {
+        self.data.is_on_device(device)
+    }
+    pub fn mem_size(&self) -> u64 {
+        self.data.mem_size
+    }
+    pub fn is_on_cpu_before(&self, age: u64) -> bool {
+        self.data.is_on_cpu_before(age)
+    }
+    pub async fn is_all_on_cpu(&self) -> bool {
+        self.data.is_all_on_cpu().await
+    }
+    pub async fn dump_to_cpu(&self, device: usize) -> Result<(), ThoError> {
+        self.data.dump_to_cpu(device).await
+    }
+    async fn cleanup_device(&self, device: usize) -> Result<(), ThoError> {
+        self.data.cleanup_device(device).await
+    }
+    pub async fn drop_device(&self, device: usize) -> Result<(), ThoError> {
+        self.data.drop_device(device).await
+    }
+    pub async fn load_from_any_device_(&self, device: usize) -> Result<RwLockReadGuard<'_, O>, ThoError> {
+        self.data.load_from_any_device_(device).await
+    }
 
     async fn detach(self) -> Result<ResidentData<O>, ThoError> {
         self.registration.detach().await;
@@ -757,22 +764,33 @@ where
         drop(self.load_from_any_device_(device).await?);
         self.detach().await?.take_data(device)
     }
-    pub async fn take_data_prefer_device_or_any(self, device: usize) -> Result<O, ThoError> { self.detach().await?.take_data_prefer_device_or_any(device) }
+    pub async fn take_data_prefer_device_or_any(self, device: usize) -> Result<O, ThoError> {
+        self.detach().await?.take_data_prefer_device_or_any(device)
+    }
     #[cfg(test)]
-    pub fn cached_data(&self) -> &Box<[tokio::sync::RwLock<Option<O>>]> { &self.data.cached_data }
+    pub fn cached_data(&self) -> &Box<[tokio::sync::RwLock<Option<O>>]> {
+        &self.data.cached_data
+    }
 }
 
 #[async_trait]
 impl<O: Data + Send + Sync + 'static> crate::runner::purge::CachePurger for ResidentData<O> {
-    async fn has_gpu_data(&self, device: usize) -> bool { self.is_on_device(device) }
-    async fn purge_gpu(&self, _: Option<&HashSet<&dyn CachableIdTr>>, device: usize, _: &str) -> Result<(), ThoError> { self.dump_to_cpu(device).await }
-    async fn drop_gpu(&self, device: usize, _: &str) -> Result<(), ThoError> { self.drop_device(device).await }
+    async fn has_gpu_data(&self, device: usize) -> bool {
+        self.is_on_device(device)
+    }
+    async fn purge_gpu(&self, _: Option<&HashSet<&dyn CachableIdTr>>, device: usize, _: &str) -> Result<(), ThoError> {
+        self.dump_to_cpu(device).await
+    }
+    async fn drop_gpu(&self, device: usize, _: &str) -> Result<(), ThoError> {
+        self.drop_device(device).await
+    }
 }
 
 impl<O: Data + Send + Sync> ResidentData<O> {
-
     async fn cleanup_device(&self, device_idx: usize) -> Result<(), ThoError> {
-        if device_idx == 0 || GlobalCtx::is_shutting_down() { return Ok(()); }
+        if device_idx == 0 || GlobalCtx::is_shutting_down() {
+            return Ok(());
+        }
         // Wait for real borrowers, then hold exclusive residency through backup
         // and removal. Cache handles and incidental clones do not prevent cleanup.
         if let Some(slot) = self.cached_data.get(device_idx) {
@@ -783,11 +801,15 @@ impl<O: Data + Send + Sync> ResidentData<O> {
     }
 
     async fn offload_locked(&self, device_idx: usize, source: &mut Option<O>) -> Result<(), ThoError> {
-        if self.leases[device_idx].load(Ordering::Acquire) != 0 { return Ok(()); }
+        if self.leases[device_idx].load(Ordering::Acquire) != 0 {
+            return Ok(());
+        }
         if let Some(data) = source.as_ref() {
             // Release the CPU read guard before ensure_copied takes its write lock.
             let backed_up = self.cached_data[0].read().await.is_some();
-            if !backed_up { self.ensure_copied(0, data, false).await?; }
+            if !backed_up {
+                self.ensure_copied(0, data, false).await?;
+            }
             source.take();
             self.mark_not_resident_on_device(device_idx);
         }
@@ -795,9 +817,8 @@ impl<O: Data + Send + Sync> ResidentData<O> {
         Ok(())
     }
 
-    pub async fn dump_to_cpu(&self, device_idx: usize) -> Result<(), ThoError>
-    {
-        if GlobalCtx::is_shutting_down(){
+    pub async fn dump_to_cpu(&self, device_idx: usize) -> Result<(), ThoError> {
+        if GlobalCtx::is_shutting_down() {
             return Ok(());
         }
 
@@ -840,8 +861,6 @@ impl<O: Data + Send + Sync> ResidentData<O> {
         Ok(())
     }
 
-
-
     pub fn is_on_cpu_before(&self, threshold_age: u64) -> bool {
         let on_cpu_since = perf_log!(sync_read_lock!(&self.on_cpu_since), "DevicesWrap::is_on_cpu_before on_cpu_since.read");
         let r = on_cpu_since.as_ref().map(|on_cpu_since| *on_cpu_since <= threshold_age).unwrap_or(false);
@@ -851,15 +870,13 @@ impl<O: Data + Send + Sync> ResidentData<O> {
         r
     }
 
-    pub fn take_data(
-        self,
-        to_device_idx: usize,
-    ) -> Result<O, ThoError> {
+    pub fn take_data(self, to_device_idx: usize) -> Result<O, ThoError> {
         let id = format!("{:?}", self.id);
         let mut cached_data = self.cached_data.into_vec();
 
         if to_device_idx < cached_data.len() {
-            if let Some(data) = cached_data.remove(to_device_idx).into_inner() {//instance is being consumed, cached_data state doesn't matter
+            if let Some(data) = cached_data.remove(to_device_idx).into_inner() {
+                //instance is being consumed, cached_data state doesn't matter
                 debug!("take_data_prefer_device_or_any: to_device_idx={to_device_idx} data={data:?}");
                 return Ok(data);
             }
@@ -869,7 +886,8 @@ impl<O: Data + Send + Sync> ResidentData<O> {
     }
 
     //needed only for TmpCached to return not yet loaded data retrieving TmpCached after dump to cpu.
-    pub fn take_data_prefer_device_or_any(self, preferred_device_idx: usize) -> Result<O, ThoError> {//_or_any does not make sense, remove
+    pub fn take_data_prefer_device_or_any(self, preferred_device_idx: usize) -> Result<O, ThoError> {
+        //_or_any does not make sense, remove
         let id = format!("{:?}", self.id);
         let mut cached_data = self.cached_data.into_vec();
 
@@ -889,11 +907,7 @@ impl<O: Data + Send + Sync> ResidentData<O> {
         Err(ThoError::new_with_cause(format!("DevicesWrap::take_data_prefer_device_or_any: no data for {id}"), ThoError::NotFound(Some(id))))
     }
 
-    pub async fn load_from_any_device_(
-        &self,
-        to_tho_device_idx: usize,
-    ) -> Result<RwLockReadGuard<'_, O>, ThoError>
-    {
+    pub async fn load_from_any_device_(&self, to_tho_device_idx: usize) -> Result<RwLockReadGuard<'_, O>, ThoError> {
         debug!("DevicesWrap::load_from_any_device_ id={:?} to_device_idx={to_tho_device_idx}", self.id);
         trace!("DevicesWrap::load_from_any_device_ id={:?} to_device_idx={to_tho_device_idx} self.cached_data={:?}", self.id, self.cached_data);
         assert!(self.cached_data.len() > to_tho_device_idx, "Device index {to_tho_device_idx}(cache len is {}) too big {:?}", self.cached_data.len(), self.id);
@@ -906,10 +920,7 @@ impl<O: Data + Send + Sync> ResidentData<O> {
                 let lock = &self.cached_data[to_tho_device_idx];
                 let read_guard = t!(lock.read()).await;
                 if read_guard.is_some() {
-                    return Ok(tokio::sync::RwLockReadGuard::map(
-                        read_guard,
-                        |val: &Option<O>| val.as_ref().expect("no value behind guard"),
-                    ));
+                    return Ok(tokio::sync::RwLockReadGuard::map(read_guard, |val: &Option<O>| val.as_ref().expect("no value behind guard")));
                 }
                 self.mark_not_resident_on_device(to_tho_device_idx);
                 drop(read_guard);
@@ -925,10 +936,7 @@ impl<O: Data + Send + Sync> ResidentData<O> {
                 let source_read_guard = t!(op.read()).await;
 
                 if source_read_guard.is_some() && self.copy_to_device.is_none() {
-                    return Ok(RwLockReadGuard::map(
-                        source_read_guard,
-                        |val: &Option<O>| val.as_ref().expect("no value behind guard"),
-                    ));
+                    return Ok(RwLockReadGuard::map(source_read_guard, |val: &Option<O>| val.as_ref().expect("no value behind guard")));
                 }
 
                 if let Some(src) = source_read_guard.as_ref() {
@@ -944,7 +952,7 @@ impl<O: Data + Send + Sync> ResidentData<O> {
         Err(ThoError::NotFound(Some(format!("load_from_any_device_: id={:?}", self.id))))
     }
 
-    pub fn is_all_on_cpu(&self) -> impl Future<Output=bool> + Send {
+    pub fn is_all_on_cpu(&self) -> impl Future<Output = bool> + Send {
         async move {
             trace!("DevicesWrap::is_all_on_cpu: self.id={:?}", self.id);
 
@@ -957,18 +965,10 @@ impl<O: Data + Send + Sync> ResidentData<O> {
     pub fn is_on_device(&self, tho_device_idx: usize) -> bool {
         self.resident_devices.get(tho_device_idx).map(|resident| resident.load(Ordering::Acquire)).unwrap_or(false)
     }
-
 }
 
-
 impl<O: Data + Send + Sync> ResidentData<O> {
-    async fn ensure_copied(
-        &self,
-        dst_idx: usize,
-        src: &O,
-        do_return: bool,
-    ) -> Result<Option<RwLockReadGuard<'_, O>>, ThoError>
-    {
+    async fn ensure_copied(&self, dst_idx: usize, src: &O, do_return: bool) -> Result<Option<RwLockReadGuard<'_, O>>, ThoError> {
         // Ensures inflight slot is cleared and waiters are notified even if the leader is canceled or panics.
         struct InflightGuard<'a> {
             inflight: &'a Mutex<Option<Arc<Notify>>>,
@@ -978,11 +978,7 @@ impl<O: Data + Send + Sync> ResidentData<O> {
 
         impl<'a> InflightGuard<'a> {
             fn new(inflight: &'a Mutex<Option<Arc<Notify>>>, notify: Arc<Notify>) -> Self {
-                Self {
-                    inflight,
-                    notify,
-                    cleared: false,
-                }
+                Self { inflight, notify, cleared: false }
             }
 
             fn clear(&mut self) {
@@ -991,11 +987,7 @@ impl<O: Data + Send + Sync> ResidentData<O> {
                 }
                 self.cleared = true;
                 let mut g = perf_log!(sync_mutex_lock!(self.inflight));
-                if g
-                    .as_ref()
-                    .map(|n| Arc::ptr_eq(n, &self.notify))
-                    .unwrap_or(false)
-                {
+                if g.as_ref().map(|n| Arc::ptr_eq(n, &self.notify)).unwrap_or(false) {
                     *g = None;
                 }
                 drop(g);
@@ -1020,9 +1012,7 @@ impl<O: Data + Send + Sync> ResidentData<O> {
                     debug!("DevicesWrap::ensure_copied: self.id={:?} fast path", self.id);
 
                     if do_return {
-                        return Ok(Some(RwLockReadGuard::map(dst_read, |v| {
-                            v.as_ref().unwrap()
-                        })));
+                        return Ok(Some(RwLockReadGuard::map(dst_read, |v| v.as_ref().unwrap())));
                     } else {
                         return Ok(None);
                     }
@@ -1036,18 +1026,14 @@ impl<O: Data + Send + Sync> ResidentData<O> {
             let leader_notify = match join_or_start_inflight(&self.inflights[dst_idx]) {
                 InflightRole::Follower(notified) => {
                     // follower: wait until the leader finishes, then try fast path again
-                    t!(notified)
-                    .await;
+                    t!(notified).await;
                     continue;
                 }
                 InflightRole::Leader(notify) => notify,
             };
 
             // ---- Leader path
-            let mut inflight_guard = InflightGuard::new(
-                &self.inflights[dst_idx],
-                leader_notify,
-            );
+            let mut inflight_guard = InflightGuard::new(&self.inflights[dst_idx], leader_notify);
 
             // Double-check: maybe dst was filled after we dropped the read lock
             if self.is_resident_on_device(dst_idx) {
@@ -1072,11 +1058,10 @@ impl<O: Data + Send + Sync> ResidentData<O> {
             let produced = match produced {
                 Ok(v) => v,
                 Err(e) => {
-                    inflight_guard.clear();//TODO not needed, called from Drop?
+                    inflight_guard.clear(); //TODO not needed, called from Drop?
                     return Err(e);
                 }
             };
-
 
             // Install into dst (short critical section)
             {
@@ -1091,15 +1076,15 @@ impl<O: Data + Send + Sync> ResidentData<O> {
             }
 
             // Clear inflight and wake followers
-            inflight_guard.clear();//TODO not needed, called from Drop?
+            inflight_guard.clear(); //TODO not needed, called from Drop?
         }
     }
-
 }
 
-pub trait BorrowRef
-{
-    type Out<'a> where Self: 'a;
+pub trait BorrowRef {
+    type Out<'a>
+    where
+        Self: 'a;
 
     /// Enumerate owned managed inputs so the runner retains them across OOM adjustments.
     /// Scalar and already-materialized kernel inputs return an empty lease.
@@ -1107,55 +1092,53 @@ pub trait BorrowRef
 
     fn borrow_ref<'o>(&'o self, to_tho_device_idx: usize) -> impl Future<Output = Result<Self::Out<'o>, ThoError>> + Send
     where
-        Self:'o;
-
+        Self: 'o;
 }
 
-
-impl <BR> BorrowRef for Arc<BR>
+impl<BR> BorrowRef for Arc<BR>
 where
-    BR:BorrowRef + Sync + Send,
+    BR: BorrowRef + Sync + Send,
 {
-    type Out<'a> = BR::Out<'a> where Self: 'a,  BR:'a;
-    fn protect(&self, device: usize) -> ResidencyLease { self.as_ref().protect(device) }
-
-    fn borrow_ref<'o>(&'o self, to_tho_device_idx: usize) -> impl Future<Output=Result<Self::Out<'o>, ThoError>> + Send
+    type Out<'a>
+        = BR::Out<'a>
     where
-        Self: 'o
-    {
-        async move {
-            self.as_ref().borrow_ref(to_tho_device_idx).await
-        }
+        Self: 'a,
+        BR: 'a;
+    fn protect(&self, device: usize) -> ResidencyLease {
+        self.as_ref().protect(device)
+    }
 
+    fn borrow_ref<'o>(&'o self, to_tho_device_idx: usize) -> impl Future<Output = Result<Self::Out<'o>, ThoError>> + Send
+    where
+        Self: 'o,
+    {
+        async move { self.as_ref().borrow_ref(to_tho_device_idx).await }
     }
 }
 
 pub trait SelectRef<S>: BorrowRef
 where
-    S: ThoSelector + Clone + Debug + Send
+    S: ThoSelector + Clone + Debug + Send,
 {
-    fn select_ref<'o>(&'o self, to_tho_device_idx: usize, selector: Option<S>/*TODO remove Option*/) -> impl Future<Output = Result<<Self as BorrowRef>::Out<'o>, ThoError>> + Send
+    fn select_ref<'o>(&'o self, to_tho_device_idx: usize, selector: Option<S> /*TODO remove Option*/) -> impl Future<Output = Result<<Self as BorrowRef>::Out<'o>, ThoError>> + Send
     where
-        S:'o, Self:'o;
-
+        S: 'o,
+        Self: 'o;
 }
 
-impl <S, BR> SelectRef<S> for Arc<BR>
+impl<S, BR> SelectRef<S> for Arc<BR>
 where
     BR: SelectRef<S> + Sync + Send,
-    S:ThoSelector + Clone + Debug + Send
+    S: ThoSelector + Clone + Debug + Send,
 {
     fn select_ref<'o>(&'o self, to_tho_device_idx: usize, selector: Option<S>) -> impl Future<Output = Result<<Self as BorrowRef>::Out<'o>, ThoError>> + Send
     where
         S: 'o,
-        Self: 'o
+        Self: 'o,
     {
-        async move {
-            <BR as SelectRef<S>>::select_ref(self.as_ref(), to_tho_device_idx, selector).await
-        }
+        async move { <BR as SelectRef<S>>::select_ref(self.as_ref(), to_tho_device_idx, selector).await }
     }
 }
-
 
 /// Owned-data analogue of WithDataRef for sync-stage consume paths that need executor-controlled materialization.
 pub trait ConsumeData {
@@ -1164,27 +1147,19 @@ pub trait ConsumeData {
     /// Scalar and already-materialized kernel inputs return an empty lease.
     fn protect(&self, device: usize) -> ResidencyLease;
     //it should be run from OOM OOMHandler::consume where tensors can't be dumped to cpu while being used
-    fn consume<R: Send, F, P>(
-        self,
-        to_device_idx: usize,
-        run_ctx: P,
-        do_run: F,
-    ) -> impl Future<Output = ConsumeResult<Self::O, R>> + Send
+    fn consume<R: Send, F, P>(self, to_device_idx: usize, run_ctx: P, do_run: F) -> impl Future<Output = ConsumeResult<Self::O, R>> + Send
     where
         F: FnOnce(Self::O, P) -> ConsumeResult<Self::O, R> + Send,
         P: RunCtx;
 
-    fn burp(o:Self::O) -> impl Future<Output = Self> + Send;
+    fn burp(o: Self::O) -> impl Future<Output = Self> + Send;
 }
 
-
-
-impl <D, E> DevicesWrap<DataWithExtra<D, E>>
+impl<D, E> DevicesWrap<DataWithExtra<D, E>>
 where
     D: Data + CopyToDevice + WithId + Sync + Send,
-    E: Clone + Debug + Send + Sync
+    E: Clone + Debug + Send + Sync,
 {
-
     pub async fn extra(&self) -> Result<E, ThoError> {
         // A concurrent dump_to_cpu can move data from a device slot to CPU while this method is scanning slots; the second pass avoids a false NotFound after waiting on the old device slot.
         for _attempt in 0..2 {
@@ -1215,9 +1190,9 @@ mod tests {
     use tokio::sync::{Notify, Semaphore};
     use tokio::time::timeout;
     extern crate self as caching_runner;
-    pub use crate::runner::common::*;
     use crate::runner::common::cachable::{DevicesWrap, InflightRole, SelectRef, join_or_start_inflight};
     use crate::runner::common::mock_run_ctx;
+    pub use crate::runner::common::*;
     use crate::runner::global_ctx;
     use crate::runner::global_ctx::mock_global_ctx;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
@@ -1285,7 +1260,6 @@ mod tests {
     impl thoosa_shared::traits::Data for ControlledCopyData {
         type Metrics = [usize; 1];
 
-
         fn size(&self) -> Self::Metrics {
             [0]
         }
@@ -1328,7 +1302,9 @@ mod tests {
                 }
                 tokio::task::yield_now().await;
             }
-        }).await.expect("timed out waiting for inflight participants");
+        })
+        .await
+        .expect("timed out waiting for inflight participants");
     }
 
     #[tokio::test]
@@ -1341,9 +1317,7 @@ mod tests {
             let mut offload = Box::pin(registry.offload(1));
             assert!(futures_util::poll!(offload.as_mut()).is_pending());
             state.entered.acquire().await.unwrap().forget();
-            let mut consume = Box::pin(async move {
-                if require_device { input.take_data(1).await } else { input.take_data_prefer_device_or_any(1).await }
-            });
+            let mut consume = Box::pin(async move { if require_device { input.take_data(1).await } else { input.take_data_prefer_device_or_any(1).await } });
             assert!(futures_util::poll!(consume.as_mut()).is_pending(), "taking ownership must wait for the offload snapshot");
             state.release.add_permits(1);
             let (offloaded, value) = timeout(Duration::from_secs(5), async { tokio::join!(offload, consume) }).await?;
@@ -1543,7 +1517,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_dump_to_cpu() -> Result<(), ThoError> {
-
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
 
         let data = MockDataWithId::whatever();
@@ -1557,8 +1530,7 @@ mod tests {
         let data_on_1 = tested.select_ref(1, None).await?;
 
         assert_eq!(data_on_1.as_ref().device(), &1);
-        drop(data_on_1);//dump_to_cpu: can't drop self.id=DummyCachableId("id"), locked
-
+        drop(data_on_1); //dump_to_cpu: can't drop self.id=DummyCachableId("id"), locked
 
         let lock = &tested.data.cached_data[1];
         assert!(t!(lock.read()).await.is_some());
@@ -1573,27 +1545,15 @@ mod tests {
         Ok(())
     }
 
-
-
     #[tokio::test]
     async fn test_with_data() -> Result<(), ThoError> {
         let ctx = MockGlobalCtx::global_context();
-        ctx.expect().returning(|| {
-            Box::leak(Box::new(
-                mock_global_ctx::build_default(),
-            )) as &'static MockGlobalCtx
-        });
+        ctx.expect().returning(|| Box::leak(Box::new(mock_global_ctx::build_default())) as &'static MockGlobalCtx);
 
         let wrap_a = Arc::new(DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "a")));
         let wrap_b = Arc::new(DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "d")));
-        let wrap_vec = vec![
-            Arc::new(DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "b"))),
-            Arc::new(DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "c"))),
-        ];
-        let wrap_vec_second = vec![
-            Arc::new(DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "e"))),
-            Arc::new(DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "f"))),
-        ];
+        let wrap_vec = vec![Arc::new(DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "b"))), Arc::new(DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "c")))];
+        let wrap_vec_second = vec![Arc::new(DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "e"))), Arc::new(DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "f")))];
 
         //TODO check asserts were actually invoked
         let ctx_for_data = mock_run_ctx::default(1);
@@ -1602,13 +1562,13 @@ mod tests {
         let b = wrap_b.select_ref(ctx_for_data.tho_device_idx(), None::<RangeSelector>).await?;
         let second = futures_util::future::try_join_all(wrap_vec_second.iter().map(|item| item.select_ref(ctx_for_data.tho_device_idx(), None::<RangeSelector>))).await?;
         {
-                assert_eq!(a.as_ref().device(), &1);
-                assert_eq!(b.as_ref().device(), &1);
-                assert_eq!(first.len(), 2);
-                assert!(first.iter().all(|item| *item.as_ref().device() == 1));
-                assert_eq!(second.len(), 2);
-                assert!(second.iter().all(|item| *item.as_ref().device() == 1));
-                Ok::<(), ThoError>(())
+            assert_eq!(a.as_ref().device(), &1);
+            assert_eq!(b.as_ref().device(), &1);
+            assert_eq!(first.len(), 2);
+            assert!(first.iter().all(|item| *item.as_ref().device() == 1));
+            assert_eq!(second.len(), 2);
+            assert!(second.iter().all(|item| *item.as_ref().device() == 1));
+            Ok::<(), ThoError>(())
         }?;
         Ok(())
     }
@@ -1616,19 +1576,15 @@ mod tests {
     #[tokio::test]
     async fn test_with_data_single_val() -> Result<(), ThoError> {
         let ctx = MockGlobalCtx::global_context();
-        ctx.expect().returning(|| {
-            Box::leak(Box::new(
-                mock_global_ctx::build_default(),
-            )) as &'static global_ctx::MockGlobalCtx
-        });
+        ctx.expect().returning(|| Box::leak(Box::new(mock_global_ctx::build_default())) as &'static global_ctx::MockGlobalCtx);
 
         let wrap_a = Arc::new(DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "a")));
 
         let ctx_for_data = mock_run_ctx::default(1);
         let a = wrap_a.select_ref(ctx_for_data.tho_device_idx(), None::<RangeSelector>).await?;
         {
-                assert_eq!(a.as_ref().device(), &1);
-                Ok::<(), ThoError>(())
+            assert_eq!(a.as_ref().device(), &1);
+            Ok::<(), ThoError>(())
         }?;
         Ok(())
     }
