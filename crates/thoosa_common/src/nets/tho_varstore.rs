@@ -1,54 +1,56 @@
-use thoosa_common::tch_error::tch_result;
-use anyhow::Context as _;
-use crate::dims::{Batch, Dims};
+use crate::cuda_copier::{complete_cuda_stream, finish_cuda_run};
 #[cfg(test)]
 use crate::dims::AnyDims;
-use crate::cuda_copier::{complete_cuda_stream, finish_cuda_run};
+use crate::dims::{Batch, Dims};
 #[cfg(test)]
 use crate::nets::builder::{Node, SeqBuilder};
 use crate::nets::nodes::ThoModule;
 use crate::nets::state_transfer::{StateTensors, VarStoreState};
-use thoosa_common::ipc::state_transfer::StageStateInfo;
 use crate::runner::global_ctx::GlobalCtx;
 use crate::tho_device::ThoDevice;
 #[cfg(test)]
 use crate::tho_tensor::ThoTensor;
+use anyhow::Context as _;
 use async_trait::async_trait;
 use log::debug;
 use std::fmt::{Debug, Formatter};
 use std::pin::Pin;
 use std::sync::Arc;
 use tch::Device::Cpu;
-use tch::nn::{Optimizer, OptimizerConfig, VarStore};
-use tch::{Device, Tensor, nn, no_grad};
 #[cfg(test)]
 use tch::Kind;
-use thoosa_shared::{panic_to_err, tho_error, MoveToDevice, ThoError};
+use tch::nn::{Optimizer, OptimizerConfig, VarStore};
+use tch::{Device, Tensor, nn, no_grad};
+use thoosa_common::ipc::state_transfer::StageStateInfo;
+use thoosa_common::tch_error::tch_result;
+use thoosa_shared::{MoveToDevice, ThoError, panic_to_err, tho_error};
+use thoosa_shims::optimizers::{
+    AdamGroupSnapshot, AdamOptimizerSnapshot, AdamParamStateSnapshot, AdamWOptimizerSnapshot, SgdGroupSnapshot, SgdOptimizerSnapshot, SgdParamStateSnapshot, adam_snapshot, adam_w_snapshot, restore_adam_snapshot, restore_adam_w_snapshot, restore_sgd_snapshot, sgd_snapshot,
+};
 use thoosa_shims::stream::ThoCudaStream;
-use thoosa_shims::optimizers::{AdamGroupSnapshot, AdamOptimizerSnapshot, AdamParamStateSnapshot, AdamWOptimizerSnapshot, SgdGroupSnapshot, SgdOptimizerSnapshot, SgdParamStateSnapshot, adam_snapshot, adam_w_snapshot, restore_adam_snapshot, restore_adam_w_snapshot, restore_sgd_snapshot, sgd_snapshot};
 use tokio::task::JoinSet;
-
 
 #[path = "training_metadata.rs"]
 mod training_metadata;
-use training_metadata::{TrainingMetadata, OptimizerMetadata};
+use training_metadata::{OptimizerMetadata, TrainingMetadata};
 
 pub struct ModConfig<DI, DO>
 where
-    DI: Dims, DO: Dims
+    DI: Dims,
+    DO: Dims,
 {
     optimizer_builder: Box<dyn Fn(&VarStore) -> anyhow::Result<Pin<Box<Optimizer>>> + Send + Sync>,
     net: Box<dyn Fn(&VarStore) -> anyhow::Result<Box<dyn ThoModule<Batch<DI>, Batch<DO>>>> + Send + Sync>,
-    opt_config: ThoOptimizers
+    opt_config: ThoOptimizers,
 }
 
-impl <DI, DO> Debug for ModConfig<DI, DO>
+impl<DI, DO> Debug for ModConfig<DI, DO>
 where
-    DI: Dims, DO: Dims
+    DI: Dims,
+    DO: Dims,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ModConfig")
-            .finish()
+        f.debug_struct("ModConfig").finish()
     }
 }
 
@@ -67,24 +69,23 @@ where
     {
         let opt_config_for_builder = opt_config.clone();
         Self {
-            optimizer_builder: Box::new( move |var_store| Ok(Box::pin(opt_config_for_builder.build(var_store, lr)?))),
+            optimizer_builder: Box::new(move |var_store| Ok(Box::pin(opt_config_for_builder.build(var_store, lr)?))),
             net: Box::new(net),
-            opt_config
+            opt_config,
         }
     }
 }
 
 #[derive(Debug, Clone)]
 pub enum ThoOptimizers {
-    Adam {config:nn::Adam},
-    AdamW{config: nn::AdamW},
-    Sgd {config: nn::Sgd},
+    Adam { config: nn::Adam },
+    AdamW { config: nn::AdamW },
+    Sgd { config: nn::Sgd },
     //TODO other optimizers
 }
 
 impl ThoOptimizers {
-    fn build(&self, vs:&VarStore, lr: f64) -> anyhow::Result<Optimizer>
-    {
+    fn build(&self, vs: &VarStore, lr: f64) -> anyhow::Result<Optimizer> {
         Ok(match self {
             ThoOptimizers::Adam { config } => config.build(vs, lr)?,
             ThoOptimizers::AdamW { config } => config.build(vs, lr)?,
@@ -129,15 +130,14 @@ impl From<nn::Sgd> for ThoOptimizers {
     }
 }
 
-
-
 #[derive(Debug)]
 pub struct ThoTrainModule<DI, DO>
 where
-    DI: Dims, DO: Dims
+    DI: Dims,
+    DO: Dims,
 {
-    config:ModConfig<DI, DO>,
-    opt_state:OptSnapshot<DI, DO>,
+    config: ModConfig<DI, DO>,
+    opt_state: OptSnapshot<DI, DO>,
     ipc_export: Option<TrainingState>,
     training_status: TrainingStatus,
 }
@@ -145,27 +145,31 @@ where
 // A failed training update requires an explicit checkpoint reset. An incomplete
 // authorized restore, unlike a failed update, may be retried by stage preparation.
 #[derive(Debug, PartialEq, Eq)]
-enum TrainingStatus { Usable, Failed, Restoring }
+enum TrainingStatus {
+    Usable,
+    Failed,
+    Restoring,
+}
 
 #[derive(Debug)]
 enum OptSnapshot<DI, DO>
 where
-    DI: Dims, DO: Dims
+    DI: Dims,
+    DO: Dims,
 {
-    Opt{opt:Pin<Box<Optimizer>>, vs:VarStore, module:Box<dyn ThoModule<Batch<DI>, Batch<DO>>>},
-    Snapshot{ cpu_snap: OptimizerSnapshot, vs:VarStore},
-    Offloaded(TrainingState)
+    Opt { opt: Pin<Box<Optimizer>>, vs: VarStore, module: Box<dyn ThoModule<Batch<DI>, Batch<DO>>> },
+    Snapshot { cpu_snap: OptimizerSnapshot, vs: VarStore },
+    Offloaded(TrainingState),
 }
 
-impl <DI, DO> OptSnapshot<DI, DO>
+impl<DI, DO> OptSnapshot<DI, DO>
 where
-    DI: Dims, DO: Dims
+    DI: Dims,
+    DO: Dims,
 {
     fn device(&self) -> ThoDevice {
         match self {
-            OptSnapshot::Opt { vs,.. }| OptSnapshot::Snapshot { vs,.. } => {
-                ThoDevice::try_from(vs.device()).expect("CPU/CUDA model device")
-            }
+            OptSnapshot::Opt { vs, .. } | OptSnapshot::Snapshot { vs, .. } => ThoDevice::try_from(vs.device()).expect("CPU/CUDA model device"),
             OptSnapshot::Offloaded(_) => thoosa_common::tho_device::ThoDevice::from(0usize),
         }
     }
@@ -204,7 +208,11 @@ impl TrainingState {
             let key = info.tensor_key.to_tensor_key();
             tensors.insert(key.clone(), self.tensors.get(&key)?)?;
         }
-        Ok(Self { variables: self.variables.clone(), tensors, optimizer: OptimizerMetadata::capture(&self.optimizer).into_snapshot() })
+        Ok(Self {
+            variables: self.variables.clone(),
+            tensors,
+            optimizer: OptimizerMetadata::capture(&self.optimizer).into_snapshot(),
+        })
     }
 }
 
@@ -215,16 +223,27 @@ impl OptimizerSnapshot {
             for (g, group) in snapshot.groups.iter().enumerate() {
                 let mut states = Vec::new();
                 for (p, state) in group.states.iter().enumerate() {
-                    states.push(state.as_ref().map(|state| Ok::<_, ThoError>(AdamParamStateSnapshot {
-                        step: state.step,
-                        exp_avg: map(&format!("opt/{g}/{p}/exp_avg"), &state.exp_avg)?,
-                        exp_avg_sq: map(&format!("opt/{g}/{p}/exp_avg_sq"), &state.exp_avg_sq)?,
-                        max_exp_avg_sq: state.max_exp_avg_sq.as_ref().map(|tensor| map(&format!("opt/{g}/{p}/max_exp_avg_sq"), tensor)).transpose()?,
-                    })).transpose()?);
+                    states.push(
+                        state
+                            .as_ref()
+                            .map(|state| {
+                                Ok::<_, ThoError>(AdamParamStateSnapshot {
+                                    step: state.step,
+                                    exp_avg: map(&format!("opt/{g}/{p}/exp_avg"), &state.exp_avg)?,
+                                    exp_avg_sq: map(&format!("opt/{g}/{p}/exp_avg_sq"), &state.exp_avg_sq)?,
+                                    max_exp_avg_sq: state.max_exp_avg_sq.as_ref().map(|tensor| map(&format!("opt/{g}/{p}/max_exp_avg_sq"), tensor)).transpose()?,
+                                })
+                            })
+                            .transpose()?,
+                    );
                 }
                 groups.push(AdamGroupSnapshot { options: group.options, states });
             }
-            Ok(AdamOptimizerSnapshot { defaults: snapshot.defaults, groups, tho_device_idx: device })
+            Ok(AdamOptimizerSnapshot {
+                defaults: snapshot.defaults,
+                groups,
+                tho_device_idx: device,
+            })
         }
         Ok(match self {
             Self::Adam(snapshot) => Self::Adam(adam(snapshot, device, &mut map)?),
@@ -238,15 +257,20 @@ impl OptimizerSnapshot {
                     }
                     groups.push(SgdGroupSnapshot { options: group.options, states });
                 }
-                Self::Sgd(SgdOptimizerSnapshot { defaults: snapshot.defaults, groups, tho_device_idx: device })
+                Self::Sgd(SgdOptimizerSnapshot {
+                    defaults: snapshot.defaults,
+                    groups,
+                    tho_device_idx: device,
+                })
             }
         })
     }
 }
 
-impl <DI, DO> ThoTrainModule<DI, DO>
+impl<DI, DO> ThoTrainModule<DI, DO>
 where
-    DI: Dims, DO: Dims
+    DI: Dims,
+    DO: Dims,
 {
     pub fn new_on_device(config: ModConfig<DI, DO>, device: ThoDevice) -> anyhow::Result<Self> {
         let (module, var_store) = Self::init_opt(&config.net, device)?;
@@ -265,22 +289,18 @@ where
         Ok((module, var_store))
     }
 
-    pub fn opt(&mut self) ->&mut Optimizer {
+    pub fn opt(&mut self) -> &mut Optimizer {
         match &mut self.opt_state {
-            OptSnapshot::Opt { opt, .. } => {
-                opt
-            }
+            OptSnapshot::Opt { opt, .. } => opt,
             OptSnapshot::Snapshot { .. } | OptSnapshot::Offloaded(_) => {
                 panic!("wrong state")
             }
         }
     }
 
-    pub fn module(&mut self) ->&mut Box<dyn ThoModule<Batch<DI>, Batch<DO>>> {
+    pub fn module(&mut self) -> &mut Box<dyn ThoModule<Batch<DI>, Batch<DO>>> {
         match &mut self.opt_state {
-            OptSnapshot::Opt { module, .. } => {
-                module
-            }
+            OptSnapshot::Opt { module, .. } => module,
             OptSnapshot::Snapshot { .. } | OptSnapshot::Offloaded(_) => {
                 panic!("wrong state")
             }
@@ -310,30 +330,30 @@ where
         }
     }
 
-    pub fn save_var_store<T>(&self, path:T) -> anyhow::Result<()>
+    pub fn save_var_store<T>(&self, path: T) -> anyhow::Result<()>
     where
-        T:AsRef<std::path::Path> + Debug
+        T: AsRef<std::path::Path> + Debug,
     {
         debug!("ThoTrainModule::save_var_store: path={path:?} self.opt_state={:?}", self.opt_state);
 
         match &self.opt_state {
-            OptSnapshot::Opt { vs, .. } | OptSnapshot::Snapshot { vs, .. } => {
-                Ok(panic_to_err!(vs.save(&path))?)
-            },
+            OptSnapshot::Opt { vs, .. } | OptSnapshot::Snapshot { vs, .. } => Ok(panic_to_err!(vs.save(&path))?),
             OptSnapshot::Offloaded(_) => Err(anyhow::anyhow!("training state is offloaded")),
         }
-
     }
 
     pub fn has_gpu_data(&self, device: usize) -> bool {
-        device != 0 && match &self.opt_state {
-            OptSnapshot::Offloaded(state) => state.tensors.has_device(device),
-            _ => self.opt_state.device().tho_device_idx() == device,
-        }
+        device != 0
+            && match &self.opt_state {
+                OptSnapshot::Offloaded(state) => state.tensors.has_device(device),
+                _ => self.opt_state.device().tho_device_idx() == device,
+            }
     }
 
     fn capture_state(&self) -> Result<TrainingState, ThoError> {
-        if self.training_status == TrainingStatus::Failed { self.ensure_training_usable()?; }
+        if self.training_status == TrainingStatus::Failed {
+            self.ensure_training_usable()?;
+        }
         match &self.opt_state {
             OptSnapshot::Opt { opt, vs, .. } => {
                 let snapshot = unsafe { self.config.opt_config.snapshot(opt.as_raw_c_optimizer(), ThoDevice::try_from(vs.device())?.tho_device_idx())? };
@@ -349,7 +369,10 @@ where
         self.ipc_export = Some(self.capture_state()?);
         let state = self.ipc_export.as_ref().expect("captured state");
         let mut info = state.tensors.info();
-        info.scalars = Some(Box::new(TrainingMetadata { variables: state.variables.clone(), optimizer: OptimizerMetadata::capture(&state.optimizer) }));
+        info.scalars = Some(Box::new(TrainingMetadata {
+            variables: state.variables.clone(),
+            optimizer: OptimizerMetadata::capture(&state.optimizer),
+        }));
         Ok(info)
     }
 
@@ -360,17 +383,25 @@ where
         // Replace the entire failed state; never export or reuse partial optimizer updates.
         self.ipc_export = None;
         self.training_status = TrainingStatus::Restoring;
-        self.opt_state = OptSnapshot::Offloaded(TrainingState { variables: metadata.variables, tensors, optimizer: metadata.optimizer.into_snapshot() });
+        self.opt_state = OptSnapshot::Offloaded(TrainingState {
+            variables: metadata.variables,
+            tensors,
+            optimizer: metadata.optimizer.into_snapshot(),
+        });
         Ok(())
     }
 
     pub fn state_tensor(&mut self, key: &str) -> Result<Tensor, ThoError> {
-        if self.ipc_export.is_none() { self.ipc_export = Some(self.capture_state()?); }
+        if self.ipc_export.is_none() {
+            self.ipc_export = Some(self.capture_state()?);
+        }
         self.ipc_export.as_ref().expect("captured state").tensors.get(key)
     }
 
     pub fn drop_gpu(&mut self, device: usize) -> Result<(), ThoError> {
-        if !self.has_gpu_data(device) { return Ok(()); }
+        if !self.has_gpu_data(device) {
+            return Ok(());
+        }
         if let OptSnapshot::Offloaded(state) = &mut self.opt_state {
             // Export aliases would otherwise retain imported GPU allocations.
             self.ipc_export = None;
@@ -381,7 +412,9 @@ where
             Some(state) => state,
             None => self.capture_state()?,
         };
-        if state.tensors.info().tensors.is_empty() { return Ok(()); }
+        if state.tensors.info().tensors.is_empty() {
+            return Ok(());
+        }
         state.tensors.clear();
         // Drop the optimizer, module and store together; keeping any one of
         // them alive would keep its parameter storage allocated on the GPU.
@@ -397,9 +430,13 @@ where
     }
 
     pub(crate) fn prepare_state(&mut self, device: usize) -> Result<(), ThoError> {
-        if self.training_status == TrainingStatus::Failed { return self.ensure_training_usable(); }
+        if self.training_status == TrainingStatus::Failed {
+            return self.ensure_training_usable();
+        }
         if let OptSnapshot::Offloaded(state) = &self.opt_state {
-            if !state.tensors.complete() { return Err(ThoError::new("training state is offloaded or incompletely restored")); }
+            if !state.tensors.complete() {
+                return Err(ThoError::new("training state is offloaded or incompletely restored"));
+            }
             // Reconstruction belongs to pre_run, inside the OOM-managed attempt.
             // Keep the complete imported tensors until every allocation succeeds.
             let stream = match Device::from(ThoDevice::from(device)) {
@@ -411,7 +448,9 @@ where
                 let module = (self.config.net)(&vs)?;
                 let opt = (self.config.optimizer_builder)(&vs)?;
                 let snapshot = state.optimizer.map_tensors(device, |key, _| state.tensors.get(key))?;
-                unsafe { self.config.opt_config.restore_snapshot(&snapshot, opt.as_raw_c_optimizer())?; }
+                unsafe {
+                    self.config.opt_config.restore_snapshot(&snapshot, opt.as_raw_c_optimizer())?;
+                }
                 Ok::<_, ThoError>(OptSnapshot::Opt { opt, vs, module })
             });
             self.opt_state = finish_cuda_run(restored, stream.as_ref().map_or(Ok(()), |stream| complete_cuda_stream(stream.synchronize(), || stream.synchronize()).result))?;
@@ -428,29 +467,31 @@ where
         // The execution stream is set either in `impl dyn CudaActorHandle::run_stage/consume_stage` in Local Mode or in thoosa_common::ipc::wraps::run_worker_stage(_with_state) in IPC mode.
         // this does not fit the usual approach of setting/synching stream outside SyncStages
         let stream = match Device::from(self.opt_state.device()) {
-            Device::Cuda(index) => Some(ThoCudaStream::current(index as i32)?),//steam from StreamGuard returned from thoosa_common::cuda_copier::HandleCtx::sync_ctx
+            Device::Cuda(index) => Some(ThoCudaStream::current(index as i32)?), //steam from StreamGuard returned from thoosa_common::cuda_copier::HandleCtx::sync_ctx
             _ => None,
         };
-        self.training_transaction_with(run, |module| {
-            module.opt().step();
-            Ok(())
-        }, || stream.as_ref().map_or(Ok(()), |stream| complete_cuda_stream(stream.synchronize(), || stream.synchronize()).result))
+        self.training_transaction_with(
+            run,
+            |module| {
+                module.opt().step();
+                Ok(())
+            },
+            || stream.as_ref().map_or(Ok(()), |stream| complete_cuda_stream(stream.synchronize(), || stream.synchronize()).result),
+        )
     }
 
     // Keep phase ordering in one place; injected operations also allow failures at
     // the update/completion boundary to be tested without inducing CUDA corruption.
-    fn training_transaction_with<T>(
-        &mut self,
-        run: impl FnOnce(&mut Self) -> Result<T, ThoError>,
-        commit: impl FnOnce(&mut Self) -> Result<(), ThoError>,
-        mut synchronize: impl FnMut() -> Result<(), ThoError>,
-    ) -> Result<T, ThoError> {
+    fn training_transaction_with<T>(&mut self, run: impl FnOnce(&mut Self) -> Result<T, ThoError>, commit: impl FnOnce(&mut Self) -> Result<(), ThoError>, mut synchronize: impl FnMut() -> Result<(), ThoError>) -> Result<T, ThoError> {
         self.ensure_training_usable()?;
         self.ipc_export = None;
-        let accumulated = finish_cuda_run(panic_to_err!({
-            self.opt().zero_grad();
-            run(self)
-        }), synchronize());
+        let accumulated = finish_cuda_run(
+            panic_to_err!({
+                self.opt().zero_grad();
+                run(self)
+            }),
+            synchronize(),
+        );
         let output = match accumulated {
             Ok(output) => output,
             Err(error) => {
@@ -460,32 +501,40 @@ where
         };
         // No rollback snapshot of parameters or momentum is needed on the hot path.
         // From this point an error (including completion/gradient cleanup) is terminal.
-        let committed = finish_cuda_run(panic_to_err!({
-            commit(self)?;
-            self.opt().zero_grad();
-            Ok::<_, ThoError>(())
-        }), synchronize());
+        let committed = finish_cuda_run(
+            panic_to_err!({
+                commit(self)?;
+                self.opt().zero_grad();
+                Ok::<_, ThoError>(())
+            }),
+            synchronize(),
+        );
         if let Err(cause) = committed {
             self.training_status = TrainingStatus::Failed;
             self.ipc_export = None;
-            if cause.needs_cuda_recovery() || cause.is_cuda_recovery_failed() { return Err(cause); }
+            if cause.needs_cuda_recovery() || cause.is_cuda_recovery_failed() {
+                return Err(cause);
+            }
             return Err(Self::failed_epoch(cause));
         }
         Ok(output)
     }
 
     pub(crate) fn ensure_training_usable(&self) -> Result<(), ThoError> {
-        if self.training_status != TrainingStatus::Usable { return Err(ThoError::new("training session invalidated; restore an epoch checkpoint before reuse")); }
+        if self.training_status != TrainingStatus::Usable {
+            return Err(ThoError::new("training session invalidated; restore an epoch checkpoint before reuse"));
+        }
         Ok(())
     }
 
     fn failed_epoch(cause: ThoError) -> ThoError {
-        if cause.needs_cuda_recovery() || cause.is_cuda_recovery_failed() { return cause; }
+        if cause.needs_cuda_recovery() || cause.is_cuda_recovery_failed() {
+            return cause;
+        }
         // Preserve allocation failures exposed as panics by tch without allowing
         // the generic executor to replay a batch against mutated training state.
         let cause = if matches!(cause.what(), ThoError::Anyhow(_)) && cause.is_retryable_oom() {
             ThoError::from(anyhow::Error::new(cause).context(tho_error::cuda_error(thoosa_shared::CudaAction::HandleOOM, "training allocation failed".into())))
-
         } else {
             cause
         };
@@ -499,14 +548,14 @@ where
 
 // The stage mutex owns training state; Tensor and Optimizer are Send, but not Sync.
 #[async_trait]
-impl <DI, DO> MoveToDevice for ThoTrainModule<DI, DO>
+impl<DI, DO> MoveToDevice for ThoTrainModule<DI, DO>
 where
-    DI: Dims, DO: Dims
+    DI: Dims,
+    DO: Dims,
 {
-
     async fn move_to_device(&mut self, tho_dst_device: usize) -> Result<(), ThoError>
     where
-        Self:Sized
+        Self: Sized,
     {
         if matches!(self.opt_state, OptSnapshot::Offloaded(_)) {
             return Err(ThoError::new("training state is offloaded or incompletely restored"));
@@ -515,7 +564,7 @@ where
         self.ipc_export = None;
         debug!("ThoTrainModule::move_to_device: tho_dst_device={tho_dst_device} opt_state.device={:?}", self.opt_state.device());
         if tho_dst_device == self.opt_state.device().tho_device_idx() {
-            return Ok(())
+            return Ok(());
         }
 
         if tho_dst_device == 0 {
@@ -524,18 +573,16 @@ where
              * copies so the async future never carries an Optimizer reference.
              */
             let (cuda_snapshot, vs) = match &self.opt_state {
-                OptSnapshot::Opt { opt, vs, module: _module } => {
-                    (unsafe { self.config.opt_config.snapshot(opt.as_raw_c_optimizer(), ThoDevice::try_from(vs.device())?.tho_device_idx())? }, vs)
-                }
+                OptSnapshot::Opt { opt, vs, module: _module } => (unsafe { self.config.opt_config.snapshot(opt.as_raw_c_optimizer(), ThoDevice::try_from(vs.device())?.tho_device_idx())? }, vs),
                 _ => {
                     // var store should be already on cpu
-                    return Ok(())
+                    return Ok(());
                 }
             };
 
             self.opt_state = OptSnapshot::Snapshot {
-                cpu_snap:clone_owned_optimizer_snapshot_to(cuda_snapshot, ThoDevice::from(0usize)).await?,
-                vs:clone_var_store_to(&vs, tho_dst_device.into()).await?,
+                cpu_snap: clone_owned_optimizer_snapshot_to(cuda_snapshot, ThoDevice::from(0usize)).await?,
+                vs: clone_var_store_to(&vs, tho_dst_device.into()).await?,
             };
 
             Ok(())
@@ -548,12 +595,11 @@ where
                 OptSnapshot::Snapshot { cpu_snap, vs } => (detach_optimizer_snapshot(cpu_snap), vs),
                 _ => {
                     // var store should be already on device
-                    return Ok(())
+                    return Ok(());
                 }
             };
 
-            let (module, mut cuda_vs ) = Self::init_opt(&self.config.net, tho_dst_device.into())?;
-
+            let (module, mut cuda_vs) = Self::init_opt(&self.config.net, tho_dst_device.into())?;
 
             let cuda_snapshot = clone_owned_optimizer_snapshot_to(cpu_snap, tho_dst_device.into()).await?;
             let restored_vs = clone_var_store_to(&cpu_var_store, tho_dst_device.into()).await?;
@@ -564,14 +610,13 @@ where
              * restored data, so both the optimizer and returned state must use it.
              */
             let opt = (self.config.optimizer_builder)(&cuda_vs)?;
-            unsafe {self.config.opt_config.restore_snapshot(&cuda_snapshot, opt.as_raw_c_optimizer())}?;
+            unsafe { self.config.opt_config.restore_snapshot(&cuda_snapshot, opt.as_raw_c_optimizer()) }?;
 
-            self.opt_state = OptSnapshot::Opt{opt, vs: cuda_vs, module };
+            self.opt_state = OptSnapshot::Opt { opt, vs: cuda_vs, module };
 
             Ok(())
         }
     }
-
 }
 
 struct VarSpec {
@@ -585,16 +630,8 @@ struct VarSpec {
     requires_grad: bool,
 }
 
-fn add_named_tensor(
-    vs: &VarStore,
-    full_name: &str,
-    tensor: Tensor,
-    trainable: bool,
-    group: usize,
-) -> Tensor {
-    let (parent, leaf) = full_name
-        .rsplit_once('.')
-        .map_or(("", full_name), |(parent, leaf)| (parent, leaf));
+fn add_named_tensor(vs: &VarStore, full_name: &str, tensor: Tensor, trainable: bool, group: usize) -> Tensor {
+    let (parent, leaf) = full_name.rsplit_once('.').map_or(("", full_name), |(parent, leaf)| (parent, leaf));
 
     let mut path = vs.root().set_group(group);
 
@@ -605,10 +642,7 @@ fn add_named_tensor(
     path.add(leaf, tensor, trainable)
 }
 
-pub async fn clone_adam_snapshot_to(
-    src: &AdamOptimizerSnapshot,
-    tho_device: ThoDevice,
-) -> anyhow::Result<AdamOptimizerSnapshot> {
+pub async fn clone_adam_snapshot_to(src: &AdamOptimizerSnapshot, tho_device: ThoDevice) -> anyhow::Result<AdamOptimizerSnapshot> {
     /*
      * Own every tensor handle before the first await. Tensor is Send but not
      * Sync, so borrowing snapshot states across an await makes this future
@@ -617,18 +651,12 @@ pub async fn clone_adam_snapshot_to(
     clone_owned_adam_snapshot_to(detach_adam_snapshot(src), tho_device).await
 }
 
-pub async fn clone_adam_w_snapshot_to(
-    src: &AdamWOptimizerSnapshot,
-    tho_device: ThoDevice,
-) -> anyhow::Result<AdamWOptimizerSnapshot> {
+pub async fn clone_adam_w_snapshot_to(src: &AdamWOptimizerSnapshot, tho_device: ThoDevice) -> anyhow::Result<AdamWOptimizerSnapshot> {
     // AdamW shares the tensor-state representation but keeps a named copy entry point for optimizer-specific routing.
     clone_owned_adam_w_snapshot_to(detach_adam_w_snapshot(src), tho_device).await
 }
 
-pub async fn clone_sgd_snapshot_to(
-    src: &SgdOptimizerSnapshot,
-    tho_device: ThoDevice,
-) -> anyhow::Result<SgdOptimizerSnapshot> {
+pub async fn clone_sgd_snapshot_to(src: &SgdOptimizerSnapshot, tho_device: ThoDevice) -> anyhow::Result<SgdOptimizerSnapshot> {
     // Detaching before the await keeps the non-Sync borrowed snapshot out of the returned future.
     clone_owned_sgd_snapshot_to(detach_sgd_snapshot(src), tho_device).await
 }
@@ -644,16 +672,14 @@ fn detach_adam_w_snapshot(src: &AdamWOptimizerSnapshot) -> AdamWOptimizerSnapsho
 fn detach_sgd_snapshot(src: &SgdOptimizerSnapshot) -> SgdOptimizerSnapshot {
     SgdOptimizerSnapshot {
         defaults: src.defaults,
-        groups: src.groups.iter().map(|src_group| {
-            SgdGroupSnapshot {
+        groups: src
+            .groups
+            .iter()
+            .map(|src_group| SgdGroupSnapshot {
                 options: src_group.options,
-                states: src_group.states.iter().map(|src_state| {
-                    src_state.as_ref().map(|src_state| SgdParamStateSnapshot {
-                        momentum_buffer: src_state.momentum_buffer.detach(),
-                    })
-                }).collect(),
-            }
-        }).collect(),
+                states: src_group.states.iter().map(|src_state| src_state.as_ref().map(|src_state| SgdParamStateSnapshot { momentum_buffer: src_state.momentum_buffer.detach() })).collect(),
+            })
+            .collect(),
         tho_device_idx: src.tho_device_idx,
     }
 }
@@ -661,36 +687,34 @@ fn detach_sgd_snapshot(src: &SgdOptimizerSnapshot) -> SgdOptimizerSnapshot {
 fn detach_adam_like_snapshot(src: &AdamOptimizerSnapshot) -> AdamOptimizerSnapshot {
     AdamOptimizerSnapshot {
         defaults: src.defaults,
-        groups: src.groups.iter().map(|src_group| {
-            AdamGroupSnapshot {
+        groups: src
+            .groups
+            .iter()
+            .map(|src_group| AdamGroupSnapshot {
                 options: src_group.options,
-                states: src_group.states.iter().map(|src_state| {
-                    src_state.as_ref().map(|src_state| {
-                        AdamParamStateSnapshot {
+                states: src_group
+                    .states
+                    .iter()
+                    .map(|src_state| {
+                        src_state.as_ref().map(|src_state| AdamParamStateSnapshot {
                             step: src_state.step,
                             exp_avg: src_state.exp_avg.detach(),
                             exp_avg_sq: src_state.exp_avg_sq.detach(),
                             max_exp_avg_sq: src_state.max_exp_avg_sq.as_ref().map(Tensor::detach),
-                        }
+                        })
                     })
-                }).collect(),
-            }
-        }).collect(),
+                    .collect(),
+            })
+            .collect(),
         tho_device_idx: src.tho_device_idx,
     }
 }
 
-async fn clone_owned_adam_snapshot_to(
-    src: AdamOptimizerSnapshot,
-    tho_device: ThoDevice,
-) -> anyhow::Result<AdamOptimizerSnapshot> {
+async fn clone_owned_adam_snapshot_to(src: AdamOptimizerSnapshot, tho_device: ThoDevice) -> anyhow::Result<AdamOptimizerSnapshot> {
     clone_owned_adam_like_snapshot_to(src, tho_device, "Adam").await
 }
 
-async fn clone_owned_adam_w_snapshot_to(
-    src: AdamWOptimizerSnapshot,
-    tho_device: ThoDevice,
-) -> anyhow::Result<AdamWOptimizerSnapshot> {
+async fn clone_owned_adam_w_snapshot_to(src: AdamWOptimizerSnapshot, tho_device: ThoDevice) -> anyhow::Result<AdamWOptimizerSnapshot> {
     clone_owned_adam_like_snapshot_to(src, tho_device, "AdamW").await
 }
 
@@ -704,33 +728,26 @@ async fn clone_owned_adam_like_snapshot_to(src: AdamOptimizerSnapshot, tho_devic
         let mut dst_states = vec![];
         for state in states {
             match state {
-                None => {
-                    dst_states.push(None)
-                }
+                None => dst_states.push(None),
                 Some(src_state) => {
                     let AdamParamStateSnapshot { step, exp_avg, exp_avg_sq, max_exp_avg_sq } = src_state;
-                    dst_states.push(Some(AdamParamStateSnapshot{
+                    dst_states.push(Some(AdamParamStateSnapshot {
                         step,
                         exp_avg: GlobalCtx::global().cuda_actor(actor_device_idx).copy(exp_avg.into(), tho_device.into()).await?.into_local()?,
                         exp_avg_sq: GlobalCtx::global().cuda_actor(actor_device_idx).copy(exp_avg_sq.into(), tho_device.into()).await?.into_local()?,
                         max_exp_avg_sq: match max_exp_avg_sq {
                             None => None,
-                            Some(v) => {
-                                Some(GlobalCtx::global().cuda_actor(actor_device_idx).copy(v.into(), tho_device.into()).await?.into_local()?)
-                            }
+                            Some(v) => Some(GlobalCtx::global().cuda_actor(actor_device_idx).copy(v.into(), tho_device.into()).await?.into_local()?),
                         },
                     }))
                 }
             }
         }
 
-        dst_groups.push(AdamGroupSnapshot{
-            options,
-            states: dst_states,
-        })
+        dst_groups.push(AdamGroupSnapshot { options, states: dst_states })
     }
 
-    Ok(AdamOptimizerSnapshot{
+    Ok(AdamOptimizerSnapshot {
         defaults: src.defaults,
         groups: dst_groups,
         tho_device_idx: tho_device.tho_device_idx(),
@@ -784,16 +801,11 @@ async fn clone_owned_optimizer_snapshot_to(src: OptimizerSnapshot, tho_device: T
     })
 }
 
-
-pub async fn clone_var_store_to(
-    src: &VarStore,
-    tho_device: ThoDevice,
-) -> anyhow::Result<VarStore> {
-
+pub async fn clone_var_store_to(src: &VarStore, tho_device: ThoDevice) -> anyhow::Result<VarStore> {
     let actor_device_idx = if tho_device.is_cuda() {
         assert_eq!(src.device(), Cpu);
         tho_device.tho_device_idx()
-    } else  {
+    } else {
         assert_ne!(src.device(), Cpu);
         ThoDevice::try_from(src.device())?.tho_device_idx()
     };
@@ -815,15 +827,7 @@ pub async fn clone_var_store_to(
 
                 assert_ne!(tensor.device(), *tho_device, "can't copy variable {name:?}: source and destination devices are both {:?}", tho_device);
 
-                let trainable = variables
-                    .trainable_variables
-                    .iter()
-                    .enumerate()
-                    .find_map(|(order, var)| {
-                        var.tensor
-                            .is_set_to(tensor)
-                            .then_some((order, var.group))
-                    });
+                let trainable = variables.trainable_variables.iter().enumerate().find_map(|(order, var)| var.tensor.is_set_to(tensor).then_some((order, var.group)));
 
                 VarSpec {
                     name: name.clone(),
@@ -841,10 +845,7 @@ pub async fn clone_var_store_to(
      * Path::add appends trainable variables. Sort before copying so the
      * eventual registration order matches the source VarStore.
      */
-    specs.sort_by_key(|spec| {
-        spec.trainable
-            .map_or((1, usize::MAX), |(order, _group)| (0, order))
-    });
+    specs.sort_by_key(|spec| spec.trainable.map_or((1, usize::MAX), |(order, _group)| (0, order)));
 
     let spec_count = specs.len();
     let mut copies = JoinSet::new();
@@ -893,13 +894,7 @@ pub async fn clone_var_store_to(
             None => (false, 0),
         };
 
-        let dst_tensor = add_named_tensor(
-            &dst,
-            &spec.name,
-            copied.into_local()?,
-            trainable,
-            group,
-        );
+        let dst_tensor = add_named_tensor(&dst, &spec.name, copied.into_local()?, trainable, group);
 
         /*
          * Path::add(..., true) enables requires_grad. Restore the actual
@@ -907,18 +902,13 @@ pub async fn clone_var_store_to(
          */
         let _ = dst_tensor.set_requires_grad(spec.requires_grad);
 
-        assert!(
-            !dst_tensor.grad().defined(),
-            "copied variable {:?} unexpectedly has a defined grad",
-            spec.name,
-        );
+        assert!(!dst_tensor.grad().defined(), "copied variable {:?} unexpectedly has a defined grad", spec.name,);
     }
 
     Ok(dst)
 }
 
-
-pub fn replace_data(dst: &mut  VarStore, src: VarStore) -> anyhow::Result<()> {
+pub fn replace_data(dst: &mut VarStore, src: VarStore) -> anyhow::Result<()> {
     let mut dst_variables = dst.variables_.lock().unwrap();
     let src_variables = src.variables_.lock().unwrap();
 
@@ -936,15 +926,14 @@ pub fn replace_data(dst: &mut  VarStore, src: VarStore) -> anyhow::Result<()> {
         }
 
         if dst_var.kind() != src_var.kind() {
-            return Err(anyhow::anyhow!("dst device {:?} != {:?} src device", dst_var.kind(),  src_var.kind()));
+            return Err(anyhow::anyhow!("dst device {:?} != {:?} src device", dst_var.kind(), src_var.kind()));
         }
 
         if dst_var.size() != src_var.size() {
-            return Err(anyhow::anyhow!("dst size {:?} != {:?} src device", dst_var.size(),  src_var.size()));
+            return Err(anyhow::anyhow!("dst size {:?} != {:?} src device", dst_var.size(), src_var.size()));
         }
 
         if dst_var.grad().defined() {
-
             return Err(anyhow::anyhow!("destination parameter {name} has a defined gradient"));
         }
 
@@ -956,7 +945,7 @@ pub fn replace_data(dst: &mut  VarStore, src: VarStore) -> anyhow::Result<()> {
 
 // Optimizer comparison is test scaffolding, not part of the runtime API.
 #[cfg(test)]
-async fn do_test_reset_optimizer(opt_config: ThoOptimizers, optimizer_name: &'static str) -> anyhow::Result<()>{
+async fn do_test_reset_optimizer(opt_config: ThoOptimizers, optimizer_name: &'static str) -> anyhow::Result<()> {
     // Every supported optimizer uses the same deterministic trajectory so device restoration is compared under identical pressure.
     const IMAGE_DIM: i64 = 128;
     const TEACHER_HIDDEN: i64 = 64;
@@ -977,30 +966,12 @@ async fn do_test_reset_optimizer(opt_config: ThoOptimizers, optimizer_name: &'st
          * Keep the same classifier topology that this optimizer-state test
          * used before ModConfig switched from Module to ThoModule.
          */
-        SeqBuilder::new(IMAGE_DIM as u32, None)?
-            .linear_s(
-                HIDDEN_NODES as u32,
-                "layer1",
-            )?
-            .func(|t|Ok(Tensor::f_relu(t)?))?
-            .linear_s(
-                LABELS as u32,
-                "layer2",
-            )?
-            .end_seq()
+        SeqBuilder::new(IMAGE_DIM as u32, None)?.linear_s(HIDDEN_NODES as u32, "layer1")?.func(|t| Ok(Tensor::f_relu(t)?))?.linear_s(LABELS as u32, "layer2")?.end_seq()
     }
 
-    fn make_split(
-        samples: i64,
-        teacher_w1: &Tensor,
-        teacher_w2: &Tensor,
-        feature_scales: &Tensor,
-    ) -> (Tensor, Tensor) {
+    fn make_split(samples: i64, teacher_w1: &Tensor, teacher_w2: &Tensor, feature_scales: &Tensor) -> (Tensor, Tensor) {
         // The latent features have a well-conditioned distribution.
-        let latent = Tensor::randn(
-            [samples, IMAGE_DIM],
-            (Kind::Float, Device::Cuda(0)),
-        );
+        let latent = Tensor::randn([samples, IMAGE_DIM], (Kind::Float, Device::Cuda(0)));
 
         // The student sees an ill-conditioned version where feature scales
         // range approximately from exp(-4) to exp(4).
@@ -1008,58 +979,43 @@ async fn do_test_reset_optimizer(opt_config: ThoOptimizers, optimizer_name: &'st
 
         // Labels are generated by a fixed nonlinear teacher network, so there
         // is an actual relationship between images and labels.
-        let labels = latent
-            .matmul(teacher_w1)
-            .relu()
-            .matmul(teacher_w2)
-            .argmax(-1, false);
+        let labels = latent.matmul(teacher_w1).relu().matmul(teacher_w2).argmax(-1, false);
 
         (images, labels)
     }
 
-    async fn train_once(
-        reset_optimizer: bool,
-        opt_config: ThoOptimizers,
-        train_images: &Tensor,
-        train_labels: &Tensor,
-        test_images: &Tensor,
-        test_labels: &Tensor,
-    ) -> anyhow::Result<Vec<f64>> {
-
+    async fn train_once(reset_optimizer: bool, opt_config: ThoOptimizers, train_images: &Tensor, train_labels: &Tensor, test_images: &Tensor, test_labels: &Tensor) -> anyhow::Result<Vec<f64>> {
         // Makes both runs start from identical model parameters.
         tch::manual_seed(1234);
 
         let mut losses = Vec::with_capacity(EPOCHS as usize);
 
-        let mut tho_train_mod = ThoTrainModule::new_on_device(ModConfig::new(
-            opt_config,
-            /*
-             * build_tch_module already returns the boxed ThoModule expected
-             * by ModConfig, so wrapping it again would create Box<Box<_>>.
-             */
-            |vs| test_net()?.build_tch_module::<Batch<AnyDims>, Batch<AnyDims>>(&vs.root()),
-            LEARNING_RATE,
-        ), thoosa_common::tho_device::ThoDevice::from(1usize))?;
+        let mut tho_train_mod = ThoTrainModule::new_on_device(
+            ModConfig::new(
+                opt_config,
+                /*
+                 * build_tch_module already returns the boxed ThoModule expected
+                 * by ModConfig, so wrapping it again would create Box<Box<_>>.
+                 */
+                |vs| test_net()?.build_tch_module::<Batch<AnyDims>, Batch<AnyDims>>(&vs.root()),
+                LEARNING_RATE,
+            ),
+            thoosa_common::tho_device::ThoDevice::from(1usize),
+        )?;
 
         for epoch in 1..=EPOCHS {
-
             if reset_optimizer && epoch == RESET_EPOCH {
-
                 tho_train_mod.opt().zero_grad();
 
-                 tho_train_mod.move_to_device(0).await?;
+                tho_train_mod.move_to_device(0).await?;
                 // ///////////////
                 tho_train_mod.move_to_device(1).await?;
-
             }
 
             // Module reconstruction consumes CUDA RNG, so reseed after the optional reset to preserve identical mini-batch ordering.
             tch::manual_seed(1234 + epoch);
 
-            let permutation = Tensor::randperm(
-                TRAIN_SAMPLES,
-                (Kind::Int64, Device::Cuda(0)),
-            );
+            let permutation = Tensor::randperm(TRAIN_SAMPLES, (Kind::Int64, Device::Cuda(0)));
 
             let mut start = 0;
 
@@ -1094,13 +1050,7 @@ async fn do_test_reset_optimizer(opt_config: ThoOptimizers, optimizer_name: &'st
             losses.push(train_loss);
 
             if matches!(epoch, 49 | 50 | 51 | 52 | 55 | 60) {
-                tracing::debug!(
-                    reset_optimizer,
-                    epoch,
-                    train_loss,
-                    test_accuracy = 100.0 * test_accuracy,
-                    "training progress",
-                );
+                tracing::debug!(reset_optimizer, epoch, train_loss, test_accuracy = 100.0 * test_accuracy, "training progress",);
             }
         }
 
@@ -1109,77 +1059,42 @@ async fn do_test_reset_optimizer(opt_config: ThoOptimizers, optimizer_name: &'st
 
     tch::manual_seed(42);
 
-    let teacher_w1 = Tensor::randn(
-        [IMAGE_DIM, TEACHER_HIDDEN],
-        (Kind::Float, Device::Cuda(0)),
-    ) / (IMAGE_DIM as f64).sqrt();
+    let teacher_w1 = Tensor::randn([IMAGE_DIM, TEACHER_HIDDEN], (Kind::Float, Device::Cuda(0))) / (IMAGE_DIM as f64).sqrt();
 
-    let teacher_w2 = Tensor::randn(
-        [TEACHER_HIDDEN, LABELS],
-        (Kind::Float, Device::Cuda(0)),
-    ) / (TEACHER_HIDDEN as f64).sqrt();
+    let teacher_w2 = Tensor::randn([TEACHER_HIDDEN, LABELS], (Kind::Float, Device::Cuda(0))) / (TEACHER_HIDDEN as f64).sqrt();
 
-    let feature_positions = Tensor::arange(
-        IMAGE_DIM,
-        (Kind::Float, Device::Cuda(0)),
-    );
+    let feature_positions = Tensor::arange(IMAGE_DIM, (Kind::Float, Device::Cuda(0)));
 
-    let feature_scales = (
-        feature_positions / ((IMAGE_DIM - 1) as f64) * 8.0 - 4.0
-    )
-        .exp();
+    let feature_scales = (feature_positions / ((IMAGE_DIM - 1) as f64) * 8.0 - 4.0).exp();
 
-    let (train_images, train_labels) = make_split(
-        TRAIN_SAMPLES,
-        &teacher_w1,
-        &teacher_w2,
-        &feature_scales,
-    );
+    let (train_images, train_labels) = make_split(TRAIN_SAMPLES, &teacher_w1, &teacher_w2, &feature_scales);
 
-    let (test_images, test_labels) = make_split(
-        TEST_SAMPLES,
-        &teacher_w1,
-        &teacher_w2,
-        &feature_scales,
-    );
+    let (test_images, test_labels) = make_split(TEST_SAMPLES, &teacher_w1, &teacher_w2, &feature_scales);
 
-    let preserved_losses = train_once(
-        false,
-        opt_config.clone(),
-        &train_images,
-        &train_labels,
-        &test_images,
-        &test_labels,
-    ).await?;
+    let preserved_losses = train_once(false, opt_config.clone(), &train_images, &train_labels, &test_images, &test_labels).await?;
 
-    let reset_losses = train_once(
-        true,
-        opt_config,
-        &train_images,
-        &train_labels,
-        &test_images,
-        &test_labels,
-    ).await?;
+    let reset_losses = train_once(true, opt_config, &train_images, &train_labels, &test_images, &test_labels).await?;
 
     for epoch in 49..=60 {
         let index = (epoch - 1) as usize;
 
-        debug!("epoch={epoch} preserved={} reset={} difference={}", preserved_losses[index],reset_losses[index], reset_losses[index] - preserved_losses[index]);
+        debug!("epoch={epoch} preserved={} reset={} difference={}", preserved_losses[index], reset_losses[index], reset_losses[index] - preserved_losses[index]);
     }
 
     // Compare the first epoch affected by the replacement.
     let first_affected_index = (RESET_EPOCH - 1) as usize;
 
-    let immediate_difference = (
-        reset_losses[first_affected_index]
-            - preserved_losses[first_affected_index]
-    ).abs();
+    let immediate_difference = (reset_losses[first_affected_index] - preserved_losses[first_affected_index]).abs();
 
-    assert!(immediate_difference < 1e-3, "{optimizer_name} produced a diverging trajectory after reset: preserved={}, reset={}", preserved_losses[first_affected_index], reset_losses[first_affected_index]);
+    assert!(
+        immediate_difference < 1e-3,
+        "{optimizer_name} produced a diverging trajectory after reset: preserved={}, reset={}",
+        preserved_losses[first_affected_index],
+        reset_losses[first_affected_index]
+    );
 
     Ok(())
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -1194,20 +1109,9 @@ mod tests {
     fn create_variables(vs: &VarStore) {
         let p = vs.root().sub("my_module");
 
-        let _weight = p.var(
-            "weight",
-            &[128, 64],
-            Init::Randn {
-                mean: 0.0,
-                stdev: 0.02,
-            },
-        );
+        let _weight = p.var("weight", &[128, 64], Init::Randn { mean: 0.0, stdev: 0.02 });
 
-        let _t0 = p.add(
-            "t_0",
-            Tensor::zeros([10, 1000], (tch::Kind::Float, vs.device())),
-            false,
-        );
+        let _t0 = p.add("t_0", Tensor::zeros([10, 1000], (tch::Kind::Float, vs.device())), false);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1224,14 +1128,13 @@ mod tests {
         let mut bytes = Vec::new();
         vs_cpu.save_to_stream(&mut bytes)?;
 
-        debug!("source variables={:?}",vs_cpu.variables().keys().collect::<Vec<_>>());
-
+        debug!("source variables={:?}", vs_cpu.variables().keys().collect::<Vec<_>>());
 
         let vs_cuda = clone_var_store_to(&vs_cpu, thoosa_common::tho_device::ThoDevice::from(1usize)).await?;
 
         let cuda_vars = vs_cuda.variables();
         for (name, tensor) in &cuda_vars {
-            debug!("name={name}, device={:?}, shape={:?}, requires_grad={}",tensor.device(),tensor.size(),tensor.requires_grad(),);
+            debug!("name={name}, device={:?}, shape={:?}, requires_grad={}", tensor.device(), tensor.size(), tensor.requires_grad(),);
         }
 
         let cpu_vars_1 = clone_var_store_to(&vs_cuda, thoosa_common::tho_device::ThoDevice::from(0usize)).await?;
@@ -1242,7 +1145,6 @@ mod tests {
 
         Ok(())
     }
-
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_reset_adam_local() -> anyhow::Result<()> {
@@ -1267,11 +1169,15 @@ mod tests {
         GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
-        let config = nn::Sgd { momentum: 0.9, dampening: 0.0, wd: 0.01, nesterov: true }.into();
+        let config = nn::Sgd {
+            momentum: 0.9,
+            dampening: 0.0,
+            wd: 0.01,
+            nesterov: true,
+        }
+        .into();
         do_test_reset_optimizer(config, "SGD").await
     }
-
-
 }
 
 #[cfg(test)]

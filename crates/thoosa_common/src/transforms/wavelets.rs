@@ -7,10 +7,8 @@ fn generate_morlet_wavelet(center_freq: f64, sample_rate: f64, n_cycles: f64) ->
     let t = Tensor::arange(2 * half_support + 1, (Kind::Float, Device::Cpu)) - half_support;
     let t = t / sample_rate;
 
-    let real = (-t.pow_tensor_scalar(2.0) / (2.0 * sigma.powi(2))).exp()
-        * (2.0 * std::f64::consts::PI * center_freq * &t).cos();
-    let imag = (-t.pow_tensor_scalar(2.0) / (2.0 * sigma.powi(2))).exp()
-        * (2.0 * std::f64::consts::PI * center_freq * &t).sin();
+    let real = (-t.pow_tensor_scalar(2.0) / (2.0 * sigma.powi(2))).exp() * (2.0 * std::f64::consts::PI * center_freq * &t).cos();
+    let imag = (-t.pow_tensor_scalar(2.0) / (2.0 * sigma.powi(2))).exp() * (2.0 * std::f64::consts::PI * center_freq * &t).sin();
 
     (real, imag)
 }
@@ -48,10 +46,7 @@ mod tests {
 
         let (wavelet_real, wavelet_imag) = generate_morlet_wavelet(target_freq, sample_rate, n_cycles);
 
-        let t = Tensor::arange(
-            (sample_rate * duration_secs) as i64,
-            (Kind::Float, Device::Cpu),
-        ) / sample_rate;
+        let t = Tensor::arange((sample_rate * duration_secs) as i64, (Kind::Float, Device::Cpu)) / sample_rate;
 
         let input_signal_0 = sin_t(&t, target_freq);
         let input_signal_1 = sin_t(&t, 3. * target_freq);

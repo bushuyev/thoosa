@@ -1,17 +1,15 @@
-use std::sync::Arc;
 use anyhow::Context;
 use futures_util::future::BoxFuture;
 use log::{debug, error, trace};
 use parking_lot::Mutex;
+use std::sync::Arc;
+use thoosa_shared::tracked_await::t;
+use thoosa_shared::{CudaActivityGate, ThoError, panic_to_err_async};
 use tokio::sync::{mpsc, watch};
 use tracing::Instrument;
-use thoosa_shared::{panic_to_err_async, CudaActivityGate, ThoError};
-use thoosa_shared::tracked_await::t;
 
 pub enum PurgeCmd {
-    Gpu {
-        closures: Vec<Box<dyn Fn()->BoxFuture<'static, Result<(), ThoError>> + Send + Sync>>
-    },
+    Gpu { closures: Vec<Box<dyn Fn() -> BoxFuture<'static, Result<(), ThoError>> + Send + Sync>> },
 }
 
 /// Submission acknowledges queue admission, not completion. Shutdown closes admission
@@ -29,13 +27,7 @@ impl Purger {
 
         let (tx, rx) = mpsc::unbounded_channel::<PurgeCmd>();
         let (completed, completion) = watch::channel(None);
-        let worker = tokio::spawn(Self::run(rx, gate).instrument(tracing::info_span!(
-            "purger::worker",
-            kind = "spawn",
-            file = file!(),
-            line = line!(),
-            task = "process GPU purge commands",
-        )));
+        let worker = tokio::spawn(Self::run(rx, gate).instrument(tracing::info_span!("purger::worker", kind = "spawn", file = file!(), line = line!(), task = "process GPU purge commands",)));
 
         // Observe even an unwinding/aborted worker. This observer owns no work-channel
         // handles and remains alive to report failures if the Purger owner is dropped.
@@ -76,7 +68,7 @@ impl Purger {
         first_error.map_or(Ok(()), Err)
     }
 
-    pub fn run_purge_gpu(&self, closures: Vec<Box<dyn Fn()->BoxFuture<'static, Result<(), ThoError>> + Send + Sync>>) -> Result<(), ThoError> {
+    pub fn run_purge_gpu(&self, closures: Vec<Box<dyn Fn() -> BoxFuture<'static, Result<(), ThoError>> + Send + Sync>>) -> Result<(), ThoError> {
         debug!("Purger::run_purge_gpu: closures.len={}", closures.len());
         let command = PurgeCmd::Gpu { closures };
         let rejected = {
@@ -161,11 +153,14 @@ mod tests {
     #[tokio::test]
     async fn test_worker_panic_is_observed_and_closes_queue() -> Result<(), ThoError> {
         let purger = Purger::new(None);
-        purger.run_purge_gpu(vec![Box::new(|| async {
-            // Panic during polling, beyond the legacy callback-construction panic adapter.
-            tokio::task::yield_now().await;
-            panic!("injected purge worker panic");
-        }.boxed())])?;
+        purger.run_purge_gpu(vec![Box::new(|| {
+            async {
+                // Panic during polling, beyond the legacy callback-construction panic adapter.
+                tokio::task::yield_now().await;
+                panic!("injected purge worker panic");
+            }
+            .boxed()
+        })])?;
         let retained = Arc::new(());
         let weak = Arc::downgrade(&retained);
         purger.run_purge_gpu(vec![Box::new(move || {
@@ -203,7 +198,8 @@ mod tests {
                     }
                     processed.lock().push(value);
                     Ok(())
-                }.boxed()
+                }
+                .boxed()
             })])?;
         }
         tokio::time::timeout(Duration::from_secs(5), started.notified()).await?;
@@ -235,7 +231,8 @@ mod tests {
                     tokio::task::yield_now().await;
                     executed.fetch_add(1, Ordering::SeqCst);
                     Ok(())
-                }.boxed()
+                }
+                .boxed()
             })])?;
         }
         // Only the completion observer survives; it must not keep queue admission open.

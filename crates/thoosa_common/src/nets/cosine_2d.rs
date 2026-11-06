@@ -8,7 +8,6 @@ use tch::nn::Path;
 use tch::{Kind, Tensor, nn};
 use thoosa_shared::traits::DebugId;
 
-
 #[derive(Debug, Clone, Copy)]
 pub struct CosineConv2dBankConfig {
     pub stride: [i64; 2],
@@ -61,20 +60,18 @@ impl Default for CosineConv2dBankConfig {
 ///     [B, M, H_out, W_out]
 pub fn cosine_conv2d_bank_logits(
     x: &Tensor,
-    kernels: &Tensor,//TODO remove &
+    kernels: &Tensor, //TODO remove &
     alpha: &Tensor,
     beta: &Tensor,
     cfg: CosineConv2dBankConfig,
 ) -> anyhow::Result<Tensor> {
     debug!("cosine_conv2d_bank_logits: x={x:?} kernels={kernels:?} alpha={alpha:?} beta={beta:?} cfg={cfg:?}  x.isnan={}", x.isnan().any());
-    debug!("cosine_conv2d_bank_logits: devices x={:?} kernels={:?} alpha={:?} beta={:?} ",  x.device(), kernels.device(), alpha.device(), beta.device());
+    debug!("cosine_conv2d_bank_logits: devices x={:?} kernels={:?} alpha={:?} beta={:?} ", x.device(), kernels.device(), alpha.device(), beta.device());
     trace!("cosine_conv2d_bank_logits: x=\n{x} kernels=\n{kernels} alpha=\n{alpha} beta=\n{beta}");
 
     let x_sz = x.size();
     if x_sz.len() != 4 {
-        return Err(anyhow::anyhow!(
-            format!("x must have shape [B,C,H,W], got {:?}", x_sz),
-        ));
+        return Err(anyhow::anyhow!(format!("x must have shape [B,C,H,W], got {:?}", x_sz),));
     }
 
     let _b = x_sz[0];
@@ -114,11 +111,7 @@ pub fn cosine_conv2d_bank_logits(
     // Normalize each kernel independently:
     //
     // k_unit[m] = k[m] / ||k[m]||
-    let k_norm = k
-        .f_mul(&k)?
-        .f_sum_dim_intlist(&[1i64, 2i64, 3i64][..], true, Kind::Float)?
-        .f_sqrt()?
-        .f_clamp_min(cfg.eps)?;
+    let k_norm = k.f_mul(&k)?.f_sum_dim_intlist(&[1i64, 2i64, 3i64][..], true, Kind::Float)?.f_sqrt()?.f_clamp_min(cfg.eps)?;
 
     debug!("cosine_conv2d_bank_logits: k_norm={k_norm:?} k_norm.isnan={}", k_norm.isnan().any());
 
@@ -127,41 +120,17 @@ pub fn cosine_conv2d_bank_logits(
     // Numerator:
     //
     // num[b,m,y,t] = dot(x_patch[b,y,t], k_unit[m])
-    let num = x.f_conv2d(
-        &k_unit,
-        Option::<&Tensor>::None,
-        cfg.stride,
-        cfg.padding,
-        cfg.dilation,
-        1,
-    )?; // [B,M,H_out,W_out]
+    let num = x.f_conv2d(&k_unit, Option::<&Tensor>::None, cfg.stride, cfg.padding, cfg.dilation, 1)?; // [B,M,H_out,W_out]
 
     // Local input norm. Same spatial sliding window as numerator.
-    let ones = Tensor::f_ones(
-        &[1, c, kh, kw],
-        (x.kind(), x.device()),
-    )?;
+    let ones = Tensor::f_ones(&[1, c, kh, kw], (x.kind(), x.device()))?;
 
     let x_sq = x.f_mul(x)?;
 
     let local_norm_sq = if cfg.center_input_norm {
-        let local_sum = x.f_conv2d(
-            &ones,
-            Option::<&Tensor>::None,
-            cfg.stride,
-            cfg.padding,
-            cfg.dilation,
-            1,
-        )?; // [B,1,H_out,W_out]
+        let local_sum = x.f_conv2d(&ones, Option::<&Tensor>::None, cfg.stride, cfg.padding, cfg.dilation, 1)?; // [B,1,H_out,W_out]
 
-        let local_sum_sq = x_sq.f_conv2d(
-            &ones,
-            Option::<&Tensor>::None,
-            cfg.stride,
-            cfg.padding,
-            cfg.dilation,
-            1,
-        )?; // [B,1,H_out,W_out]
+        let local_sum_sq = x_sq.f_conv2d(&ones, Option::<&Tensor>::None, cfg.stride, cfg.padding, cfg.dilation, 1)?; // [B,1,H_out,W_out]
         debug!("cosine_conv2d_bank_logits: local_sum_sq={local_sum_sq:?} local_sum_sq.isnan={}", local_sum_sq.isnan().any());
 
         let area = (c * kh * kw) as f64;
@@ -171,20 +140,11 @@ pub fn cosine_conv2d_bank_logits(
 
         local_sum_sq.f_sub(&correction)?
     } else {
-        x_sq.f_conv2d(
-            &ones,
-            Option::<&Tensor>::None,
-            cfg.stride,
-            cfg.padding,
-            cfg.dilation,
-            1,
-        )? // [B,1,H_out,W_out]
+        x_sq.f_conv2d(&ones, Option::<&Tensor>::None, cfg.stride, cfg.padding, cfg.dilation, 1)? // [B,1,H_out,W_out]
     };
     debug!("cosine_conv2d_bank_logits: local_norm_sq={local_norm_sq:?} local_norm_sq.isnan={}", local_norm_sq.isnan().any());
 
-    let x_norm = local_norm_sq
-        .f_clamp_min(cfg.eps)?
-        .f_sqrt()?; // [B,1,H_out,W_out]
+    let x_norm = local_norm_sq.f_clamp_min(cfg.eps)?.f_sqrt()?; // [B,1,H_out,W_out]
 
     debug!("cosine_conv2d_bank_logits: x_norm={x_norm:?} x_norm.isnan={}", x_norm.isnan().any());
 
@@ -196,9 +156,7 @@ pub fn cosine_conv2d_bank_logits(
     let alpha = alpha.f_view([1, m, 1, 1])?;
     let beta = beta.f_view([1, m, 1, 1])?;
 
-    Ok(score
-        .f_mul(&alpha)?
-        .f_add(&beta)?)
+    Ok(score.f_mul(&alpha)?.f_add(&beta)?)
 }
 
 #[derive(Debug)]
@@ -212,9 +170,9 @@ pub struct ThoCosineConv2d {
     pub beta: Tensor,
 
     #[expect(dead_code, reason = "Retains stored metadata and its existing construction and diagnostic representation.")]
-    kh:i64,//frequencies
+    kh: i64, //frequencies
     #[expect(dead_code, reason = "Retains stored metadata and its existing construction and diagnostic representation.")]
-    kw:i64,//time
+    kw: i64, //time
 
     cfg: CosineConv2dBankConfig,
 }
@@ -235,9 +193,7 @@ impl ThoCosineConv2d {
             path_var(vs, "kernel", &[1, 1, kh, kw], nn::Init::Const(0.0))?
         } else {
             match init_patches {
-                None => {
-                    path_var(vs, "kernel", &[1, 1, kh, kw], nn::Init::Const(0.0))?
-                }
+                None => path_var(vs, "kernel", &[1, 1, kh, kw], nn::Init::Const(0.0))?,
 
                 Some(patches) => {
                     let patches = patches.local()?;
@@ -247,8 +203,8 @@ impl ThoCosineConv2d {
                     if psz[2] != kh || psz[3] != kw {
                         return Err(anyhow::anyhow!("init patches must have spatial size [{kh},{kw}], got {psz:?}"));
                     }
-                    let kh_freq = psz[2];//frequencies
-                    let kw_time = psz[3];//time
+                    let kh_freq = psz[2]; //frequencies
+                    let kw_time = psz[3]; //time
                     debug!("ThoCosineConv2d::new: kh_freq={kh_freq:?} kw_time={kw_time:?}");
 
                     // TODO add  / Median / TrimmedMean / CenteredL2NormalizedMean.
@@ -293,11 +249,7 @@ impl ThoCosineConv2d {
     ///
     /// Do not use this to combine already-trained old models unless they were trained
     /// with the same settings.
-    pub fn with_forward_normalization(
-        mut self,
-        center_kernel_forward: bool,
-        center_input_norm: bool,
-    ) -> Self {
+    pub fn with_forward_normalization(mut self, center_kernel_forward: bool, center_input_norm: bool) -> Self {
         self.cfg.center_kernel_forward = center_kernel_forward;
         self.cfg.center_input_norm = center_input_norm;
         self
@@ -323,11 +275,7 @@ impl ThoCosineConv2d {
 
     /// proto: [H,W], [1,H,W], or [1,1,H,W]
     /// returns: [1,1,H,W]
-    fn finalize_prototype_2d(
-        proto: &Tensor,
-        zero_mean: bool,
-        unit_l2: bool,
-    ) -> anyhow::Result<Tensor> {
+    fn finalize_prototype_2d(proto: &Tensor, zero_mean: bool, unit_l2: bool) -> anyhow::Result<Tensor> {
         let mut p = match proto.size().as_slice() {
             [h, w] => proto.f_view([1, *h, *w])?,
             [1, _, _] => proto.shallow_clone(),
@@ -343,11 +291,7 @@ impl ThoCosineConv2d {
         }
 
         if unit_l2 {
-            let norm = p
-                .f_mul(&p)?
-                .f_sum(Kind::Float)?
-                .f_sqrt()?
-                .f_clamp_min(1e-12)?;
+            let norm = p.f_mul(&p)?.f_sum(Kind::Float)?.f_sqrt()?.f_clamp_min(1e-12)?;
 
             p = p.f_div(&norm)?;
         }
@@ -414,7 +358,6 @@ impl ThoCosineConv2d {
 }
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for ThoCosineConv2d {
-
     /// For full-size matching where input H/W equals kernel H/W.
     /// Returns [B,1].
     fn tho_forward(&self, x_in: &ThoTensor<DI, DebugId>, _lengths: Option<&mut BatchLengths>, _train: bool) -> anyhow::Result<ThoTensor<DO, DebugId>> {
@@ -445,16 +388,10 @@ mod tests {
         let slices = 3;
         let frequencies = 8000;
         let time = 4;
-        let batch =  7;
+        let batch = 7;
 
         let vs = VarStore::new(Cpu);
-        let cosine_2d = ThoCosineConv2d::new(
-            &vs.root(),
-            8000, 4,
-            Some(Arc::new(ThoTensor::<AnyDims, thoosa_shared::traits::DebugId>::new(debug_id!(""), Tensor::rand(&[slices,frequencies,time], FLOAT_CPU))?)),
-            1.0, 0.1,
-        )?;
-
+        let cosine_2d = ThoCosineConv2d::new(&vs.root(), 8000, 4, Some(Arc::new(ThoTensor::<AnyDims, thoosa_shared::traits::DebugId>::new(debug_id!(""), Tensor::rand(&[slices, frequencies, time], FLOAT_CPU))?)), 1.0, 0.1)?;
 
         let y = cosine_2d.forward(&Tensor::rand(&[batch, 1, frequencies, time], FLOAT_CPU))?;
 
@@ -462,5 +399,4 @@ mod tests {
 
         Ok(())
     }
-
 }

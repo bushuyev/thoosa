@@ -1,12 +1,8 @@
-use thoosa_common::runner::execution::{StageExecution, ExecutionContext};
-use std::future::Future;
-use std::borrow::Borrow;
-use thoosa_common::tch_error::tch_result;
 use crate as thoosa_common;
 use crate::ipc::cuda_wokrer::{AllTensors, WorkerStageInput, WorkerStageOutput};
 use crate::ipc::proxy::{DynSyncStageEnum, ProxyStage};
-use crate::ipc::serialization::json::{JsonIpcCodec};
-use crate::ipc::worker_msg::{WorkerInput};
+use crate::ipc::serialization::json::JsonIpcCodec;
+use crate::ipc::worker_msg::WorkerInput;
 use crate::ipc::wraps::SyncStageIpcWrapper;
 use crate::ipc::wraps::WorkerWrapper;
 use crate::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, SelectRef, ThoDataRef};
@@ -22,39 +18,39 @@ use crate::ws::Workspace;
 use async_trait::async_trait;
 use cached_derive::Cached;
 use futures_util::future::BoxFuture;
-use parking_lot::{RwLock};
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize, Serializer};
+use std::borrow::Borrow;
+use std::future::Future;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::Acquire;
+use thoosa_common::runner::execution::{ExecutionContext, StageExecution};
+use thoosa_common::runner::sync_stage::SyncStage;
+use thoosa_common::tch_error::tch_result;
 use thoosa_cpu_data_derive::CpuData;
 use thoosa_named_derive::Named;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::{MonoKey, SynKey};
+use thoosa_shared::ipc_types::WorkerOutput;
 use thoosa_shared::tracked_await::t;
 use thoosa_shared::traits::{Adjustable, AsyncStage, Data, MonoMetrics, OutId, RangeSelector, RunCtx, Stage, ThoSelector, WithId};
-use thoosa_common::runner::sync_stage::{SyncStage};
 use thoosa_shared::{ThoError, mono_key};
-use thoosa_shared::ipc_types::WorkerOutput;
 use tracing::debug;
 
 pub(crate) const SYNC_AB_CLC_ENDPOINT: &str = "ABClcSyncStage";
 
 #[derive(Debug, Named, Clone)]
 pub struct ABClcStageInput {
-    id:SynKey,
-    from_a:Arc<AStageInput>,
-    from_b:Arc<BStageInput>,
+    id: SynKey,
+    from_a: Arc<AStageInput>,
+    from_b: Arc<BStageInput>,
 }
 
 impl ABClcStageInput {
     pub(super) fn new(from_a: Arc<AStageInput>, from_b: Arc<BStageInput>) -> Self {
-        Self {
-            id: from_a.id().clone() + from_b.id(),
-            from_a,
-            from_b
-        }
+        Self { id: from_a.id().clone() + from_b.id(), from_a, from_b }
     }
 }
 
@@ -66,15 +62,13 @@ impl WithId for ABClcStageInput {
     }
 }
 
-
-
 impl Input for ABClcStageInput {}
 
 #[derive(Debug, Named, Clone, CpuData, Serialize, Deserialize)]
 #[cpu_data(shallow)]
 pub struct ABClcStageOutput {
-    id:SynKey,
-    pub(super) value:f32
+    id: SynKey,
+    pub(super) value: f32,
 }
 
 impl WithId for ABClcStageOutput {
@@ -85,7 +79,6 @@ impl WithId for ABClcStageOutput {
     }
 }
 
-
 impl Output for ABClcStageOutput {}
 
 #[typetag::serde]
@@ -94,13 +87,9 @@ impl WorkerOutput for ABClcStageOutput {}
 #[async_trait]
 impl thoosa_shared::CopyToDevice for ABClcStageOutput {
     async fn copy_to_device(&self, _dst_device: usize) -> Result<Self, ThoError> {
-        Ok(Self {
-            id: self.id.clone(),
-            value: self.value,
-        })
+        Ok(Self { id: self.id.clone(), value: self.value })
     }
 }
-
 
 #[derive(Debug, Named, Cached)]
 pub struct ABClcStage<S = ABClcSyncStage>
@@ -109,12 +98,11 @@ where
     S::Ctx: Adjustable + Send + Sync + 'static,
     for<'f> S: Stage<Ctx = RunCtxImpl, In<'f> = ABClcSyncStageInput<'f>, Out = ABClcStageOutput>,
 {
-    id:MonoKey,
-    a_stage:Arc<AStage>,
-    b_stage:Arc<BStage>,
-    pub ab_clc_sync:Arc<S>
+    id: MonoKey,
+    a_stage: Arc<AStage>,
+    b_stage: Arc<BStage>,
+    pub ab_clc_sync: Arc<S>,
 }
-
 
 impl ABClcStage {
     pub fn new() -> Self {
@@ -156,27 +144,27 @@ where
 #[derive(Debug)]
 pub struct ABClcSyncStageInputWrapper {
     #[expect(dead_code, reason = "Retains stored metadata and its existing construction and diagnostic representation.")]
-    id:SynKey,
-    a_out:Arc<DevicesWrap<AStageOutput>>,
-    b_out:Arc<DevicesWrap<BStageOutput>>
+    id: SynKey,
+    a_out: Arc<DevicesWrap<AStageOutput>>,
+    b_out: Arc<DevicesWrap<BStageOutput>>,
 }
 
 impl ABClcSyncStageInputWrapper {
     // Both output types are visible only to the composite-input test module.
     pub(super) fn new(a_out: Arc<DevicesWrap<AStageOutput>>, b_out: Arc<DevicesWrap<BStageOutput>>) -> Self {
-        Self {
-            id: a_out.id() + b_out.id(),
-            a_out,
-            b_out
-        }
+        Self { id: a_out.id() + b_out.id(), a_out, b_out }
     }
 }
 
-
 impl BorrowRef for ABClcSyncStageInputWrapper {
-    fn protect(&self, device: usize) -> thoosa_common::runner::residency::ResidencyLease { thoosa_common::runner::residency::ResidencyLease::combine([self.a_out.protect(device), self.b_out.protect(device)]) }
+    fn protect(&self, device: usize) -> thoosa_common::runner::residency::ResidencyLease {
+        thoosa_common::runner::residency::ResidencyLease::combine([self.a_out.protect(device), self.b_out.protect(device)])
+    }
 
-    type Out<'a> = ABClcSyncStageInput<'a> where Self: 'a;
+    type Out<'a>
+        = ABClcSyncStageInput<'a>
+    where
+        Self: 'a;
 
     fn borrow_ref<'a>(&'a self, to_device_idx: usize) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
     where
@@ -188,7 +176,6 @@ impl BorrowRef for ABClcSyncStageInputWrapper {
             Ok(ABClcSyncStageInput::from_data_refs(ThoDataRef::ReadLocked(from_a), ThoDataRef::ReadLocked(from_b)))
         }
     }
-
 }
 
 impl SelectRef<ABClcSyncStageInputWrapperSelector> for ABClcSyncStageInputWrapper {
@@ -198,13 +185,11 @@ impl SelectRef<ABClcSyncStageInputWrapperSelector> for ABClcSyncStageInputWrappe
         Self: 'a,
     {
         async move {
-            match selector{
-                None => {
-                    BorrowRef::borrow_ref(self, to_device_idx).await
-                }
+            match selector {
+                None => BorrowRef::borrow_ref(self, to_device_idx).await,
                 Some(selector) => {
                     let from_a = SelectRef::select_ref(&self.a_out, to_device_idx, Some(selector.a_select)).await?;
-                    let from_b =  SelectRef::select_ref(&self.b_out, to_device_idx, Some(selector.b_select)).await?;
+                    let from_b = SelectRef::select_ref(&self.b_out, to_device_idx, Some(selector.b_select)).await?;
                     Ok(ABClcSyncStageInput::from_data_refs(from_a, from_b))
                 }
             }
@@ -212,30 +197,28 @@ impl SelectRef<ABClcSyncStageInputWrapperSelector> for ABClcSyncStageInputWrappe
     }
 }
 
-
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ABClcSyncStageInputWrapperSelector {
-    a_select:RangeSelector,
-    b_select:RangeSelector
+    a_select: RangeSelector,
+    b_select: RangeSelector,
 }
 
 impl ABClcSyncStageInputWrapperSelector {
-    pub fn new(a_end:i64, b_end:i64) -> Self {
+    pub fn new(a_end: i64, b_end: i64) -> Self {
         Self {
             a_select: RangeSelector([0i64]..[a_end]),
-            b_select: RangeSelector([0i64]..[b_end])
+            b_select: RangeSelector([0i64]..[b_end]),
         }
     }
 }
 
 #[typetag::serde]
-impl ThoSelector for ABClcSyncStageInputWrapperSelector {fn clone_box(&self) -> Box<dyn ThoSelector> {
+impl ThoSelector for ABClcSyncStageInputWrapperSelector {
+    fn clone_box(&self) -> Box<dyn ThoSelector> {
         Box::new(self.clone())
     }
-
 }
 impl Adjustable for ABClcSyncStageInputWrapperSelector {}
-
 
 impl<S> Stage for ABClcStage<S>
 where
@@ -248,40 +231,24 @@ where
     type Out = Arc<DevicesWrap<ABClcStageOutput>>;
 }
 
-
 impl<S> AsyncStage for ABClcStage<S>
 where
     S: thoosa_common::runner::execution::StageExecution + Adjustable + OutId + Send + Sync + 'static,
     S::Ctx: Adjustable + Send + Sync + 'static,
     for<'f> S: Stage<Ctx = RunCtxImpl, In<'f> = ABClcSyncStageInput<'f>, Out = ABClcStageOutput>,
 {
-
-
     async fn run(self: Arc<Self>, input: Self::In<'static>, mut ctx: Self::Ctx) -> Result<Self::Out, ThoError> {
         let a_out = Arc::clone(&self.a_stage).run_cached(Arc::clone(&input.from_a), ctx.branch(false)).await?;
         let b_out = Arc::clone(&self.b_stage).run_cached(Arc::clone(&input.from_b), ctx.branch(false)).await?;
 
         let _out_id = self.ab_clc_sync.out_id(input.id());
 
-
         let input = Arc::new(ABClcSyncStageInputWrapper::new(a_out, b_out));
-        let result = OOMHandler::<NoInputAdjuster, NoStageAdjuster, NoRunCtxAdjuster, ABClcSyncStageInputWrapperSelector>::new(
-            vec![],
-            None,
-        )
-            .run(
-                &self.ab_clc_sync,
-                input,
-                ctx,
-                NoContexts,
-            )
-            .await?;
+        let result = OOMHandler::<NoInputAdjuster, NoStageAdjuster, NoRunCtxAdjuster, ABClcSyncStageInputWrapperSelector>::new(vec![], None).run(&self.ab_clc_sync, input, ctx, NoContexts).await?;
 
-        Ok(Arc::new(DevicesWrap::wrap( result)))
-
+        Ok(Arc::new(DevicesWrap::wrap(result)))
     }
 }
-
 
 #[derive(Debug, Serialize)]
 struct ABClcSyncStageIpcInputRef<'a> {
@@ -301,11 +268,10 @@ impl<'a> ABClcSyncStageIpcInputRef<'a> {
     }
 }
 
-
 #[derive(Debug, Named)]
 pub struct ABClcSyncStage {
-    id:MonoKey,
-    num_calls:AtomicUsize,
+    id: MonoKey,
+    num_calls: AtomicUsize,
 }
 
 #[derive(Debug, Named)]
@@ -322,7 +288,7 @@ impl ProxyABClcSyncStage {
             num_calls: AtomicUsize::default(),
             stage: Arc::new(DynSyncStageEnum::Proxy {
                 stage: Arc::new(ProxyStage::proxy(SYNC_AB_CLC_ENDPOINT, Some(0.to_string()), tho_device_idx, Box::new(())).await?),
-                init: ()
+                init: (),
             }),
         })
     }
@@ -356,10 +322,7 @@ impl ABClcSyncStage {
 
         debug!("ABClcSyncStage::do_run: value={value}");
 
-        Ok(ABClcStageOutput{
-            id: self.out_id(input_id),
-            value,
-        })
+        Ok(ABClcStageOutput { id: self.out_id(input_id), value })
     }
 }
 
@@ -375,19 +338,22 @@ impl WithId for ABClcSyncStageInput<'_> {
 
 #[derive(Debug, Deserialize)]
 pub struct ABClcSyncStageInput<'a> {
-    id:SynKey,
-    from_a:ThoDataRef<'a, AStageOutput>,
-    from_b:ThoDataRef<'a, BStageOutput>,
+    id: SynKey,
+    from_a: ThoDataRef<'a, AStageOutput>,
+    from_b: ThoDataRef<'a, BStageOutput>,
 }
 
 #[typetag::serde]
 impl WorkerInput for ABClcSyncStageInput<'static> {}
 
-impl <'a> ABClcSyncStageInput<'a> {
+impl<'a> ABClcSyncStageInput<'a> {
     fn from_data_refs(from_a: ThoDataRef<'a, AStageOutput>, from_b: ThoDataRef<'a, BStageOutput>) -> Self {
-        Self { id: from_a.as_ref().id() + from_b.as_ref().id(), from_a, from_b }
+        Self {
+            id: from_a.as_ref().id() + from_b.as_ref().id(),
+            from_a,
+            from_b,
+        }
     }
-
 }
 
 impl Serialize for ABClcSyncStageInput<'_> {
@@ -404,18 +370,14 @@ impl<'a> WorkerStageInput for ABClcSyncStageInput<'a> {
         // typetag can only erase 'static values; both ThoDataRef fields are owned in the IPC copy.
         Ok(Box::new(ABClcSyncStageInput::<'static> {
             id: self.id.clone(),
-            from_a: ThoDataRef::Owned(
-                AStageOutput{
-                    id: self.from_a.as_ref().id.clone(),
-                    value: self.from_a.as_ref().value.clone_ref()?,
-                }
-            ),
-            from_b: ThoDataRef::Owned(
-                BStageOutput{
-                    id: self.from_b.as_ref().id.clone(),
-                    value: self.from_b.as_ref().value.clone_ref()?,
-                }
-            ),
+            from_a: ThoDataRef::Owned(AStageOutput {
+                id: self.from_a.as_ref().id.clone(),
+                value: self.from_a.as_ref().value.clone_ref()?,
+            }),
+            from_b: ThoDataRef::Owned(BStageOutput {
+                id: self.from_b.as_ref().id.clone(),
+                value: self.from_b.as_ref().value.clone_ref()?,
+            }),
         }))
     }
 
@@ -431,7 +393,6 @@ impl<'a> WorkerStageInput for ABClcSyncStageInput<'a> {
 
 impl Data for ABClcSyncStageInput<'_> {
     type Metrics = MonoMetrics<0, 1>;
-
 
     fn size(&self) -> Self::Metrics {
         &self.from_a.as_ref().size() + &self.from_b.as_ref().size()
@@ -465,7 +426,6 @@ impl SyncStage for ABClcSyncStage {
     fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         self.do_run_inner(input, _ctx)
     }
-
 }
 
 impl WorkerStageOutput for ABClcStageOutput {
@@ -488,24 +448,27 @@ impl Stage for ProxyABClcSyncStage {
     type Out = ABClcStageOutput;
 }
 
-
-
-
-
-pub fn sync_ab_clc_endpoint_init<'a>(_stage_id:Option<String>, _init: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &'a AllTensors, _tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn sync_ab_clc_endpoint_init<'a>(_stage_id: Option<String>, _init: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &'a AllTensors, _tho_device: &'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     use futures_util::FutureExt;
     async move {
         // The shared wrapper decodes both borrowed tensor inputs into worker-owned values.
         Ok(Box::new(WorkerWrapper::new(Arc::new(ABClcSyncStage::new()), PhantomData::<JsonIpcCodec>)) as Box<dyn SyncStageIpcWrapper>)
-    }.boxed()
+    }
+    .boxed()
 }
 
 impl StageExecution for ProxyABClcSyncStage {
     fn execute<'a, 'i: 'a, I, IFut>(self: Arc<Self>, input: IFut, execution: &'a ExecutionContext<'_>, ctx: &'a Self::Ctx) -> futures_util::future::BoxFuture<'a, Result<Self::Out, ThoError>>
-    where Self: 'a, Self::In<'i>: Sync, Self::Out: Send, I: Borrow<Self::In<'i>> + Send + 'a, IFut: Future<Output = Result<I, ThoError>> + Send + 'a {
+    where
+        Self: 'a,
+        Self::In<'i>: Sync,
+        Self::Out: Send,
+        I: Borrow<Self::In<'i>> + Send + 'a,
+        IFut: Future<Output = Result<I, ThoError>> + Send + 'a,
+    {
         Box::pin({
-        self.num_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        Arc::clone(&self.stage).execute(input, execution, ctx)
-            })
+            self.num_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Arc::clone(&self.stage).execute(input, execution, ctx)
+        })
     }
 }

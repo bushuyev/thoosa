@@ -1,11 +1,11 @@
-use crate::tch_error::tch_result;
 use crate::parzen::optimizer::{Distribution, ParzenEstimator};
 use crate::parzen::util::uniform_weight;
+use crate::tch_error::tch_result;
 use rand::distr::Distribution as RandDistribution;
 use rand::distr::weighted::WeightedIndex;
 use tch::Kind::Float;
-use tch::kind::{FLOAT_CPU, INT64_CPU};
 use tch::Tensor;
+use tch::kind::{FLOAT_CPU, INT64_CPU};
 use thoosa_shared::opt_rng::opt_rnd;
 use thoosa_shared::val::Val;
 
@@ -36,11 +36,16 @@ impl CategoricalParzenEstimator {
     fn _clc_distr(&self, samples: Tensor, weights: Option<Tensor>) -> anyhow::Result<CategoricalGaussian> {
         anyhow::ensure!(self.n_choices > 0 && samples.dim() == 1, "categorical distribution requires choices and vector samples");
         let count = samples.size()[0];
-        let weights = match weights { Some(weights) => weights, None => uniform_weight(count + i64::from(self.prior), samples.device())? };
+        let weights = match weights {
+            Some(weights) => weights,
+            None => uniform_weight(count + i64::from(self.prior), samples.device())?,
+        };
         let mut probs = if self.prior {
             let prior = tch_result(weights.f_double_value(&[count]))?;
             tch_result(Tensor::f_full([self.n_choices as i64], self.uniform as f64 * prior, FLOAT_CPU))?
-        } else { tch_result(Tensor::f_zeros([self.n_choices as i64], FLOAT_CPU))? };
+        } else {
+            tch_result(Tensor::f_zeros([self.n_choices as i64], FLOAT_CPU))?
+        };
         let weights = if self.prior { tch_result(weights.f_narrow(0, 0, count))? } else { weights };
         let slicer = tch_result(Tensor::f_arange(self.n_choices as i64, INT64_CPU))?;
         let masks = tch_result(tch_result(slicer.f_view([-1, 1]))?.f_eq_tensor(&samples))?;
@@ -60,7 +65,9 @@ impl CategoricalParzenEstimator {
         let blls = if self.prior {
             let prior = tch_result(Tensor::f_full([self.n_choices as i64], self.uniform as f64, FLOAT_CPU))?;
             tch_result(Tensor::f_vstack(&[likelihood, prior]))?
-        } else { likelihood };
+        } else {
+            likelihood
+        };
         let log_blls = tch_result(tch_result(blls.f_clamp_min(1e-12))?.f_log())?;
         CategoricalGaussian::new(probs, log_blls, weights)
     }
@@ -135,41 +142,18 @@ mod categorical_parzen_estimator_tests {
     fn test_basis_loglikelihood() {
         let cpe = CategoricalParzenEstimator::new(None, 3, true);
 
-        let distr = cpe._clc_distr(
-            Tensor::from_slice(&[0, 1, 2]),
-            Some(Tensor::from_slice(&[0.3, 0.3, 0.3, 0.1])),
-        ).unwrap();
-        assert!(
-            Tensor::from_slice(&[0.3333, 0.3333, 0.3333])
-                .totype(Float)
-                .allclose(&distr.probs, 0.01, 0.01, false)
-        );
+        let distr = cpe._clc_distr(Tensor::from_slice(&[0, 1, 2]), Some(Tensor::from_slice(&[0.3, 0.3, 0.3, 0.1]))).unwrap();
+        assert!(Tensor::from_slice(&[0.3333, 0.3333, 0.3333]).totype(Float).allclose(&distr.probs, 0.01, 0.01, false));
         // let samples = distr.sample(3);
 
         assert!(
             Tensor::from_slice(&[0.66666667, 0.16666667, 0.16666667])
                 .totype(Float)
-                .allclose(
-                    &cpe._clc_distr(
-                        Tensor::from_slice(&[0]),
-                        Some(Tensor::from_slice(&[0.5, 0.5]))
-                    ).unwrap()
-                    .probs,
-                    0.01,
-                    0.01,
-                    false
-                )
+                .allclose(&cpe._clc_distr(Tensor::from_slice(&[0]), Some(Tensor::from_slice(&[0.5, 0.5]))).unwrap().probs, 0.01, 0.01, false)
         );
 
-        let distr = cpe._clc_distr(
-            Tensor::from_slice(&[0, 0, 0, 0]),
-            Some(Tensor::from_slice(&[0.2, 0.2, 0.2, 0.2, 0.2])),
-        ).unwrap();
-        assert!(
-            Tensor::from_slice(&[0.86666667, 0.06666667, 0.06666667])
-                .totype(Float)
-                .allclose(&distr.probs, 0.01, 0.01, false)
-        );
+        let distr = cpe._clc_distr(Tensor::from_slice(&[0, 0, 0, 0]), Some(Tensor::from_slice(&[0.2, 0.2, 0.2, 0.2, 0.2]))).unwrap();
+        assert!(Tensor::from_slice(&[0.86666667, 0.06666667, 0.06666667]).totype(Float).allclose(&distr.probs, 0.01, 0.01, false));
         let samples = distr.sample(1000).unwrap();
         let p_0 = samples.iter().filter(|i| *i == &Val::Int(0)).count() as f32 / 1000.;
         let p_1 = samples.iter().filter(|i| *i == &Val::Int(1)).count() as f32 / 1000.;
@@ -181,9 +165,7 @@ mod categorical_parzen_estimator_tests {
 
         // let bll = distr.basis_loglikelihood(&Tensor::from_slice(samples.into_iter().map(|v|v.into()).collect::<Vec<i64>>().as_slice()));
 
-        let bll = distr.basis_loglikelihood(
-            &mut vec![&Val::Int(0), &Val::Int(1), &Val::Int(2), &Val::Int(0)].into_iter(),
-        ).unwrap();
+        let bll = distr.basis_loglikelihood(&mut vec![&Val::Int(0), &Val::Int(1), &Val::Int(2), &Val::Int(0)].into_iter()).unwrap();
         assert_eq!(
             Tensor::from_slice(&[
                 0.,

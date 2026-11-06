@@ -63,8 +63,6 @@ macro_rules! sync_mutex_lock {
     }};
 }
 
-
-
 #[macro_export]
 macro_rules! async_read_lock {
     ($lock:expr $(,)?) => {{
@@ -127,7 +125,6 @@ macro_rules! async_mutex_lock {
             })
     }};
 }
-
 
 //Tokio owned guards, for Arc<tokio::sync::RwLock<T>> / Arc<tokio::sync::Mutex<T>>:
 #[macro_export]
@@ -193,14 +190,12 @@ macro_rules! async_mutex_owned_lock {
     }};
 }
 
-
 #[tracing::instrument(level="debug", skip_all, fields(agg_perf = %thoosa_shared::AggPerf("sync_lock", descr)))]
 #[inline]
 pub fn with_perf_log_<F, R>(f: F, descr: &str) -> R
 where
     F: FnOnce() -> R,
 {
-
     f()
 }
 

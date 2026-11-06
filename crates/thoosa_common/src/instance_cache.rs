@@ -72,9 +72,9 @@ impl InstanceCache {
             let mut instances = self.instances.lock().await;
             // One context may cache several key/value types; each needs its own bucket.
             let cache = instances.entry(TypeId::of::<(C, K, V)>()).or_insert_with(|| Box::new(Entries::<K, V>::new()));
-            let cache = cache.downcast_mut::<Entries<K, V>>().ok_or_else(|| {
-                ThoError::new(format!("Instance cache type mismatch for context={}, key={}, value={}", type_name::<C>(), type_name::<K>(), type_name::<V>()))
-            })?;
+            let cache = cache
+                .downcast_mut::<Entries<K, V>>()
+                .ok_or_else(|| ThoError::new(format!("Instance cache type mismatch for context={}, key={}, value={}", type_name::<C>(), type_name::<K>(), type_name::<V>())))?;
             // Evict only this device's retired instances. Existing users keep
             // their Arc, whose proxy identity still rejects use after restart.
             cache.retain(|(cached_device, cached_generation, _), _| *cached_device != device || cached_generation.is_none() || *cached_generation == Some(generation));
@@ -88,20 +88,24 @@ impl InstanceCache {
             match activity {
                 Some(activity) => {
                     let dependencies = activity.clone();
-                    activity.run(async {
-                        tokio::select! {
-                            biased;
-                            error = dependencies.wait_for_interruption() => Err(error),
-                            instance = initialize => {
-                                dependencies.check_dependencies()?;
-                                instance
-                            },
-                        }
-                    }).await
+                    activity
+                        .run(async {
+                            tokio::select! {
+                                biased;
+                                error = dependencies.wait_for_interruption() => Err(error),
+                                instance = initialize => {
+                                    dependencies.check_dependencies()?;
+                                    instance
+                                },
+                            }
+                        })
+                        .await
                 }
                 None => initialize.await,
             }
-        }).await.map_err(|error| ThoError::new(format!("instance initialization task failed: {error}")))?
+        })
+        .await
+        .map_err(|error| ThoError::new(format!("instance initialization task failed: {error}")))?
     }
 }
 
@@ -132,7 +136,14 @@ mod tests {
             let ticket = gate.request_pause(ThoError::CudaBeingRecovered).unwrap();
             gate.wait_until_idle().await;
             gate.finish_pause(ticket);
-            let cached = cache.get_or_create_with_lifetime::<(), _, _, _, _>(1, Some(&gate), true, 10, || async { panic!("recreated a retained proxy"); #[allow(unreachable_code)] Ok(Arc::new(8)) }).await.unwrap();
+            let cached = cache
+                .get_or_create_with_lifetime::<(), _, _, _, _>(1, Some(&gate), true, 10, || async {
+                    panic!("recreated a retained proxy");
+                    #[allow(unreachable_code)]
+                    Ok(Arc::new(8))
+                })
+                .await
+                .unwrap();
             assert!(Arc::ptr_eq(&original, &cached));
         }
     }
@@ -152,11 +163,17 @@ mod tests {
             assert!(futures::poll!(first.as_mut()).is_pending());
             started_rx.await.unwrap();
             drop(first);
-            let mut second = Box::pin(cache.get_or_create::<(), _, _, _, _>(1, Some(&gate), 10, || async { panic!("cancelled caller caused a duplicate install"); #[allow(unreachable_code)] Ok(Arc::new(8u32)) }));
+            let mut second = Box::pin(cache.get_or_create::<(), _, _, _, _>(1, Some(&gate), 10, || async {
+                panic!("cancelled caller caused a duplicate install");
+                #[allow(unreachable_code)]
+                Ok(Arc::new(8u32))
+            }));
             assert!(futures::poll!(second.as_mut()).is_pending());
             complete.send(()).unwrap();
             assert_eq!(*second.await.unwrap(), 7);
-        }).await.expect("the existing install must finish for the next caller");
+        })
+        .await
+        .expect("the existing install must finish for the next caller");
     }
 
     #[tokio::test]
@@ -166,7 +183,14 @@ mod tests {
         let second = Arc::new(CudaActivityGate::new(2));
         let old = cache.get_or_create::<(), _, _, _, _>(1, Some(&first), 10, || async { Ok(Arc::new(1)) }).await.unwrap();
         let other = cache.get_or_create::<(), _, _, _, _>(2, Some(&second), 10, || async { Ok(Arc::new(2)) }).await.unwrap();
-        let cached = cache.get_or_create::<(), _, _, _, _>(1, Some(&first), 10, || async { panic!("duplicate initialization"); #[allow(unreachable_code)] Ok(Arc::new(3)) }).await.unwrap();
+        let cached = cache
+            .get_or_create::<(), _, _, _, _>(1, Some(&first), 10, || async {
+                panic!("duplicate initialization");
+                #[allow(unreachable_code)]
+                Ok(Arc::new(3))
+            })
+            .await
+            .unwrap();
         assert!(Arc::ptr_eq(&old, &cached));
         let ticket = first.request_pause(ThoError::CudaBeingRecovered).unwrap();
         first.wait_until_idle().await;
@@ -174,7 +198,14 @@ mod tests {
         let fresh = cache.get_or_create::<(), _, _, _, _>(1, Some(&first), 10, || async { Ok(Arc::new(3)) }).await.unwrap();
         assert!(!Arc::ptr_eq(&old, &fresh));
         assert_eq!(*fresh, 3);
-        let cached_other = cache.get_or_create::<(), _, _, _, _>(2, Some(&second), 10, || async { panic!("healthy instance was evicted"); #[allow(unreachable_code)] Ok(Arc::new(4)) }).await.unwrap();
+        let cached_other = cache
+            .get_or_create::<(), _, _, _, _>(2, Some(&second), 10, || async {
+                panic!("healthy instance was evicted");
+                #[allow(unreachable_code)]
+                Ok(Arc::new(4))
+            })
+            .await
+            .unwrap();
         assert!(Arc::ptr_eq(&other, &cached_other));
     }
 
@@ -186,7 +217,11 @@ mod tests {
             let second = Arc::new(CudaActivityGate::new(2));
             let mut creating = Box::pin(cache.get_or_create::<(), _, _, _, _>(1, Some(&first), 10, || std::future::pending::<Result<Arc<u32>, ThoError>>()));
             assert!(futures::poll!(creating.as_mut()).is_pending());
-            let mut duplicate = Box::pin(cache.get_or_create::<(), _, _, _, _>(1, Some(&first), 10, || async { panic!("concurrent duplicate install"); #[allow(unreachable_code)] Ok(Arc::new(5u32)) }));
+            let mut duplicate = Box::pin(cache.get_or_create::<(), _, _, _, _>(1, Some(&first), 10, || async {
+                panic!("concurrent duplicate install");
+                #[allow(unreachable_code)]
+                Ok(Arc::new(5u32))
+            }));
             assert!(futures::poll!(duplicate.as_mut()).is_pending());
             let other = cache.get_or_create::<(), _, _, _, _>(2, Some(&second), 10, || async { Ok(Arc::new(7u32)) }).await.unwrap();
             assert_eq!(*other, 7);
@@ -197,6 +232,8 @@ mod tests {
             first.finish_pause(ticket);
             let fresh = cache.get_or_create::<(), _, _, _, _>(1, Some(&first), 10, || async { Ok(Arc::new(9u32)) }).await.unwrap();
             assert_eq!(*fresh, 9);
-        }).await.expect("initialization must not block another device or its own recovery");
+        })
+        .await
+        .expect("initialization must not block another device or its own recovery");
     }
 }

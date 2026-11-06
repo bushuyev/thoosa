@@ -7,29 +7,33 @@ use tch::{Tensor, nn, no_grad};
 use crate::dims::{AnyDims, Dims};
 use crate::nets::batches::BatchLengths;
 use crate::nets::cosine_2d::ThoCosineConv2d;
-use crate::nets::nodes::{AdaptiveAvgPool1d, AdaptiveMaxPool1d, BinaryHead, BinaryHeadPool, Fp, InitMode, SelfAttention, Split, ThoAttnPool1d, ThoAvgPool1d, ThoBatchNorm1d, ThoClosureModule, ThoConv, ThoCosineConv1d, ThoDropout, ThoFuncModule, ThoMaxPool1d, ThoModule, ThoParallel, ThoSequential, ThoSharpeningHead1d, conv1d_from_path, conv2d_from_path, my_linear};
+use crate::nets::nodes::{
+    AdaptiveAvgPool1d, AdaptiveMaxPool1d, BinaryHead, BinaryHeadPool, Fp, InitMode, SelfAttention, Split, ThoAttnPool1d, ThoAvgPool1d, ThoBatchNorm1d, ThoClosureModule, ThoConv, ThoCosineConv1d, ThoDropout, ThoFuncModule, ThoMaxPool1d, ThoModule, ThoParallel, ThoSequential, ThoSharpeningHead1d,
+    conv1d_from_path, conv2d_from_path, my_linear,
+};
 use crate::tho_tensor::{TensorInitRef, ThoTensor};
 use thoosa_shared::ThoError;
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::traits::DebugId;
 
 //https://pytorch.org/docs/stable/generated/torch.nn.Conv1d.html
-pub fn clc_conv1d_out<P:Display + ?Sized>(l_in: u32, kernel: u32, c: ConvConfig, path: &P) -> anyhow::Result<u32> {
+pub fn clc_conv1d_out<P: Display + ?Sized>(l_in: u32, kernel: u32, c: ConvConfig, path: &P) -> anyhow::Result<u32> {
     debug!("clc_conv1d_out: path={path} l_in={l_in} kernel={kernel} padding={} dilation={} stride={}", c.padding, c.dilation, c.stride);
 
-    if l_in == 0 { //convolution was first layer, num_features is not known
-        return  Ok(0);
+    if l_in == 0 {
+        //convolution was first layer, num_features is not known
+        return Ok(0);
     }
-    if kernel == 0 {// if kernel is calculated in runtime
-        return Err(anyhow::anyhow!("kernel={kernel} should be bigger than 0"))
+    if kernel == 0 {
+        // if kernel is calculated in runtime
+        return Err(anyhow::anyhow!("kernel={kernel} should be bigger than 0"));
     }
-    if l_in + 2 * (c.padding as u32) < c.dilation as u32  * (kernel - 1) {
-        return Err(anyhow::anyhow!("clc_conv1d_out: l_in + 2 * padding < dilation * (kernel - 1) - 1 : l_in={l_in} kernel={} dilation={} padding={}", kernel, c.dilation, c.padding))
+    if l_in + 2 * (c.padding as u32) < c.dilation as u32 * (kernel - 1) {
+        return Err(anyhow::anyhow!("clc_conv1d_out: l_in + 2 * padding < dilation * (kernel - 1) - 1 : l_in={l_in} kernel={} dilation={} padding={}", kernel, c.dilation, c.padding));
     }
 
-    if l_in + 2 * c.padding as u32 - c.dilation as u32 * (kernel - 1) < 1{
-
-        return Err(anyhow::anyhow!("l_in + 2 * c.padding as u32 - c.dilation as u32 * (kernel - 1) < 1 : l_in={l_in} kernel={} dilation={}", kernel, c.dilation))
+    if l_in + 2 * c.padding as u32 - c.dilation as u32 * (kernel - 1) < 1 {
+        return Err(anyhow::anyhow!("l_in + 2 * c.padding as u32 - c.dilation as u32 * (kernel - 1) < 1 : l_in={l_in} kernel={} dilation={}", kernel, c.dilation));
     }
 
     let r = (l_in + 2 * c.padding as u32 - c.dilation as u32 * (kernel - 1) - 1) / c.stride as u32 + 1;
@@ -41,16 +45,17 @@ pub fn clc_conv1d_out<P:Display + ?Sized>(l_in: u32, kernel: u32, c: ConvConfig,
 
 pub fn clc_max_pool1d_out(l_in: u32, kernel: u32, padding: u32, dilation: u32, stride: u32) -> anyhow::Result<u32> {
     // throwing error should cause f32::MAX loss in optimizer
-    if kernel < 2 {// if kernel is calculated in runtime
-        return Err(anyhow::anyhow!("kernel={kernel} should be bigger than 2"))
+    if kernel < 2 {
+        // if kernel is calculated in runtime
+        return Err(anyhow::anyhow!("kernel={kernel} should be bigger than 2"));
     }
 
     if l_in + 2 * padding < dilation * (kernel - 1) - 1 {
-        return Err(anyhow::anyhow!("clc_max_pool1d_out: l_in + 2 * padding < dilation * (kernel - 1) - 1 : l_in={l_in} kernel={kernel} dilation={dilation} padding={padding}"))
+        return Err(anyhow::anyhow!("clc_max_pool1d_out: l_in + 2 * padding < dilation * (kernel - 1) - 1 : l_in={l_in} kernel={kernel} dilation={dilation} padding={padding}"));
     }
 
     debug!("clc_max_pool1d_out: l_in={l_in} kernel={kernel} padding={padding} dilation={dilation} stride={stride}");
-    let r= (l_in + 2 * padding - dilation * (kernel - 1) - 1) / stride + 1;
+    let r = (l_in + 2 * padding - dilation * (kernel - 1) - 1) / stride + 1;
 
     debug!("clc_max_pool1d_out: r={r}");
 
@@ -58,7 +63,7 @@ pub fn clc_max_pool1d_out(l_in: u32, kernel: u32, padding: u32, dilation: u32, s
 }
 
 pub fn clc_avg_pool1d_out(l_in: u32, kernel: u32, padding: u32, stride: u32) -> u32 {
-    let r= (l_in + 2 * padding - kernel) / stride + 1;
+    let r = (l_in + 2 * padding - kernel) / stride + 1;
 
     debug!("clc_avg_pool1d_out: l_in={l_in} kernel={kernel} padding={padding} stride={stride} r={r}");
 
@@ -82,29 +87,29 @@ pub enum Node {
         join: Arc<dyn Fn(Vec<Tensor>) -> anyhow::Result<Tensor> + Send + Sync>,
     },
     Conv1d {
-        path:String,
+        path: String,
         kernel: u32,
         in_channels: u32,
         out_channels: u32,
         config: ConvConfig,
-        init: Option<Arc<ThoTensor<AnyDims, DebugId>>>
+        init: Option<Arc<ThoTensor<AnyDims, DebugId>>>,
     },
     CosineConv1d {
-        path:String,
+        path: String,
         kernel: u32,
         a: f64,
         b: f64,
         init: Option<Arc<dyn TensorInitRef>>,
-        init_mode: InitMode
+        init_mode: InitMode,
     },
     CosineConv2d {
-        path:String,
-        kw_time:i64,
-        kh_freq:i64,
+        path: String,
+        kw_time: i64,
+        kh_freq: i64,
         a: f64,
         b: f64,
         init: Option<Arc<dyn TensorInitRef>>,
-        init_mode: InitMode
+        init_mode: InitMode,
     },
     SharpeningHead1d {
         path: String,
@@ -130,10 +135,10 @@ pub enum Node {
         config: BatchNormConfig,
     },
     Linear {
-        path:String,
+        path: String,
         in_feats: u32,
         out_feats: u32,
-        config: Option<LinearConfig>
+        config: Option<LinearConfig>,
     },
     Func {
         func: Fp,
@@ -150,9 +155,9 @@ pub enum Node {
         output_size: u32,
     },
     AttnPool1d {
-        path:String,
+        path: String,
         channels: u32,
-        attn_hidden: u32
+        attn_hidden: u32,
     },
     AvgPool {
         kernel_size: u32,
@@ -170,7 +175,7 @@ pub enum Node {
         p: f64,
     },
     Closure {
-        cl: Arc<Box<dyn Fn(&Tensor, Option<&BatchLengths>) -> anyhow::Result<Tensor> + Send + Sync>>
+        cl: Arc<Box<dyn Fn(&Tensor, Option<&BatchLengths>) -> anyhow::Result<Tensor> + Send + Sync>>,
     },
 }
 
@@ -204,64 +209,39 @@ impl NthParams for NthConst {
 }
 
 impl Node {
-
-    pub fn build_tch_module<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
-        self,
-        vs: &nn::Path,
-    ) -> anyhow::Result<Box<dyn ThoModule<DI, DO>>> {
+    pub fn build_tch_module<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(self, vs: &nn::Path) -> anyhow::Result<Box<dyn ThoModule<DI, DO>>> {
         Ok(match self {
             Node::Seq { elts, split_input } => {
-                let layers: Vec<Box<dyn ThoModule<AnyDims, AnyDims>>> =
-                    elts.into_iter().enumerate().try_fold(
-                        Vec::new(),
-                        |mut kids: Vec<Box<dyn ThoModule<AnyDims, AnyDims>>>, (i, node)| {
-                            kids.push(node.build_tch_module(&(vs / format!("seq_{i}")))?);
+                let layers: Vec<Box<dyn ThoModule<AnyDims, AnyDims>>> = elts.into_iter().enumerate().try_fold(Vec::new(), |mut kids: Vec<Box<dyn ThoModule<AnyDims, AnyDims>>>, (i, node)| {
+                    kids.push(node.build_tch_module(&(vs / format!("seq_{i}")))?);
 
-                            Ok::<Vec<Box<dyn ThoModule<AnyDims, AnyDims>>>, ThoError>(kids)
-                        },
-                    )?;
+                    Ok::<Vec<Box<dyn ThoModule<AnyDims, AnyDims>>>, ThoError>(kids)
+                })?;
 
                 Box::new(ThoSequential::new(layers, split_input))
             }
 
             Node::Par { elts, split, join } => {
-                let layers: Vec<Box<dyn ThoModule<DI, DO>>> =
-                    elts.into_iter().enumerate().try_fold(
-                        Vec::new(),
-                        |mut kids: Vec<Box<dyn ThoModule<DI, DO>>>, (i, node)| {
-                            kids.push(node.build_tch_module(&(vs / format!("split_{i}")))?);
-                            Ok::<Vec<Box<dyn ThoModule<DI, DO>>>, ThoError>(kids)
-                        },
-                    )?;
+                let layers: Vec<Box<dyn ThoModule<DI, DO>>> = elts.into_iter().enumerate().try_fold(Vec::new(), |mut kids: Vec<Box<dyn ThoModule<DI, DO>>>, (i, node)| {
+                    kids.push(node.build_tch_module(&(vs / format!("split_{i}")))?);
+                    Ok::<Vec<Box<dyn ThoModule<DI, DO>>>, ThoError>(kids)
+                })?;
 
                 Box::new(ThoParallel::new(layers, split, join))
             }
 
             Node::Split1 { node, split, join } => {
                 Box::new(Split::new(
-                    node.build_tch_module(&(vs / "split_1"))?,//TODO name
+                    node.build_tch_module(&(vs / "split_1"))?, //TODO name
                     split,
-                    join
+                    join,
                 ))
             }
 
-            Node::Conv1d {
-                path,
-                kernel,
-                in_channels,
-                out_channels,
-                config,
-                init
-            } => {
+            Node::Conv1d { path, kernel, in_channels, out_channels, config, init } => {
                 let conv_path = vs / path;
                 let had_weight = conv_path.get("weight").is_some();
-                let mut conv = conv1d_from_path(
-                    &conv_path,
-                    in_channels as i64,
-                    out_channels as i64,
-                    kernel as i64,
-                    config,
-                )?;
+                let mut conv = conv1d_from_path(&conv_path, in_channels as i64, out_channels as i64, kernel as i64, config)?;
                 // Initialization belongs only to a newly created variable;
                 // copied tensors must retain their existing values.
                 if !had_weight && let Some(init) = init {
@@ -269,54 +249,30 @@ impl Node {
                         conv.ws.f_copy_(&init.local()?.f_view((1, 1, kernel as i64))?)?;
                         Ok(())
                     })?;
-
                 }
                 Box::new(ThoConv::new(conv, kernel, config))
-            },
+            }
 
-            Node::Conv2d {
-                kernel,
-                in_channels,
-                out_channels,
-                config,
-            } => Box::new(ThoConv::new(conv2d_from_path(
-                &(vs / "cnn_2d"),
-                in_channels as i64,
-                out_channels as i64,
-                kernel as i64,
-                config,
-            )?,
-                                       0,
-                                       ConvConfig::default())),
+            Node::Conv2d { kernel, in_channels, out_channels, config } => Box::new(ThoConv::new(conv2d_from_path(&(vs / "cnn_2d"), in_channels as i64, out_channels as i64, kernel as i64, config)?, 0, ConvConfig::default())),
 
-            Node::CosineConv1d {
-                path,
-                kernel,
-                a, b,
-                init,
-                init_mode
-            } => Box::new(ThoCosineConv1d::new(
-                &(vs / path),
-                kernel as i64,
-                init,
-                init_mode,
-                a, b
-            )?),
+            Node::CosineConv1d { path, kernel, a, b, init, init_mode } => Box::new(ThoCosineConv1d::new(&(vs / path), kernel as i64, init, init_mode, a, b)?),
             Node::CosineConv2d {
                 path,
-                kw_time, kh_freq,
-                a, b,
+                kw_time,
+                kh_freq,
+                a,
+                b,
                 init,
-                init_mode: _init_mode
+                init_mode: _init_mode,
             } => Box::new(ThoCosineConv2d::new(
                 &(vs / path),
                 kh_freq,
                 kw_time,
                 init,
                 // init_mode,
-                a, b,
+                a,
+                b,
             )?),
-
 
             Node::SharpeningHead1d {
                 path,
@@ -326,32 +282,14 @@ impl Node {
                 k_hat,
                 p,
                 temperature,
-            } => Box::new(ThoSharpeningHead1d::new(
-                &(vs / path),
-                in_channels as i64,
-                out_channels as i64,
-                k_mu as i64,
-                k_hat as i64,
-                p as f64,
-                temperature as f64,
-            )?),
+            } => Box::new(ThoSharpeningHead1d::new(&(vs / path), in_channels as i64, out_channels as i64, k_mu as i64, k_hat as i64, p as f64, temperature as f64)?),
 
             Node::BinaryHead { path, pool } => Box::new(BinaryHead::new(&(vs / path), pool)?),
 
-            Node::BatchNorm {
-                num_features,
-                config,
-            } => Box::new(ThoBatchNorm1d::new(vs / "batch_norm", num_features, config)?),
+            Node::BatchNorm { num_features, config } => Box::new(ThoBatchNorm1d::new(vs / "batch_norm", num_features, config)?),
 
-            Node::Linear {
-                path,
-                in_feats,
-                out_feats,
-                config,
-
-            } => {
-
-                debug!("Node::Linear: path={path} in_feats={:?}, out_feats={:?}",in_feats, out_feats);
+            Node::Linear { path, in_feats, out_feats, config } => {
+                debug!("Node::Linear: path={path} in_feats={:?}, out_feats={:?}", in_feats, out_feats);
 
                 assert!(in_feats > 0, "in_feats > 0: in_feats={in_feats} path={path}");
                 assert!(out_feats > 0, "out_feats > 0: in_feats={in_feats} path={path}");
@@ -369,55 +307,23 @@ impl Node {
                 )?)
             }
 
-            Node::MaxPool {
-                kernel_size,
-                stride,
-                padding,
-            } => Box::new(ThoMaxPool1d::new(
-                kernel_size as i64,
-                stride as i64,
-                padding as i64,
-            )),
+            Node::MaxPool { kernel_size, stride, padding } => Box::new(ThoMaxPool1d::new(kernel_size as i64, stride as i64, padding as i64)),
 
-            Node::AdaptiveMaxPool { output_size } => Box::new(AdaptiveMaxPool1d::new(
-                output_size
-            )),
+            Node::AdaptiveMaxPool { output_size } => Box::new(AdaptiveMaxPool1d::new(output_size)),
 
-            Node::AdaptiveAvgPool1d { output_size } => Box::new(AdaptiveAvgPool1d::new(
-                output_size
-            )),
+            Node::AdaptiveAvgPool1d { output_size } => Box::new(AdaptiveAvgPool1d::new(output_size)),
 
-            Node::AvgPool {
-                kernel_size,
-                stride,
-                padding,
-            } => Box::new(ThoAvgPool1d::new(
-                kernel_size as i64,
-                stride as i64,
-                padding as i64,
-            )),
+            Node::AvgPool { kernel_size, stride, padding } => Box::new(ThoAvgPool1d::new(kernel_size as i64, stride as i64, padding as i64)),
 
-            Node::SelfAttention { path, d_model, n_heads, ff_mult, dropout } => {
-                Box::new(SelfAttention::new(
-                    &(vs / path),
-                    d_model as i64,
-                    n_heads as i64,
-                    ff_mult as i64,
-                    dropout,
-                )?)
-            }
+            Node::SelfAttention { path, d_model, n_heads, ff_mult, dropout } => Box::new(SelfAttention::new(&(vs / path), d_model as i64, n_heads as i64, ff_mult as i64, dropout)?),
 
             Node::Dropout { p } => Box::new(ThoDropout::new(p)),
 
             Node::Func { func } => Box::new(ThoFuncModule::new(func)),
 
-            Node::Closure { cl: closure } => {
-                Box::new(ThoClosureModule::new(closure))
-            },
+            Node::Closure { cl: closure } => Box::new(ThoClosureModule::new(closure)),
 
-            Node::AttnPool1d { path, channels, attn_hidden } => {
-                Box::new(ThoAttnPool1d::new(&(vs / path), channels as i64, attn_hidden as i64)?)
-            }
+            Node::AttnPool1d { path, channels, attn_hidden } => Box::new(ThoAttnPool1d::new(&(vs / path), channels as i64, attn_hidden as i64)?),
         })
     }
 }
@@ -440,27 +346,13 @@ impl SeqBuilder {
         })
     }
 
-    pub fn split(
-        &mut self,
-        elts: Vec<Node>,
-        split: Box<dyn Fn(&Tensor) -> anyhow::Result<Vec<Tensor>> + Send + Sync>,
-        join: Box<dyn Fn(Vec<Tensor>) -> anyhow::Result<Tensor> + Send + Sync>,
-    ) -> anyhow::Result<&mut Self> {
-        self.elts.push(Node::Par {
-            elts,
-            split: Arc::from(split),
-            join: Arc::from(join),
-        });
+    pub fn split(&mut self, elts: Vec<Node>, split: Box<dyn Fn(&Tensor) -> anyhow::Result<Vec<Tensor>> + Send + Sync>, join: Box<dyn Fn(Vec<Tensor>) -> anyhow::Result<Tensor> + Send + Sync>) -> anyhow::Result<&mut Self> {
+        self.elts.push(Node::Par { elts, split: Arc::from(split), join: Arc::from(join) });
 
         Ok(self)
     }
 
-    pub fn split1(
-        &mut self,
-        node: Node,
-        split: Box<dyn Fn(&Tensor) -> anyhow::Result<Vec<Tensor>> + Send + Sync>,
-        join: Box<dyn Fn(Vec<Tensor>) -> anyhow::Result<Tensor> + Send + Sync>,
-    ) -> anyhow::Result<&mut Self> {
+    pub fn split1(&mut self, node: Node, split: Box<dyn Fn(&Tensor) -> anyhow::Result<Vec<Tensor>> + Send + Sync>, join: Box<dyn Fn(Vec<Tensor>) -> anyhow::Result<Tensor> + Send + Sync>) -> anyhow::Result<&mut Self> {
         self.elts.push(Node::Split1 {
             node: Box::new(node),
             split: Arc::from(split),
@@ -470,16 +362,12 @@ impl SeqBuilder {
         Ok(self)
     }
 
-
     pub fn end_seq(&mut self) -> anyhow::Result<Node> {
         let mut elts = Vec::new();
 
         std::mem::swap(&mut elts, &mut self.elts);
 
-        Ok(Node::Seq {
-            elts,
-            split_input: self.split_input,
-        })
+        Ok(Node::Seq { elts, split_input: self.split_input })
     }
 
     pub fn batch_norm(&mut self, config: BatchNormConfig, option: Option<u32>) -> anyhow::Result<&mut Self> {
@@ -490,17 +378,9 @@ impl SeqBuilder {
         Ok(self)
     }
 
-    pub fn conv_1d<P:ToString>(
-        &mut self,
-        path: P,
-        kernel: u32,
-        in_channels: u32,
-        out_channels: u32,
-        config: ConvConfig,
-        init: Option<Arc<ThoTensor<AnyDims, DebugId>>>,
-    ) -> anyhow::Result<&mut Self> {
+    pub fn conv_1d<P: ToString>(&mut self, path: P, kernel: u32, in_channels: u32, out_channels: u32, config: ConvConfig, init: Option<Arc<ThoTensor<AnyDims, DebugId>>>) -> anyhow::Result<&mut Self> {
         self.elts.push(Node::Conv1d {
-            path:path.to_string(),
+            path: path.to_string(),
             kernel,
             in_channels,
             out_channels,
@@ -514,48 +394,31 @@ impl SeqBuilder {
         Ok(self)
     }
 
-    pub fn cosine_conv_1d<P:ToString, D: Dims + 'static>(
-        &mut self,
-        path: P,
-        kernel: u32,
-        init: Option<Arc<ThoTensor<D, SynKey>>>,
-        a: f64,
-        b: f64,
-        init_mode: InitMode
-    ) -> anyhow::Result<&mut Self> {
-
+    pub fn cosine_conv_1d<P: ToString, D: Dims + 'static>(&mut self, path: P, kernel: u32, init: Option<Arc<ThoTensor<D, SynKey>>>, a: f64, b: f64, init_mode: InitMode) -> anyhow::Result<&mut Self> {
         self.elts.push(Node::CosineConv1d {
-            path:path.to_string(),
+            path: path.to_string(),
             kernel,
-            a, b,
+            a,
+            b,
             init: init.map(|tensor| tensor as Arc<dyn TensorInitRef>),
-            init_mode
+            init_mode,
         });
 
-        self.num_features = clc_conv1d_out(self.num_features, kernel, ConvConfig::default(),  "")?;
+        self.num_features = clc_conv1d_out(self.num_features, kernel, ConvConfig::default(), "")?;
         self.kernel = Some(kernel);
 
         Ok(self)
     }
 
-    pub fn cosine_conv_2d<P:ToString, D: Dims + 'static>(
-        &mut self,
-        path: P,
-        kw_time: u32,
-        kh_freq: u32,
-        init: Option<Arc<ThoTensor<D, SynKey>>>,
-        a: f64,
-        b: f64,
-        init_mode: InitMode
-    ) -> anyhow::Result<&mut Self> {
-
+    pub fn cosine_conv_2d<P: ToString, D: Dims + 'static>(&mut self, path: P, kw_time: u32, kh_freq: u32, init: Option<Arc<ThoTensor<D, SynKey>>>, a: f64, b: f64, init_mode: InitMode) -> anyhow::Result<&mut Self> {
         self.elts.push(Node::CosineConv2d {
-            path:path.to_string(),
+            path: path.to_string(),
             kw_time: kw_time as i64,
             kh_freq: kh_freq as i64,
-            a, b,
+            a,
+            b,
             init: init.map(|tensor| tensor as Arc<dyn TensorInitRef>),
-            init_mode
+            init_mode,
         });
 
         self.num_features = clc_conv1d_out(self.num_features, kw_time, ConvConfig::default(), "")?;
@@ -564,8 +427,7 @@ impl SeqBuilder {
         Ok(self)
     }
 
-
-    pub fn sharpening_head_1d<P:ToString>(&mut self, path: P, in_channels: u32, out_channels: u32, k_mu: u32, k_hat: u32, p: f32, temperature: f32) -> anyhow::Result<&mut Self> {
+    pub fn sharpening_head_1d<P: ToString>(&mut self, path: P, in_channels: u32, out_channels: u32, k_mu: u32, k_hat: u32, p: f32, temperature: f32) -> anyhow::Result<&mut Self> {
         self.elts.push(Node::SharpeningHead1d {
             path: path.to_string(),
             in_channels,
@@ -578,53 +440,37 @@ impl SeqBuilder {
         Ok(self)
     }
 
-    pub fn binary_head<P:ToString>(&mut self, path: P, pool: BinaryHeadPool) -> anyhow::Result<&mut Self> {
-        self.elts.push(Node::BinaryHead {
-            path: path.to_string(),
-            pool,
-        });
+    pub fn binary_head<P: ToString>(&mut self, path: P, pool: BinaryHeadPool) -> anyhow::Result<&mut Self> {
+        self.elts.push(Node::BinaryHead { path: path.to_string(), pool });
         Ok(self)
     }
-    
+
     pub fn max_pool(&mut self, kernel: u32, stride: u32, padding: u32) -> anyhow::Result<&mut Self> {
-        self.elts.push(Node::MaxPool {
-            kernel_size: kernel,
-            stride,
-            padding,
-        });
+        self.elts.push(Node::MaxPool { kernel_size: kernel, stride, padding });
 
         self.num_features = clc_max_pool1d_out(self.num_features, kernel, padding, 1, stride)?; //TODO config?
 
         Ok(self)
     }
 
-    pub fn adaptive_max_pool(&mut self, output_size:u32, num_features:u32) -> anyhow::Result<&mut Self> {
+    pub fn adaptive_max_pool(&mut self, output_size: u32, num_features: u32) -> anyhow::Result<&mut Self> {
         self.num_features = num_features;
 
-        self.elts.push(Node::AdaptiveMaxPool {
-            output_size
-        });
+        self.elts.push(Node::AdaptiveMaxPool { output_size });
 
         Ok(self)
     }
 
-    pub fn adaptive_avg_pool(&mut self, output_size:u32, num_features:u32) -> anyhow::Result<&mut Self> {
+    pub fn adaptive_avg_pool(&mut self, output_size: u32, num_features: u32) -> anyhow::Result<&mut Self> {
         self.num_features = num_features;
 
-        self.elts.push(Node::AdaptiveAvgPool1d {
-            output_size
-        });
+        self.elts.push(Node::AdaptiveAvgPool1d { output_size });
 
         Ok(self)
     }
 
-    pub fn attn_pool1d<P:ToString>(&mut self, path:P, channels:u32, attn_hidden:u32) -> anyhow::Result<&mut Self> {
-
-        self.elts.push(Node::AttnPool1d {
-            path: path.to_string(),
-            channels,
-            attn_hidden,
-        });
+    pub fn attn_pool1d<P: ToString>(&mut self, path: P, channels: u32, attn_hidden: u32) -> anyhow::Result<&mut Self> {
+        self.elts.push(Node::AttnPool1d { path: path.to_string(), channels, attn_hidden });
 
         Ok(self)
     }
@@ -652,11 +498,7 @@ impl SeqBuilder {
     }
 
     pub fn avg_pool(&mut self, kernel: u32, stride: u32, padding: u32) -> anyhow::Result<&mut Self> {
-        self.elts.push(Node::AvgPool {
-            kernel_size: kernel,
-            stride,
-            padding,
-        });
+        self.elts.push(Node::AvgPool { kernel_size: kernel, stride, padding });
 
         self.num_features = clc_avg_pool1d_out(self.num_features, kernel, padding, stride);
 
@@ -668,7 +510,7 @@ impl SeqBuilder {
         Ok(self)
     }
 
-    pub fn linear<P:ToString>(&mut self, path: P) -> anyhow::Result<&mut Self> {
+    pub fn linear<P: ToString>(&mut self, path: P) -> anyhow::Result<&mut Self> {
         if self.num_features == 0 {
             return Err(anyhow::anyhow!("linear, self.num_features > 0: path={}", path.to_string()));
         }
@@ -682,12 +524,7 @@ impl SeqBuilder {
         Ok(self)
     }
 
-    pub fn linear_feats<P:ToString>(
-        &mut self,
-        path: P,
-        num_features: u32,
-        out_feats: u32,
-    ) -> anyhow::Result<&mut Self> {
+    pub fn linear_feats<P: ToString>(&mut self, path: P, num_features: u32, out_feats: u32) -> anyhow::Result<&mut Self> {
         if num_features == 0 {
             return Err(anyhow::anyhow!("linear_feats, num_features > 0: path={}", path.to_string()));
         }
@@ -702,7 +539,7 @@ impl SeqBuilder {
         Ok(self)
     }
 
-    pub fn linear_f<P:ToString>(&mut self, path: P, f: f32) -> anyhow::Result<&mut Self> {
+    pub fn linear_f<P: ToString>(&mut self, path: P, f: f32) -> anyhow::Result<&mut Self> {
         if self.num_features == 0 {
             return Err(anyhow::anyhow!("linear_f, self.num_features > 0: path={}", path.to_string()));
         }
@@ -719,11 +556,7 @@ impl SeqBuilder {
         Ok(self)
     }
 
-    pub fn linear_s<P:ToString>(
-        &mut self,
-        out_feats: u32,
-        path: P,
-    ) -> anyhow::Result<&mut Self> {
+    pub fn linear_s<P: ToString>(&mut self, out_feats: u32, path: P) -> anyhow::Result<&mut Self> {
         if self.num_features == 0 {
             return Err(anyhow::anyhow!("linear_f, self.num_features > 0: path={}", path.to_string()));
         }
@@ -742,12 +575,7 @@ impl SeqBuilder {
         Ok(self)
     }
 
-    pub fn linear_s_with_conf<P:ToString>(
-        &mut self,
-        path: P,
-        out_feats: u32,
-        config: LinearConfig,
-    ) -> anyhow::Result<&mut Self> {
+    pub fn linear_s_with_conf<P: ToString>(&mut self, path: P, out_feats: u32, config: LinearConfig) -> anyhow::Result<&mut Self> {
         if self.num_features == 0 {
             return Err(anyhow::anyhow!("linear_s_with_conf, self.num_features > 0: path={}", path.to_string()));
         }
@@ -760,15 +588,13 @@ impl SeqBuilder {
             in_feats: self.num_features,
             out_feats,
             config: Some(config),
-
         });
         self.num_features = out_feats;
 
         Ok(self)
     }
 
-    pub fn linear_p<P:ToString>(&mut self, path: P, n: usize, p: &impl NthParams<Params = u32>) -> anyhow::Result<&mut Self> {
-
+    pub fn linear_p<P: ToString>(&mut self, path: P, n: usize, p: &impl NthParams<Params = u32>) -> anyhow::Result<&mut Self> {
         let out_feats = p.on_nth_layer(n);
 
         if self.num_features == 0 {
@@ -783,7 +609,6 @@ impl SeqBuilder {
             in_feats: self.num_features,
             out_feats,
             config: None,
-
         });
         self.num_features = out_feats;
 
@@ -795,11 +620,7 @@ impl SeqBuilder {
         Ok(self)
     }
 
-    pub fn closure(
-        &mut self,
-        cl: Arc<Box<dyn Fn(&Tensor, Option<&BatchLengths>) -> anyhow::Result<Tensor> + Send + Sync>>,
-        num_features: Option<u32>,
-    ) -> anyhow::Result<&mut Self> {
+    pub fn closure(&mut self, cl: Arc<Box<dyn Fn(&Tensor, Option<&BatchLengths>) -> anyhow::Result<Tensor> + Send + Sync>>, num_features: Option<u32>) -> anyhow::Result<&mut Self> {
         self.elts.push(Node::Closure { cl });
         if let Some(num_features) = num_features {
             self.num_features = num_features;

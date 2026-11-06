@@ -1,4 +1,3 @@
-
 use std::sync::OnceLock;
 
 static RAYON: OnceLock<rayon::ThreadPool> = OnceLock::new();

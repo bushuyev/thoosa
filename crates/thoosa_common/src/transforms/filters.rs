@@ -1,16 +1,16 @@
 #![allow(non_snake_case, unused_variables, unused_assignments, non_camel_case_types)]
 
-use anyhow::Context as _;
-use std::str::FromStr;
-use clap::{Args, Subcommand};
 use crate::utils::from;
+use anyhow::Context as _;
+use clap::{Args, Subcommand};
 use serde::{Deserialize, Serialize};
+use std::str::FromStr;
 use tch::kind::FLOAT_CPU;
 use tch::{Device, IndexOp, Kind, Tensor};
+use thoosa_digest_id::DigestHash;
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::math::sg_smoothing_coeffs;
-use thoosa_digest_id::DigestHash;
 
 pub trait InputFilterLengthAdjuster {
     fn adjust_length(&self) -> Box<dyn Fn(u32) -> u32 + Send + Sync>;
@@ -109,7 +109,7 @@ impl InputFilterLengthAdjuster for SavGolFilterParams {
         let stride = self.stride;
         let padding = self.padding;
         Box::new(move |l: u32| {
-            assert!(window_len > 0 && window_len <= u32::MAX , "window_len({window_len}) must be in 1..={}", u32::MAX);
+            assert!(window_len > 0 && window_len <= u32::MAX, "window_len({window_len}) must be in 1..={}", u32::MAX);
             let kernel_size = window_len;
             assert!(stride > 0, "stride({stride}) must be > 0");
             assert!(l > 0, "l({l}) must be > 0");
@@ -163,15 +163,8 @@ impl InputFilterLengthAdjuster for AverageFilterParams {
     }
 }
 
-
 /// Create a sinc-based band-pass filter
-pub fn band_pass_filter(
-    low_hz: f64,
-    high_hz: f64,
-    kernel_size: i64,
-    sample_rate: f64,
-    eps: f64,
-) -> anyhow::Result<Tensor> {
+pub fn band_pass_filter(low_hz: f64, high_hz: f64, kernel_size: i64, sample_rate: f64, eps: f64) -> anyhow::Result<Tensor> {
     let n = Tensor::f_arange(kernel_size, (Kind::Float, Device::Cpu))?.f_sub_scalar((kernel_size - 1) as f64 / 2.0)?;
 
     let low = std::f64::consts::TAU * low_hz / sample_rate;
@@ -220,13 +213,7 @@ pub fn clc_frequencies(input_signal_0: &Tensor, n: i64, rate: f64, take: usize) 
         i = Box::new(i.take(take));
     }
 
-    Ok(i.map(|i| {
-        (
-            freq.double_value(&[i as i64]),
-            absolutes.double_value(&[i as i64]),
-        )
-    })
-    .collect())
+    Ok(i.map(|i| (freq.double_value(&[i as i64]), absolutes.double_value(&[i as i64]))).collect())
 }
 
 pub fn notch_band_rfft(x: &Tensor, fs: f64, fr0: f64, fr1: f64) -> anyhow::Result<Tensor> {
@@ -271,7 +258,6 @@ pub fn notch_band_rfft(x: &Tensor, fs: f64, fr0: f64, fr1: f64) -> anyhow::Resul
     Ok(y)
 }
 
-
 #[derive(Subcommand, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq, Hash, DigestHash)]
 #[digest(tag = "thoosa.Padding:v1")]
 pub enum Padding {
@@ -309,7 +295,6 @@ pub struct ReflectPadding {}
 #[digest(tag = "thoosa.ReplicatePadding:v1")]
 pub struct ReplicatePadding {}
 
-
 /// Pad a [N, C, T] tensor along the last dimension by `pad` on both sides.
 pub fn pad_1d(x: &Tensor, pad: i64, mode: Padding) -> anyhow::Result<Tensor> {
     if pad == 0 {
@@ -336,10 +321,7 @@ pub fn pad_1d(x: &Tensor, pad: i64, mode: Padding) -> anyhow::Result<Tensor> {
         Padding::Reflect(_) => {
             // PyTorch reflect requires pad <= T-1
             if pad >= t {
-                return Err(anyhow::anyhow!(format!(
-                    "reflect padding requires pad < T, got pad={} T={}",
-                    pad, t
-                )));
+                return Err(anyhow::anyhow!(format!("reflect padding requires pad < T, got pad={} T={}", pad, t)));
             }
             // left: x[..., 1..=pad] reversed
             let left = x.narrow(2, 1, pad).flip(&[2]);
@@ -352,14 +334,8 @@ pub fn pad_1d(x: &Tensor, pad: i64, mode: Padding) -> anyhow::Result<Tensor> {
 
 /// Apply Savitzky–Golay smoothing to x shaped [C, T].
 /// Keeps length the same. Padding choice: Zero / Reflect / Replicate.
-pub fn savgol_smooth_1d_channels(
-    x: &Tensor,
-    window_len: i64,
-    poly_order: i64,
-    padding: Padding,
-) -> anyhow::Result<Tensor> {
-
-    assert_eq!(x.dim(), 2,  "expected x to have shape [C, T], got dim={} size={:?}", x.dim(), x.size());
+pub fn savgol_smooth_1d_channels(x: &Tensor, window_len: i64, poly_order: i64, padding: Padding) -> anyhow::Result<Tensor> {
+    assert_eq!(x.dim(), 2, "expected x to have shape [C, T], got dim={} size={:?}", x.dim(), x.size());
 
     let sz = x.size();
     let c = sz[0];
@@ -386,11 +362,7 @@ pub fn savgol_smooth_1d_channels(
     let coeffs = sg_smoothing_coeffs(window_len as usize, poly_order as usize)?;
 
     // Weight for grouped conv1d: [C, 1, W] (same kernel per channel)
-    let w = Tensor::from_slice(&coeffs)
-        .to_kind(kind)
-        .to_device(x.device())
-        .view([1, 1, window_len])
-        .repeat(&[c, 1, 1]);
+    let w = Tensor::from_slice(&coeffs).to_kind(kind).to_device(x.device()).view([1, 1, window_len]).repeat(&[c, 1, 1]);
 
     // Input: [N=1, C, T]
     let x3 = x.to_kind(kind).unsqueeze(0);
@@ -413,19 +385,13 @@ pub fn savgol_smooth_1d_channels(
 // The unit-like ZNorm payload still needs a tag so its type remains domain-separated in the digest.
 #[derive(Args, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Debug, PartialEq, Clone, DigestHash)]
 #[digest(tag = "thoosa.ZNormFilterParams:v1")]
-pub struct ZNormFilterParams {
-
-}
+pub struct ZNormFilterParams {}
 
 impl InputFilterLengthAdjuster for ZNormFilterParams {
     fn adjust_length(&self) -> Box<dyn Fn(u32) -> u32 + Send + Sync> {
         Box::new(move |l: u32| l)
     }
 }
-
-
-
-
 
 #[cfg(test)]
 #[allow(unused_imports)]
@@ -469,30 +435,24 @@ mod tests {
 
         let output_freqs = clc_frequencies(&output.i((0, 0, ..)), samples, sample_rate, 5)?;
 
-
         assert_eq!([(300.0, 0.5), (10.0, 0.5)], input_freqs.as_slice());
-        assert!(are_close(
-            &[0.5, 0.2648],
-            &[output_freqs[0].1, output_freqs[1].1],
-            1e-2
-        ));
-
+        assert!(are_close(&[0.5, 0.2648], &[output_freqs[0].1, output_freqs[1].1], 1e-2));
 
         /*
+             plot_series(
+                 vec![
+                     (format!("input"), plotters::prelude::GREEN,   vec_f32_from(&t).into_iter().zip(from::<Vec<f32>>(&input.i((0, 0, ..)))).collect::<Vec<(f32, f32)>>()),//sig_0_v match
+                     (format!("output"), plotters::prelude::RED,     vec_f32_from(&t).into_iter().zip(from::<Vec<f32>>(&output.i((0, 0, ..)))).collect::<Vec<(f32, f32)>>()),//no matches
+                 ], "band pass", (2000, 1000), &format!("/tmp/plots/filter_{:?}.png", chrono::Utc::now().to_rfc3339()).as_str()
+             )?;
+
             plot_series(
                 vec![
-                    (format!("input"), plotters::prelude::GREEN,   vec_f32_from(&t).into_iter().zip(from::<Vec<f32>>(&input.i((0, 0, ..)))).collect::<Vec<(f32, f32)>>()),//sig_0_v match
-                    (format!("output"), plotters::prelude::RED,     vec_f32_from(&t).into_iter().zip(from::<Vec<f32>>(&output.i((0, 0, ..)))).collect::<Vec<(f32, f32)>>()),//no matches
-                ], "band pass", (2000, 1000), &format!("/tmp/plots/filter_{:?}.png", chrono::Utc::now().to_rfc3339()).as_str()
+                    (format!("0ch"), plotters::prelude::GREEN,   vec_f32_from(&t).into_iter().zip(from::<Vec<f32>>(&input_signal_0_fft)).collect::<Vec<(f32, f32)>>()),//sig_0_v match
+                    (format!("1ch"), plotters::prelude::RED,     vec_f32_from(&t).into_iter().zip(from::<Vec<f32>>(&input_signal_1_fft)).collect::<Vec<(f32, f32)>>()),//no matches
+                ], "distance", (2000, 1000), &format!("/tmp/plots/filter_fft_{:?}.png", chrono::Utc::now().to_rfc3339()).as_str()
             )?;
-
-           plot_series(
-               vec![
-                   (format!("0ch"), plotters::prelude::GREEN,   vec_f32_from(&t).into_iter().zip(from::<Vec<f32>>(&input_signal_0_fft)).collect::<Vec<(f32, f32)>>()),//sig_0_v match
-                   (format!("1ch"), plotters::prelude::RED,     vec_f32_from(&t).into_iter().zip(from::<Vec<f32>>(&input_signal_1_fft)).collect::<Vec<(f32, f32)>>()),//no matches
-               ], "distance", (2000, 1000), &format!("/tmp/plots/filter_fft_{:?}.png", chrono::Utc::now().to_rfc3339()).as_str()
-           )?;
-       */
+        */
 
         Ok(())
     }
@@ -524,18 +484,12 @@ mod tests {
 
         let output_freqs = clc_frequencies(&output.i((0, 0, ..)), samples, sample_rate, 5)?;
 
-
         assert_eq!([(300.0, 0.5), (10.0, 0.5)], input_freqs.as_slice());
         //output_freqs -[(10.0, 0.4967866837978363), (300.0, 0.26481497287750244)
-        assert!(are_close(
-            &[0.5, 0.2648],
-            &[output_freqs[0].1, output_freqs[1].1],
-            1e-2
-        ));
+        assert!(are_close(&[0.5, 0.2648], &[output_freqs[0].1, output_freqs[1].1], 1e-2));
 
         Ok(())
     }
-
 }
 
 #[derive(Subcommand, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Debug, PartialEq, Clone, DigestHash)]

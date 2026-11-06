@@ -32,7 +32,9 @@ mod tests {
             for _ in 0..10 {
                 assert_eq!(opt_rnd(|rng| rng.next_u32()), expected.next_u32());
             }
-        }).join().unwrap();
+        })
+        .join()
+        .unwrap();
     }
 
     #[test]

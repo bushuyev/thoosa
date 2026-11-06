@@ -20,9 +20,7 @@ impl Val {
             Val::Real(v) => (v * 10_f64.powi(p as i32)) as i64,
             Val::Int(v) => *v,
             Val::UInt(v) => *v as i64,
-            Val::Str(v) => v
-                .parse()
-                .expect(format!("Could not parse {v} string").as_str()),
+            Val::Str(v) => v.parse().expect(format!("Could not parse {v} string").as_str()),
             Val::Bool(v) => {
                 if *v {
                     1
@@ -30,7 +28,6 @@ impl Val {
                     0
                 }
             }
-
         }
     }
 
@@ -39,9 +36,7 @@ impl Val {
             Val::Real(v) => *v,
             Val::Int(v) => *v as f64,
             Val::UInt(v) => *v as f64,
-            Val::Str(v) => v
-                .parse()
-                .expect(format!("Could not parse {v} string").as_str()),
+            Val::Str(v) => v.parse().expect(format!("Could not parse {v} string").as_str()),
             Val::Bool(v) => {
                 if *v {
                     1.0
@@ -49,10 +44,8 @@ impl Val {
                     0.0
                 }
             }
-
         }
     }
-
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -63,10 +56,7 @@ pub struct NamedVal<T: FieldName> {
 
 impl<T: FieldName> NamedVal<T> {
     pub fn new<P: Into<T>, V: Into<Val>>(into_path: P, val: V) -> Self {
-        Self {
-            path: into_path.into(),
-            val: val.into(),
-        }
+        Self { path: into_path.into(), val: val.into() }
     }
 
     pub fn val(&self) -> &Val {
@@ -94,11 +84,7 @@ impl<T: FieldName + 'static> ResolvedOptField<T> {
         match value {
             RangeOrValue::Range { range, step } => match step {
                 None => Self::Opt((name, range).into()),
-                Some((step, mul)) => Self::Grid(NamedRange::new(
-                    name,
-                    (&range.start).into()..(&range.end).into(),
-                    (step.into(), *mul),
-                )),
+                Some((step, mul)) => Self::Grid(NamedRange::new(name, (&range.start).into()..(&range.end).into(), (step.into(), *mul))),
             },
             RangeOrValue::Value(v) => Self::Const(NamedVal::from((name, v.into()))),
             RangeOrValue::Dynamic(_) => panic!("dynamic RangeOrValue must resolve to a static value"),
@@ -159,19 +145,11 @@ pub struct GridValueSet<T: FieldName> {
 
 impl<T: FieldName + 'static> GridValueSet<T> {
     pub fn new(values: Vec<NamedVal<T>>, opt_params: Vec<Hyperparameter<T>>) -> Self {
-        Self {
-            values,
-            opt_params,
-            pending_fields: vec![],
-        }
+        Self { values, opt_params, pending_fields: vec![] }
     }
 
     pub fn with_pending_fields(values: Vec<NamedVal<T>>, opt_params: Vec<Hyperparameter<T>>, pending_fields: Vec<PendingOptField<T>>) -> Self {
-        Self {
-            values,
-            opt_params,
-            pending_fields,
-        }
+        Self { values, opt_params, pending_fields }
     }
 
     pub fn values(&self) -> &Vec<NamedVal<T>> {
@@ -250,12 +228,7 @@ impl<T: FieldName + 'static> NamedRange<T> {
     }
 
     pub fn from_value_sets(value_sets: Vec<Vec<NamedVal<T>>>) -> Self {
-        Self::ValueSets(
-            value_sets
-                .into_iter()
-                .map(|values| GridValueSet::new(values, vec![]))
-                .collect(),
-        )
+        Self::ValueSets(value_sets.into_iter().map(|values| GridValueSet::new(values, vec![])).collect())
     }
 
     pub fn from_grid_value_sets(value_sets: Vec<GridValueSet<T>>) -> Self {
@@ -322,9 +295,22 @@ impl<T: FieldName> NamedRangeIter<T> {
         anyhow::ensure!(current.is_finite() && end.is_finite() && step_value.is_finite(), "range {name} requires finite bounds and step");
         anyhow::ensure!(step_value != 0.0, "range {name} step must not be zero");
         anyhow::ensure!(current == end || (end > current) == (step_value > 0.0), "range {name} step must move toward the end");
-        let iteration_kind = if start_kind == IterationKind::Real || end_kind == IterationKind::Real || step_kind == IterationKind::Real { IterationKind::Real } else { start_kind };
+        let iteration_kind = if start_kind == IterationKind::Real || end_kind == IterationKind::Real || step_kind == IterationKind::Real {
+            IterationKind::Real
+        } else {
+            start_kind
+        };
         anyhow::ensure!(iteration_kind != IterationKind::Real || step.1 <= 308, "range {name} precision exceeds finite f64 decimal scaling");
-        Ok(Self { name, current, end, step: step_value, digits: step.1, iteration_kind, done: current == end, forward: current < end })
+        Ok(Self {
+            name,
+            current,
+            end,
+            step: step_value,
+            digits: step.1,
+            iteration_kind,
+            done: current == end,
+            forward: current < end,
+        })
     }
 }
 
@@ -434,10 +420,7 @@ impl<T: FieldName, P: FieldName> TryFrom<(T, &RangeOrValue<u32, P>)> for NamedVa
 
     fn try_from((name, value): (T, &RangeOrValue<u32, P>)) -> Result<Self, Self::Error> {
         if let RangeOrValue::Value(v) = value {
-            return Ok(NamedVal {
-                path: name,
-                val: v.into(),
-            });
+            return Ok(NamedVal { path: name, val: v.into() });
         }
         Err(())
     }
@@ -518,9 +501,7 @@ impl TryFrom<&Val> for f64 {
 
     fn try_from(value: &Val) -> anyhow::Result<f64> {
         match value {
-            Val::Int(v) => (*v)
-                .to_f64()
-                .ok_or_else(|| anyhow::anyhow!("can't convert {value:?}")),
+            Val::Int(v) => (*v).to_f64().ok_or_else(|| anyhow::anyhow!("can't convert {value:?}")),
             Val::UInt(v) => Ok((*v).try_into()?),
             Val::Real(v) => Ok((*v).try_into()?),
             Val::Str(v) => Ok(v.parse()?),
@@ -535,9 +516,7 @@ impl TryFrom<&Val> for u32 {
     fn try_from(value: &Val) -> anyhow::Result<u32> {
         match value {
             Val::Real(v) => Ok(real_to_i64(*v)?.try_into()?),
-            Val::Int(v) => (*v)
-                .to_u32()
-                .ok_or_else(|| anyhow::anyhow!("can't convert {value:?}")),
+            Val::Int(v) => (*v).to_u32().ok_or_else(|| anyhow::anyhow!("can't convert {value:?}")),
             Val::UInt(v) => Ok(*v),
             Val::Str(v) => Ok(v.parse()?),
             _ => Err(anyhow::anyhow!("can't convert {value:?}")),
@@ -551,9 +530,7 @@ impl TryFrom<&Val> for i32 {
     fn try_from(value: &Val) -> anyhow::Result<i32> {
         match value {
             Val::Real(v) => Ok(real_to_i64(*v)?.try_into()?),
-            Val::Int(v) => (*v)
-                .to_i32()
-                .ok_or_else(|| anyhow::anyhow!("can't convert {value:?}")),
+            Val::Int(v) => (*v).to_i32().ok_or_else(|| anyhow::anyhow!("can't convert {value:?}")),
             Val::UInt(v) => Ok((*v).try_into()?),
             Val::Str(v) => Ok(v.parse()?),
             _ => Err(anyhow::anyhow!("can't convert {value:?}")),
@@ -753,7 +730,14 @@ mod tests {
 
     #[test]
     fn test_f32_conversion_has_owned_and_borrowed_parity() {
-        for (value, expected) in [(Val::Int(-42), Some(-42.0f32)), (Val::UInt(42), Some(42.0)), (Val::Real(1.5), Some(1.5)), (Val::Str("2.5".into()), Some(2.5)), (Val::Str("bad".into()), None), (Val::Bool(true), None)] {
+        for (value, expected) in [
+            (Val::Int(-42), Some(-42.0f32)),
+            (Val::UInt(42), Some(42.0)),
+            (Val::Real(1.5), Some(1.5)),
+            (Val::Str("2.5".into()), Some(2.5)),
+            (Val::Str("bad".into()), None),
+            (Val::Bool(true), None),
+        ] {
             assert_owned_and_borrowed(value, expected);
         }
     }
@@ -801,7 +785,14 @@ mod tests {
             assert_eq!(i32::try_from(&Val::Int(i64::from(expected)))?, expected);
         }
         assert_eq!(i32::try_from(&Val::UInt(i32::MAX as u32))?, i32::MAX);
-        for value in [Val::UInt(i32::MAX as u32 + 1), Val::UInt(u32::MAX), Val::Int(i64::from(i32::MIN) - 1), Val::Int(i64::from(i32::MAX) + 1), Val::Real(f64::from(i32::MIN) - 1.0), Val::Real(f64::from(i32::MAX) + 1.0)] {
+        for value in [
+            Val::UInt(i32::MAX as u32 + 1),
+            Val::UInt(u32::MAX),
+            Val::Int(i64::from(i32::MIN) - 1),
+            Val::Int(i64::from(i32::MAX) + 1),
+            Val::Real(f64::from(i32::MIN) - 1.0),
+            Val::Real(f64::from(i32::MAX) + 1.0),
+        ] {
             assert!(i32::try_from(&value).is_err(), "accepted {value:?}");
         }
         Ok(())
@@ -907,22 +898,10 @@ mod tests {
         let result: Vec<NamedVal<String>> = named_range.into_iter().collect::<anyhow::Result<_>>().unwrap();
 
         let expected = vec![
-            NamedVal {
-                path: "SomeName".into(),
-                val: Val::Int(-1),
-            },
-            NamedVal {
-                path: "SomeName".into(),
-                val: Val::Int(0),
-            },
-            NamedVal {
-                path: "SomeName".into(),
-                val: Val::Int(1),
-            },
-            NamedVal {
-                path: "SomeName".into(),
-                val: Val::Int(2),
-            },
+            NamedVal { path: "SomeName".into(), val: Val::Int(-1) },
+            NamedVal { path: "SomeName".into(), val: Val::Int(0) },
+            NamedVal { path: "SomeName".into(), val: Val::Int(1) },
+            NamedVal { path: "SomeName".into(), val: Val::Int(2) },
         ];
 
         assert_eq!(result, expected);
@@ -935,22 +914,10 @@ mod tests {
         let result: Vec<NamedVal<String>> = named_range.into_iter().collect::<anyhow::Result<_>>().unwrap();
 
         let expected = vec![
-            NamedVal {
-                path: "FloatRange".into(),
-                val: Val::Real(0.0),
-            },
-            NamedVal {
-                path: "FloatRange".into(),
-                val: Val::Real(0.3),
-            },
-            NamedVal {
-                path: "FloatRange".into(),
-                val: Val::Real(0.6),
-            },
-            NamedVal {
-                path: "FloatRange".into(),
-                val: Val::Real(0.9),
-            },
+            NamedVal { path: "FloatRange".into(), val: Val::Real(0.0) },
+            NamedVal { path: "FloatRange".into(), val: Val::Real(0.3) },
+            NamedVal { path: "FloatRange".into(), val: Val::Real(0.6) },
+            NamedVal { path: "FloatRange".into(), val: Val::Real(0.9) },
         ];
 
         assert_eq!(result, expected);
@@ -962,30 +929,17 @@ mod tests {
             NamedRange::<String>::from_grid_value_sets(vec![
                 GridValueSet::new(vec![NamedVal::new("ChoiceA".to_string(), Val::Int(1))], vec![]),
                 GridValueSet::new(
-                    vec![
-                        NamedVal::new("ChoiceB".to_string(), Val::Int(2)),
-                        NamedVal::new("ChoiceBExtra".to_string(), Val::Bool(true)),
-                    ],
-                    vec![Hyperparameter::UniformInt {
-                        name: "ChoiceBOpt".to_string(),
-                        lower: 2,
-                        upper: 5,
-                    }],
+                    vec![NamedVal::new("ChoiceB".to_string(), Val::Int(2)), NamedVal::new("ChoiceBExtra".to_string(), Val::Bool(true)),],
+                    vec![Hyperparameter::UniformInt { name: "ChoiceBOpt".to_string(), lower: 2, upper: 5 }],
                 ),
             ])
-            .grid_value_sets().unwrap(),
+            .grid_value_sets()
+            .unwrap(),
             vec![
                 GridValueSet::new(vec![NamedVal::new("ChoiceA".to_string(), Val::Int(1))], vec![]),
                 GridValueSet::new(
-                    vec![
-                        NamedVal::new("ChoiceB".to_string(), Val::Int(2)),
-                        NamedVal::new("ChoiceBExtra".to_string(), Val::Bool(true)),
-                    ],
-                    vec![Hyperparameter::UniformInt {
-                        name: "ChoiceBOpt".to_string(),
-                        lower: 2,
-                        upper: 5,
-                    }],
+                    vec![NamedVal::new("ChoiceB".to_string(), Val::Int(2)), NamedVal::new("ChoiceBExtra".to_string(), Val::Bool(true)),],
+                    vec![Hyperparameter::UniformInt { name: "ChoiceBOpt".to_string(), lower: 2, upper: 5 }],
                 ),
             ],
         );

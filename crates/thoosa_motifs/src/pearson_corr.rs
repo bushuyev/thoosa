@@ -1,4 +1,4 @@
-use tch::{Kind, Tensor, TchError};
+use tch::{Kind, TchError, Tensor};
 
 /// Pairwise Pearson correlation distance in **[0,2]** range for each channel:
 ///   a: [C, Sa, W]
@@ -44,12 +44,12 @@ pub fn pearson_corr_distance_matrix_0_2(a: &Tensor, b: &Tensor, eps: f64) -> Res
     let b_norm = b_ss.f_sqrt()?; // [C, Sb]
 
     let denom = a_norm
-        .f_unsqueeze(2)?                 // [C, Sa, 1]
+        .f_unsqueeze(2)? // [C, Sa, 1]
         .f_multiply(&b_norm.f_unsqueeze(1)?)? // [C, Sa, Sb]
-        .f_add_scalar(eps)?;             // avoid /0
+        .f_add_scalar(eps)?; // avoid /0
 
-    let r = num.f_divide(&denom)?;      // [C, Sa, Sb]
-    let r = r.clamp(-1.0, 1.0);         // numeric safety; keeps distance in [0,2]
+    let r = num.f_divide(&denom)?; // [C, Sa, Sb]
+    let r = r.clamp(-1.0, 1.0); // numeric safety; keeps distance in [0,2]
 
     // distance = 1 - r
     let ones = Tensor::ones(&r.size(), (r.kind(), r.device()));
@@ -57,7 +57,6 @@ pub fn pearson_corr_distance_matrix_0_2(a: &Tensor, b: &Tensor, eps: f64) -> Res
 
     Ok(dist)
 }
-
 
 /// Pairwise Pearson correlation distance in **[0,2]** range among slices of a single motif:
 ///   x: [Sa, W]
@@ -89,12 +88,12 @@ pub fn pearson_corr_distance_matrix_0_2_single(x: &Tensor, eps: f64) -> Result<T
 
     // denom: n[:,None] * n[None,:] + eps => [Sa, Sa]
     let denom = n
-        .f_unsqueeze(1)?                 // [Sa, 1]
-        .f_multiply(&n.f_unsqueeze(0)?)?  // [Sa, Sa]
+        .f_unsqueeze(1)? // [Sa, 1]
+        .f_multiply(&n.f_unsqueeze(0)?)? // [Sa, Sa]
         .f_add_scalar(eps)?;
 
-    let r = num.f_divide(&denom)?;       // [Sa, Sa]
-    let r = r.clamp(-1.0, 1.0);          // numeric safety
+    let r = num.f_divide(&denom)?; // [Sa, Sa]
+    let r = r.clamp(-1.0, 1.0); // numeric safety
 
     // distance = 1 - r  (range [0,2])
     let ones = Tensor::ones(&r.size(), (r.kind(), r.device()));
@@ -105,9 +104,9 @@ pub fn pearson_corr_distance_matrix_0_2_single(x: &Tensor, eps: f64) -> Result<T
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use log::debug;
     use tch::Kind::Float;
-    use super::*;
     use tch::Tensor;
     use thoosa_common::utils::to_vec_f32;
 
@@ -118,14 +117,16 @@ mod tests {
         // slice0 = [1,2,3]
         // slice1 = [3,2,1]  => perfectly negatively correlated with slice0
         let a = Tensor::from_slice(&[
-            1f32, 2., 3.,   // a0
-            3f32, 2., 1.,   // a1
-        ]).reshape(&[1, 2, 3]);
+            1f32, 2., 3., // a0
+            3f32, 2., 1., // a1
+        ])
+        .reshape(&[1, 2, 3]);
 
         let b = Tensor::from_slice(&[
-            1f32, 2., 3.,   // b0
-            3f32, 2., 1.,   // b1
-        ]).reshape(&[1, 2, 3]);
+            1f32, 2., 3., // b0
+            3f32, 2., 1., // b1
+        ])
+        .reshape(&[1, 2, 3]);
 
         let d = pearson_corr_distance_matrix_0_2(&a, &b, 1e-12)?;
         assert_eq!(d.size(), vec![1, 2, 2]);
@@ -149,11 +150,7 @@ mod tests {
     fn single_motif_pairwise_matrix_basic() -> anyhow::Result<()> {
         // Sa=2, W=3
         // slice0=[1,2,3], slice1=[3,2,1] => perfectly negative corr => dist=2 off-diagonal
-        let x = Tensor::from_slice(&[
-            1f32, 2., 3.,
-            3f32, 2., 1.,
-        ])
-            .reshape(&[2, 3]);
+        let x = Tensor::from_slice(&[1f32, 2., 3., 3f32, 2., 1.]).reshape(&[2, 3]);
 
         let d = pearson_corr_distance_matrix_0_2_single(&x, 1e-12)?;
         assert_eq!(d.size(), vec![2, 2]);
@@ -171,14 +168,10 @@ mod tests {
     #[test]
     fn constant_slice_gives_about_one_against_anything() -> anyhow::Result<()> {
         // slice0 varies, slice1 is constant => centered slice1 is zeros => r≈0 => d≈1
-        let x = Tensor::from_slice(&[
-            1f32, 2., 3.,
-            7f32, 7., 7.,
-        ])
-            .reshape(&[2, 3]);
+        let x = Tensor::from_slice(&[1f32, 2., 3., 7f32, 7., 7.]).reshape(&[2, 3]);
 
         let d = pearson_corr_distance_matrix_0_2_single(&x, 1e-6)?;
-        let maan_corr = d.mean_dim(&[0,1][..], false, Float);
+        let maan_corr = d.mean_dim(&[0, 1][..], false, Float);
         debug!("maan_corr={:?}", maan_corr.double_value(&[]));
         let out = to_vec_f32(&d)?;
 

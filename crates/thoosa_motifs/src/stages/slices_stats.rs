@@ -1,16 +1,18 @@
-use thoosa_common::tch_error::tch_result;
+use crate::common_stats::Stats as CommonStatsValue;
+use crate::criteria::{
+    coherence, inlier_ratio, interesting_amp_01, interesting_band_energy_ratio_01, interesting_curvature_norm_01, interesting_entropy_band_01, interesting_entropy_gauss_01, interesting_turning_points_ratio_peaked_01, interesting_tv_norm_01, norm_thickness, periodicity_acf_01_frac,
+};
+use crate::pearson_corr::pearson_corr_distance_matrix_0_2_single as pearson_corr_distance_matrix_0_2_single_matrix;
+pub use crate::stages::find_motifs_run_config::{Aggr, CommonStatsMetric, Metrics};
 use std::fmt::Debug;
 use tch::Kind;
 use tch::Tensor;
-pub use crate::stages::find_motifs_run_config::{Aggr, CommonStatsMetric, Metrics};
-use crate::common_stats::Stats as CommonStatsValue;
-use crate::criteria::{coherence, inlier_ratio, interesting_amp_01, interesting_band_energy_ratio_01, interesting_curvature_norm_01, interesting_entropy_band_01, interesting_entropy_gauss_01, interesting_turning_points_ratio_peaked_01, interesting_tv_norm_01, norm_thickness, periodicity_acf_01_frac};
-use crate::pearson_corr::pearson_corr_distance_matrix_0_2_single as pearson_corr_distance_matrix_0_2_single_matrix;
+use thoosa_common::tch_error::tch_result;
 use thoosa_common::utils::z_norm_dims;
 use thoosa_shared::{ThoError, panic_to_err};
 use tracing::debug;
 
-pub fn metric_scalar_for_motif<ID:Debug>(id:&ID, motif_slices: &Tensor, metric: &Metrics) -> Result<f32, ThoError> {
+pub fn metric_scalar_for_motif<ID: Debug>(id: &ID, motif_slices: &Tensor, metric: &Metrics) -> Result<f32, ThoError> {
     let score_t = match metric {
         Metrics::EucDist(v) => {
             if v.z_normalize {
@@ -45,12 +47,7 @@ pub fn metric_scalar_for_motif<ID:Debug>(id:&ID, motif_slices: &Tensor, metric: 
 }
 
 pub fn metric_quantiles_for_motif(motif_slices: &Tensor, metric: &Metrics, quantiles: &[f32]) -> Result<Option<Vec<(f32, f32)>>, ThoError> {
-    let quantiles = quantiles
-        .iter()
-        .copied()
-        .filter(|q| q.is_finite())
-        .map(|q| q.clamp(0.0, 1.0))
-        .collect::<Vec<_>>();
+    let quantiles = quantiles.iter().copied().filter(|q| q.is_finite()).map(|q| q.clamp(0.0, 1.0)).collect::<Vec<_>>();
     if quantiles.is_empty() {
         return Ok(None);
     }
@@ -64,17 +61,8 @@ pub fn metric_quantiles_for_motif(motif_slices: &Tensor, metric: &Metrics, quant
 }
 
 fn common_stats_for_motif(motif_slices: &Tensor, params: &CommonStatsMetric) -> Result<CommonStatsValue, ThoError> {
-    let common_stats = crate::common_stats::estimate_channel_stats_from_windows(
-        &tch_result(motif_slices.f_unsqueeze(0))?,
-        params.q_lo,
-        params.q_hi,
-        params.scale_q,
-        params.eps,
-    )?;
-    common_stats
-        .into_iter()
-        .next()
-        .ok_or_else(|| ThoError::new("common_stats_for_motif: no common stats for motif"))
+    let common_stats = crate::common_stats::estimate_channel_stats_from_windows(&tch_result(motif_slices.f_unsqueeze(0))?, params.q_lo, params.q_hi, params.scale_q, params.eps)?;
+    common_stats.into_iter().next().ok_or_else(|| ThoError::new("common_stats_for_motif: no common stats for motif"))
 }
 
 #[derive(Clone, Copy)]
@@ -84,12 +72,7 @@ enum CommonQuantileMetric {
     Curvn,
 }
 
-fn common_metric_quantiles_for_motif(
-    motif_slices: &Tensor,
-    params: &CommonStatsMetric,
-    quantiles: &[f32],
-    metric: CommonQuantileMetric,
-) -> Result<Vec<(f32, f32)>, ThoError> {
+fn common_metric_quantiles_for_motif(motif_slices: &Tensor, params: &CommonStatsMetric, quantiles: &[f32], metric: CommonQuantileMetric) -> Result<Vec<(f32, f32)>, ThoError> {
     let (amp, tvn, curvn) = per_window_metrics(motif_slices, params.q_lo, params.q_hi, params.eps)?;
     let src = match metric {
         CommonQuantileMetric::Amp => amp,
@@ -97,10 +80,7 @@ fn common_metric_quantiles_for_motif(
         CommonQuantileMetric::Curvn => curvn,
     };
 
-    quantiles
-        .iter()
-        .map(|q| Ok((*q, tch_result(f_quantile_1d(&src, *q as f64)?.f_double_value(&[]))? as f32)))
-        .collect()
+    quantiles.iter().map(|q| Ok((*q, tch_result(f_quantile_1d(&src, *q as f64)?.f_double_value(&[]))? as f32))).collect()
 }
 
 fn f_quantile_1d(v: &Tensor, q: f64) -> Result<Tensor, ThoError> {
@@ -114,8 +94,12 @@ fn f_quantile_1d(v: &Tensor, q: f64) -> Result<Tensor, ThoError> {
     }
     let (sorted, _idx) = tch_result(v.f_sort(0, false))?;
     let mut i = ((m - 1) as f64 * q).round() as i64;
-    if i < 0 { i = 0; }
-    if i > m - 1 { i = m - 1; }
+    if i < 0 {
+        i = 0;
+    }
+    if i > m - 1 {
+        i = m - 1;
+    }
     Ok(tch_result(sorted.f_select(0, i))?)
 }
 
@@ -130,8 +114,12 @@ fn f_quantile_dim1_per_row(x: &Tensor, q: f64) -> Result<Tensor, ThoError> {
     }
     let (sorted, _idx) = tch_result(x.f_sort(1, false))?;
     let mut i = ((l - 1) as f64 * q).round() as i64;
-    if i < 0 { i = 0; }
-    if i > l - 1 { i = l - 1; }
+    if i < 0 {
+        i = 0;
+    }
+    if i > l - 1 {
+        i = l - 1;
+    }
     Ok(tch_result(sorted.f_select(1, i))?)
 }
 

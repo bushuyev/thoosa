@@ -4,12 +4,12 @@ use async_trait::async_trait;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use tch::{IndexOp, Tensor};
 use thoosa_named_derive::Named;
+use thoosa_shared::ThoError;
 use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::traits::{Adjustable, Data, Metrics, MonoMetrics, ThoSelector, WithId};
-use thoosa_shared::{ThoError};
 
 use crate::dims::{Dims, LocalSelect};
-use crate::tho_tensor::{ThoTensor};
+use crate::tho_tensor::ThoTensor;
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Named)]
 pub struct FileInputId(pub &'static str);
@@ -80,7 +80,6 @@ impl From<&'static str> for FileInput {
 impl Data for FileInput {
     type Metrics = ();
 
-
     fn size(&self) -> Self::Metrics {}
 
     fn tho_device_idx(&self) -> usize {
@@ -117,7 +116,6 @@ impl WithId for FileListInput {
 #[async_trait]
 impl Data for FileListInput {
     type Metrics = ();
-
 
     fn size(&self) -> Self::Metrics {}
 
@@ -158,7 +156,7 @@ impl ThoSelector for ABRange {
 impl LocalSelect<ModelTestId, ABRange> for ThoTensor<ABData, ModelTestId> {
     type Output = ThoTensor<ABData, ModelTestId>;
 
-    fn local_subview(id:&ModelTestId, t:&Tensor, selector: ABRange) -> Result<Self::Output, ThoError> {
+    fn local_subview(id: &ModelTestId, t: &Tensor, selector: ABRange) -> Result<Self::Output, ThoError> {
         use std::cmp::min;
         let size = ABMetrics::from(t.size());
         let d0 = selector.range.start.dim_0..min(size.dim_0, selector.range.end.dim_0);
@@ -222,10 +220,7 @@ impl std::ops::Add<&ABMetrics> for &ABMetrics {
     type Output = ABMetrics;
 
     fn add(self, rhs: &ABMetrics) -> Self::Output {
-        ABMetrics {
-            dim_0: self.dim_0 + rhs.dim_0,
-            dim_1: self.dim_1,
-        }
+        ABMetrics { dim_0: self.dim_0 + rhs.dim_0, dim_1: self.dim_1 }
     }
 }
 

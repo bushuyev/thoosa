@@ -1,6 +1,6 @@
 //! Adapt LibTorch failures at the tensor boundary, preserving their original
 //! sources and the shared error's CUDA recovery semantics.
-use thoosa_shared::{cuda_cause_from_msg, tho_error, ThoError};
+use thoosa_shared::{ThoError, cuda_cause_from_msg, tho_error};
 
 #[ctor::ctor]
 fn register_libtorch_error_adapter() {
@@ -41,10 +41,7 @@ mod tests {
 
     #[test]
     fn test_tho_error_libtorch_adapter_preserves_source_and_recovery() {
-        for (message, oom, reset) in [
-            ("CUDA out of memory. Tried to allocate 128 MiB", true, false),
-            ("CUDA error: an illegal memory access was encountered", false, true),
-        ] {
+        for (message, oom, reset) in [("CUDA out of memory. Tried to allocate 128 MiB", true, false), ("CUDA error: an illegal memory access was encountered", false, true)] {
             let source = anyhow::Error::new(tch::TchError::Torch(message.into())).context("forward model");
             let error = ThoError::from(source);
             assert_eq!((error.is_oom(), error.needs_cuda_recovery()), (oom, reset));
@@ -59,10 +56,7 @@ mod tests {
 
     #[test]
     fn test_tch_result_preserves_source_and_recovery_after_cloning() {
-        for (message, oom, reset) in [
-            ("CUDA out of memory", true, false),
-            ("CUDA error: an illegal memory access was encountered", false, true),
-        ] {
+        for (message, oom, reset) in [("CUDA out of memory", true, false), ("CUDA error: an illegal memory access was encountered", false, true)] {
             let error = tch_result::<()>(Err(tch::TchError::Torch(message.into()))).unwrap_err();
             let error = error.clone().context("run stage");
             assert_eq!((error.is_retryable_oom(), error.needs_cuda_recovery()), (oom, reset));
@@ -90,5 +84,4 @@ mod tests {
         let error = thoosa_shared::panic_to_err!(Err::<(), _>(ThoError::CudaBeingRecovered)).unwrap_err();
         assert!(matches!(error.what(), ThoError::CudaBeingRecovered));
     }
-
 }

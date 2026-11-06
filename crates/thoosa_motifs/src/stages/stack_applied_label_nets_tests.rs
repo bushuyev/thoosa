@@ -1,12 +1,12 @@
-use std::sync::atomic::AtomicU32;
-use std::sync::atomic::Ordering::Relaxed;
-use thoosa_common::tch_error::tch_result;
 use super::*;
 use crate::motifs_ws::{MotifsWorkspace, MotifsWsMockBuilder};
+use std::sync::atomic::AtomicU32;
+use std::sync::atomic::Ordering::Relaxed;
 use std::time::Duration;
 use thoosa_common::ipc::cuda_wokrer::{CudaWorker, InitFn};
 use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
 use thoosa_common::runner::run_ctx::RunCtxImpl;
+use thoosa_common::tch_error::tch_result;
 
 async fn request(resource: u32, models: &[u32], retry: bool) -> Result<StackAppliedLabelNetsInputWrapper, ThoError> {
     let cache = TmpCached::new("label stack request").await;
@@ -16,7 +16,9 @@ async fn request(resource: u32, models: &[u32], retry: bool) -> Result<StackAppl
         cache.insert(ThoTensor::new(id.clone(), tch_result(tch_result(Tensor::f_from_slice(&[resource as f32 * 10. + models[*index] as f32]))?.f_view([1, 1]))?)?);
     }
     let input = StackAppliedLabelNetsInputWrapper::new(mono_key!(resource, "aggregate").into(), order, cache);
-    if !retry { return Ok(input); }
+    if !retry {
+        return Ok(input);
+    }
     let input_ids = input.tmp_cache.ids().into_iter().collect::<HashSet<_>>();
     // Exercise the same ownership handoff used after a failed consume, without allocating until real OOM.
     let device = if GlobalCtx::global().is_ipc() { 1 } else { 0 };
@@ -46,10 +48,7 @@ async fn run_request(stage: Arc<DynSyncStageEnum<StackAppliedLabelNets<RunCtxImp
 async fn reuse_stack() -> Result<(), ThoError> {
     let (first, second) = tokio::try_join!(StackAppliedLabelNets::<RunCtxImpl>::new(1.into()), StackAppliedLabelNets::<RunCtxImpl>::new(1.into()))?;
     assert!(Arc::ptr_eq(&first, &second), "concurrent construction must share one installed stage");
-    tokio::try_join!(
-        run_request(first.clone(), 11, &[9, 1, 5], false),
-        run_request(second, 12, &[5, 9], true),
-    )?;
+    tokio::try_join!(run_request(first.clone(), 11, &[9, 1, 5], false), run_request(second, 12, &[5, 9], true),)?;
     // Dropping an invocation must not uninstall the endpoint needed by later resources.
     let later = StackAppliedLabelNets::<RunCtxImpl>::new(1.into()).await?;
     assert!(Arc::ptr_eq(&first, &later));
@@ -61,9 +60,12 @@ fn counted_init<'a>(stage_id: Option<String>, init: Box<dyn WorkerInput>, ws: Ar
     async move {
         // Count actual worker-side installs so an accidentally uncached constructor fails the IPC test.
         static INSTALLS: AtomicU32 = AtomicU32::new(0);
-        if INSTALLS.fetch_add(1, Relaxed) != 0 { return Err(ThoError::new("label stack endpoint installed more than once")); }
+        if INSTALLS.fetch_add(1, Relaxed) != 0 {
+            return Err(ThoError::new("label stack endpoint installed more than once"));
+        }
         stack_applied_label_nets_init(stage_id, init, ws, tensors, device).await
-    }.boxed()
+    }
+    .boxed()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -77,12 +79,8 @@ async fn test_label_stack_reuses_stage_local() -> Result<(), ThoError> {
 
 #[test]
 fn test_label_stack_reuses_stage_ipc() -> Result<(), ThoError> {
-    thoosa_common::ipc::tests::run_ipc_test(module_path!(), async {
-        tokio::time::timeout(Duration::from_secs(60), reuse_stack()).await?
-    }, async |sock| {
+    thoosa_common::ipc::tests::run_ipc_test(module_path!(), async { tokio::time::timeout(Duration::from_secs(60), reuse_stack()).await? }, async |sock| {
         let ws = Arc::new(RwLock::new(MotifsWsMockBuilder::new(None, 1, 100, 16).build()));
-        CudaWorker::run_worker(sock, &ws, HashMap::from([
-            (STACK_APPLIED_LABEL_NETS_ENDPOINT.into(), Box::new(counted_init) as InitFn<dyn MotifsWorkspace>),
-        ]), thoosa_common::tho_device::ThoDevice::from(1usize)).await
+        CudaWorker::run_worker(sock, &ws, HashMap::from([(STACK_APPLIED_LABEL_NETS_ENDPOINT.into(), Box::new(counted_init) as InitFn<dyn MotifsWorkspace>)]), thoosa_common::tho_device::ThoDevice::from(1usize)).await
     })
 }

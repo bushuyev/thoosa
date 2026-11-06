@@ -1,33 +1,32 @@
-use thoosa_common::tch_error::tch_result;
 use crate::dims::{AnyDims, ChannelsData, Dims, LocalSelect};
-use anyhow::Context as _;
-use std::ops::Range;
-use thoosa_shared::traits::Select;
+use crate::ipc::worker_msg::{CudaWorkerId, WorkerInput};
 use crate::runner::common::cachable::ThoDataRef;
 #[double]
 use crate::runner::global_ctx::GlobalCtx;
 use crate::tho_device::ThoDevice;
+use anyhow::Context as _;
 use async_trait::async_trait;
 use log::{debug, warn};
 use mockall_double::double;
+use parking_lot::{Mutex, ReentrantMutex, ReentrantMutexGuard};
 use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::marker::PhantomData;
 use std::ops::Deref;
+use std::ops::Range;
 use std::sync::{Arc, OnceLock};
-use parking_lot::{Mutex, ReentrantMutex, ReentrantMutexGuard};
 use tch::{Device, Kind, Tensor};
+use thoosa_common::tch_error::tch_result;
 use thoosa_shared::applicables_runner::{Input, Output};
-use thoosa_shared::tracked_await::t;
-use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Named, DebugId, ThoSelector, WithId};
-use thoosa_shared::{CopyToDevice, ThoError};
-use thoosa_shared::debug_id;
-use torch_sys::IntList;
 use thoosa_shared::comp_id::SynKey;
-use crate::ipc::worker_msg::{CudaWorkerId, WorkerInput};
-use thoosa_shared::ipc_types::{WorkerOutput};
-
+use thoosa_shared::debug_id;
+use thoosa_shared::ipc_types::WorkerOutput;
+use thoosa_shared::tracked_await::t;
+use thoosa_shared::traits::Select;
+use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, DebugId, Named, ThoSelector, WithId};
+use thoosa_shared::{CopyToDevice, ThoError};
+use torch_sys::IntList;
 
 // Synchronize the non-Sync Tensor handle instead of asserting Sync for arbitrary IDs.
 // Reentrant access permits expressions that read the same tensor more than once.
@@ -37,20 +36,28 @@ use thoosa_shared::ipc_types::{WorkerOutput};
 pub struct LocalTensorLease<'a>(ReentrantMutexGuard<'a, Tensor>);
 
 impl Display for LocalTensorLease<'_> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result { Display::fmt(&**self, f) }
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        Display::fmt(&**self, f)
+    }
 }
 
 impl Deref for LocalTensorLease<'_> {
     type Target = Tensor;
-    fn deref(&self) -> &Tensor { &self.0 }
+    fn deref(&self) -> &Tensor {
+        &self.0
+    }
 }
 
 impl Borrow<Tensor> for LocalTensorLease<'_> {
-    fn borrow(&self) -> &Tensor { self }
+    fn borrow(&self) -> &Tensor {
+        self
+    }
 }
 
 impl AsRef<Tensor> for LocalTensorLease<'_> {
-    fn as_ref(&self) -> &Tensor { self }
+    fn as_ref(&self) -> &Tensor {
+        self
+    }
 }
 
 impl<I: Named + Debug + Clone + Send + Sync, D: Dims> Input for ThoTensor<D, I> {}
@@ -59,9 +66,8 @@ impl<I: Named + Debug + Clone + Send + Sync, D: Dims> Input for &ThoTensor<D, I>
 impl<D, Id> ThoTensor<D, Id>
 where
     D: Dims,
-    Id: Named + Debug + Clone
+    Id: Named + Debug + Clone,
 {
-
     pub fn kind(&self) -> Kind {
         match &self.inner {
             ThoTensorInner::Val { t } => t.lock().kind(),
@@ -71,36 +77,25 @@ where
 
     pub fn clone_ref(&self) -> Result<Self, ThoError> {
         match &self.inner {
-            ThoTensorInner::Val { .. } => {
-                Err(ThoError::new("cloning worker references requires a remote tensor"))
-            }
-            ThoTensorInner::Ref { key, size, kind, selector } => {
-                Ok(
-                    Self {
-                        id:self.id.clone(),
-                        inner: ThoTensorInner::Ref {
-                            key:key.clone(),
-                            size:size.clone(),
-                            kind:*kind,
-                            selector:selector.as_ref().map(|v|v.clone_box()),
-                        },
-                        pd: PhantomData,
-                    }
-                )
-            }
+            ThoTensorInner::Val { .. } => Err(ThoError::new("cloning worker references requires a remote tensor")),
+            ThoTensorInner::Ref { key, size, kind, selector } => Ok(Self {
+                id: self.id.clone(),
+                inner: ThoTensorInner::Ref {
+                    key: key.clone(),
+                    size: size.clone(),
+                    kind: *kind,
+                    selector: selector.as_ref().map(|v| v.clone_box()),
+                },
+                pd: PhantomData,
+            }),
         }
     }
 
-    pub fn strip_types(self)->ThoTensor {
-        ThoTensor {
-            id: (),
-            inner: self.inner,
-            pd: Default::default(),
-        }
+    pub fn strip_types(self) -> ThoTensor {
+        ThoTensor { id: (), inner: self.inner, pd: Default::default() }
     }
 
     pub fn no_drop(&mut self) {
-
         if let ThoTensorInner::Ref { key, .. } = &mut self.inner {
             debug!("ThoTensor::no_drop: key={key:?}");
             key.do_drop = false;
@@ -114,27 +109,20 @@ impl ThoTensor {
         Df: Dims,
         Idf: Named + std::fmt::Debug + Clone,
     {
-
         match self.inner {
-            ThoTensorInner::Val { t } => {
-                ThoTensor::new(id, t.into_inner())
-            }
-            ThoTensorInner::Ref { key, size, kind, selector } => {
-                Ok(ThoTensor::<Df, Idf> {
-                    id,
-                    inner: ThoTensorInner::Ref {
-                        key,
-                        size,
-                        kind,
-                        selector:selector.as_ref().map(|v|v.clone_box()),
-                    },
-                    pd: PhantomData,
-                })
-            }
+            ThoTensorInner::Val { t } => ThoTensor::new(id, t.into_inner()),
+            ThoTensorInner::Ref { key, size, kind, selector } => Ok(ThoTensor::<Df, Idf> {
+                id,
+                inner: ThoTensorInner::Ref {
+                    key,
+                    size,
+                    kind,
+                    selector: selector.as_ref().map(|v| v.clone_box()),
+                },
+                pd: PhantomData,
+            }),
         }
-
     }
-
 }
 
 // Logging a handle must not materialize data or fail because storage is remote.
@@ -148,17 +136,17 @@ impl<D: Dims, Id: Named + Debug + Clone> Display for ThoTensor<D, Id> {
 //drop can't be implemented directly on ThoTensor or ThoTensorInner to keep them movable
 #[derive(Debug)]
 struct KeyHolder {
-    pub key:u64,
+    pub key: u64,
     pub worker_id: CudaWorkerId,
-    count:Arc<RemoteAllocation>,
-    pub do_drop:bool,
+    count: Arc<RemoteAllocation>,
+    pub do_drop: bool,
 }
 
 impl Clone for KeyHolder {
     fn clone(&self) -> Self {
-        debug!("KeyHolder::clone: self={self:?} self.worker_id.device_idx={} strong_count={:?}", self.worker_id.device_idx, Arc::strong_count(&self.count) );
+        debug!("KeyHolder::clone: self={self:?} self.worker_id.device_idx={} strong_count={:?}", self.worker_id.device_idx, Arc::strong_count(&self.count));
         KeyHolder {
-            key:  self.key,
+            key: self.key,
             worker_id: self.worker_id,
             count: Arc::clone(&self.count),
             do_drop: self.do_drop,
@@ -178,7 +166,9 @@ struct RemoteAllocation {
 impl Drop for RemoteAllocation {
     fn drop(&mut self) {
         if self.enabled.load(std::sync::atomic::Ordering::Relaxed) {
-            if let Some(release) = &self.release { release.release(self.key, self.worker); }
+            if let Some(release) = &self.release {
+                release.release(self.key, self.worker);
+            }
         }
     }
 }
@@ -188,27 +178,29 @@ impl KeyHolder {
         static KEYS: OnceLock<Mutex<HashMap<(u64, CudaWorkerId, u64), std::sync::Weak<RemoteAllocation>>>> = OnceLock::new();
         let mut keys = KEYS.get_or_init(Default::default).lock();
 
-        let identity = (
-            release.as_ref().map_or(0, |owner| owner.owner_id),
-            worker,
-            key
-        );
+        let identity = (release.as_ref().map_or(0, |owner| owner.owner_id), worker, key);
         if let Some(owner) = keys.get(&identity).and_then(std::sync::Weak::upgrade) {
             return owner;
         }
         // Remove dead metadata as new references arrive; the registry owns no tensor.
         keys.retain(|_, owner| owner.strong_count() != 0);
-        let owner = Arc::new(RemoteAllocation { key, worker, release, enabled: std::sync::atomic::AtomicBool::new(false) });
+        let owner = Arc::new(RemoteAllocation {
+            key,
+            worker,
+            release,
+            enabled: std::sync::atomic::AtomicBool::new(false),
+        });
         keys.insert(identity, Arc::downgrade(&owner));
         owner
     }
 }
 impl Drop for KeyHolder {
     fn drop(&mut self) {
-        if self.do_drop { self.count.enabled.store(true, std::sync::atomic::Ordering::Relaxed); }
+        if self.do_drop {
+            self.count.enabled.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
     }
 }
-
 
 enum ThoTensorInner {
     Val { t: ReentrantMutex<Tensor> },
@@ -218,22 +210,11 @@ enum ThoTensorInner {
 impl Debug for ThoTensorInner {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            ThoTensorInner::Val { t } => f.debug_struct("Val")
-                .field("t", t)
-                .field("device", &t.lock().device())
-                .finish(),
-            ThoTensorInner::Ref { key, size, kind, selector } => {
-                f.debug_struct("Ref")
-                    .field("key", key)
-                    .field("size", size)
-                    .field("kind", kind)
-                    .field("selector", selector)
-                    .finish()
-            },
+            ThoTensorInner::Val { t } => f.debug_struct("Val").field("t", t).field("device", &t.lock().device()).finish(),
+            ThoTensorInner::Ref { key, size, kind, selector } => f.debug_struct("Ref").field("key", key).field("size", size).field("kind", kind).field("selector", selector).finish(),
         }
     }
 }
-
 
 // Only the IPC codec needs wire fields. This descriptor cannot change ownership.
 pub(crate) struct RemoteTensorRef<'a> {
@@ -244,35 +225,32 @@ pub(crate) struct RemoteTensorRef<'a> {
     pub selector: &'a Option<Box<dyn ThoSelector>>,
 }
 
-impl <D, Id, S> Select<S> for ThoTensor<D, Id>
+impl<D, Id, S> Select<S> for ThoTensor<D, Id>
 where
-    S:ThoSelector + 'static,
-    D:Dims,
-    Id:Named + Debug + Clone,
-    Self:LocalSelect<Id, S, Output = ThoTensor<D, Id>>,
+    S: ThoSelector + 'static,
+    D: Dims,
+    Id: Named + Debug + Clone,
+    Self: LocalSelect<Id, S, Output = ThoTensor<D, Id>>,
 {
     type Output = ThoTensor<D, Id>;
 
     fn subview(&self, selector: S) -> Result<Self::Output, ThoError> {
         match &self.inner {
-            ThoTensorInner::Val { t } => {
-                Self::local_subview(self.id(), &t.lock(), selector)
-            }
+            ThoTensorInner::Val { t } => Self::local_subview(self.id(), &t.lock(), selector),
             ThoTensorInner::Ref { key, size, kind, selector: parent } => {
                 // Children select relative to the current view, while the worker indexes the original tensor.
                 let (selector, selected_size) = TensorRangesSelector::compose(parent.as_deref(), size, &selector)?;
                 debug!("ThoTensor::subview: key={key:?} size={size:?} kind={kind:?}");
                 Ok(Self {
-                    id:self.id().clone(),
+                    id: self.id().clone(),
                     inner: ThoTensorInner::Ref {
                         key: key.clone(),
                         size: selected_size,
                         kind: *kind,
-                        selector:Some(Box::new(selector) as Box<dyn ThoSelector>),
+                        selector: Some(Box::new(selector) as Box<dyn ThoSelector>),
                     },
                     pd: PhantomData,
-                }
-                )
+                })
             }
         }
     }
@@ -284,9 +262,13 @@ struct TensorRangesSelector(Vec<Range<i64>>);
 
 #[typetag::serde(name = "TensorRangesSelector")]
 impl ThoSelector for TensorRangesSelector {
-    fn clone_box(&self) -> Box<dyn ThoSelector> { Box::new(self.clone()) }
+    fn clone_box(&self) -> Box<dyn ThoSelector> {
+        Box::new(self.clone())
+    }
 
-    fn tensor_ranges(&self) -> Result<Vec<Range<i64>>, ThoError> { Ok(self.0.clone()) }
+    fn tensor_ranges(&self) -> Result<Vec<Range<i64>>, ThoError> {
+        Ok(self.0.clone())
+    }
 }
 
 impl TensorRangesSelector {
@@ -353,7 +335,6 @@ where
     }
 }
 
-
 impl<'a, D, Id> Deref for ThoDataRef<'a, ThoTensor<D, Id>>
 where
     D: Dims,
@@ -406,7 +387,6 @@ where
     }
 
     fn tho_device_idx(&self) -> usize {
-
         match &self.inner {
             ThoTensorInner::Val { t } => ThoDevice::try_from(t.lock().device()).expect("CPU/CUDA tensor device").tho_device_idx(),
             ThoTensorInner::Ref { key, .. } => key.worker_id.device_idx,
@@ -416,17 +396,11 @@ where
     fn mem_size(&self) -> u64 {
         self.numel() as u64 * self.kind().elt_size_in_bytes() as u64
     }
-
 }
 
 impl<D: Dims, Id: Named + Debug + Clone> Debug for ThoTensor<D, Id> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ThoTensor")
-            .field("id", &self.id)
-            .field("size", &self.size())
-            .field("kind", &self.kind())
-            .field("device", &self.tho_device_idx())
-            .finish()
+        f.debug_struct("ThoTensor").field("id", &self.id).field("size", &self.size()).field("kind", &self.kind()).field("device", &self.tho_device_idx()).finish()
     }
 }
 
@@ -447,7 +421,16 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
             }
             ThoTensorInner::Ref { key, size, kind, selector } => {
                 let (selector, size) = TensorRangesSelector::compose(selector.as_deref(), size, &child)?;
-                Ok(Self { id: self.id.clone(), inner: ThoTensorInner::Ref { key: key.clone(), size, kind: *kind, selector: Some(Box::new(selector)) }, pd: PhantomData })
+                Ok(Self {
+                    id: self.id.clone(),
+                    inner: ThoTensorInner::Ref {
+                        key: key.clone(),
+                        size,
+                        kind: *kind,
+                        selector: Some(Box::new(selector)),
+                    },
+                    pd: PhantomData,
+                })
             }
         }
     }
@@ -477,7 +460,9 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
             // supplies the original actor without consulting the installed facade.
             if crate::runner::global_ctx::GlobalCtx::is_installed() {
                 crate::runner::global_ctx::GlobalCtx::global().execution(worker_id.device_idx).ipc_actor().ok().map(|actor| actor.tensor_releaser())
-            } else { None }
+            } else {
+                None
+            }
         });
         let count = KeyHolder::ownership(key, worker_id, release);
 
@@ -486,30 +471,32 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
         Self {
             id,
             inner: ThoTensorInner::Ref {
-                key: KeyHolder {
-                    key,
-                    worker_id,
-                    count,
-                    do_drop: true,
-                },
+                key: KeyHolder { key, worker_id, count, do_drop: true },
                 size,
                 kind,
                 selector,
             },
             pd: PhantomData,
         }
-
     }
 
     pub(crate) fn remote_ref(&self) -> Option<RemoteTensorRef<'_>> {
         match &self.inner {
             ThoTensorInner::Val { .. } => None,
-            ThoTensorInner::Ref { key, size, kind, selector } => Some(RemoteTensorRef { key: key.key, worker_id: key.worker_id, size, kind: *kind, selector }),
+            ThoTensorInner::Ref { key, size, kind, selector } => Some(RemoteTensorRef {
+                key: key.key,
+                worker_id: key.worker_id,
+                size,
+                kind: *kind,
+                selector,
+            }),
         }
     }
 
     pub(crate) fn set_release_handle(&mut self, release: crate::ipc::cuda_process::TensorReleaseHandle) {
-        if let ThoTensorInner::Ref { key, .. } = &mut self.inner { key.count = KeyHolder::ownership(key.key, key.worker_id, Some(release)); }
+        if let ThoTensorInner::Ref { key, .. } = &mut self.inner {
+            key.count = KeyHolder::ownership(key.key, key.worker_id, Some(release));
+        }
     }
 
     pub(crate) fn ref_worker_id(&self) -> Option<CudaWorkerId> {
@@ -529,7 +516,9 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
     pub fn zeros(id: Id, size: impl IntList, options: (Kind, Device)) -> Result<Self, ThoError> {
         Ok(Self {
             id,
-            inner: ThoTensorInner::Val { t: ReentrantMutex::new(tch_result(Tensor::f_zeros(size, options))?) },
+            inner: ThoTensorInner::Val {
+                t: ReentrantMutex::new(tch_result(Tensor::f_zeros(size, options))?),
+            },
             pd: PhantomData,
         })
     }
@@ -604,12 +593,11 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
         }
     }
 
-
     ///for asserts only
-    pub(crate) fn is_ref(&self) ->bool {
+    pub(crate) fn is_ref(&self) -> bool {
         match &self.inner {
             ThoTensorInner::Val { .. } => false,
-            ThoTensorInner::Ref { .. } => true
+            ThoTensorInner::Ref { .. } => true,
         }
     }
 }
@@ -632,7 +620,6 @@ where
 {
     async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoError> {
         debug!("CopyToDevice for ThoTensor: self.id={:?} self={self:?} dst_device={dst_device}", self.id);
-
 
         let dst_device = ThoDevice::from(dst_device);
         let src_device = self.tho_device_idx().into();
@@ -661,11 +648,7 @@ where
             }
             ThoTensorInner::Ref { key, .. } => {
                 debug!("CopyToDevice for ThoTensor: self.id={:?} copy out-of-process ref key={key:?} dst_device.ordinal={:?}", self.id, dst_device.tho_device_idx());
-                t!(cuda_actor.copy(
-                    self.clone_ref()?.strip_types(),
-                    dst_device,
-                ))
-                .await?
+                t!(cuda_actor.copy(self.clone_ref()?.strip_types(), dst_device,)).await?
             }
         };
 
@@ -685,11 +668,15 @@ pub struct LocalTensorMut<'a, D: Dims, Id: Named + Debug + Clone> {
 
 impl<D: Dims, Id: Named + Debug + Clone> Deref for LocalTensorMut<'_, D, Id> {
     type Target = Tensor;
-    fn deref(&self) -> &Tensor { self.t }
+    fn deref(&self) -> &Tensor {
+        self.t
+    }
 }
 
 impl<D: Dims, Id: Named + Debug + Clone> std::ops::DerefMut for LocalTensorMut<'_, D, Id> {
-    fn deref_mut(&mut self) -> &mut Tensor { self.t }
+    fn deref_mut(&mut self) -> &mut Tensor {
+        self.t
+    }
 }
 
 impl<'a, D: Dims, Id: Named + Debug + Clone> LocalTensorMut<'a, D, Id> {
@@ -708,9 +695,7 @@ impl<'a, D: Dims, Id: Named + Debug + Clone> LocalTensorMut<'a, D, Id> {
         tch_result(tch_result(self.t.f_narrow(dim, start, length))?.f_copy_(&*rhs.local()?))?;
         Ok(())
     }
-
 }
-
 
 #[typetag::serde(name = "ThoTensor_default")]
 impl WorkerOutput for ThoTensor {}
@@ -774,7 +759,10 @@ mod generation_tests {
         assert_eq!(child.size(), vec![2, 4]);
         assert_eq!(child.numel(), 8);
         assert_eq!(child.selector().ok_or_else(|| ThoError::new("missing selector"))?.tensor_ranges()?, vec![3..5, 1..5]);
-        let owner = match &remote.inner { ThoTensorInner::Ref { key, .. } => Arc::downgrade(&key.count), _ => unreachable!() };
+        let owner = match &remote.inner {
+            ThoTensorInner::Ref { key, .. } => Arc::downgrade(&key.count),
+            _ => unreachable!(),
+        };
         assert_eq!(owner.strong_count(), 3, "selected handles must retain the original allocation owner");
         drop(remote);
         drop(parent);
@@ -839,14 +827,14 @@ mod generation_tests {
 #[cfg(test)]
 mod thread_safety_tests {
     use super::*;
-    use std::cell::Cell;
-    use std::rc::Rc;
-    use static_assertions::{assert_impl_all, assert_not_impl_any};
+    use crate::ipc::cuda_wokrer::AllTensors;
     use crate::nets::common_nets::ThoModuleWithStore;
     use crate::nets::nodes::{ThoBatchNorm1d, ThoClosureModule, ThoLinear};
     use crate::nets::tho_varstore::ThoTrainModule;
     use crate::torch_runner::ThoTensorView;
-    use crate::ipc::cuda_wokrer::AllTensors;
+    use static_assertions::{assert_impl_all, assert_not_impl_any};
+    use std::cell::Cell;
+    use std::rc::Rc;
 
     #[derive(Debug, Clone)]
     struct CellId(#[expect(dead_code, reason = "The field determines auto traits checked below.")] Cell<usize>);
@@ -895,15 +883,21 @@ mod thread_safety_tests {
         })));
         let model = ThoModuleWithStore::<AnyDims, AnyDims>::new(SynKey::new([]), Box::new(module));
         std::thread::scope(|scope| -> Result<(), ThoError> {
-            let handles = (0..4).map(|_| scope.spawn(|| -> Result<(), ThoError> {
-                let input = ThoTensor::<AnyDims, DebugId>::new(debug_id!("model lock test"), tch_result(Tensor::f_from_slice(&[2f32]))?)?;
-                for _ in 0..10 {
-                    let output = model.tho_forward(&input, None, false)?;
-                    assert_eq!(tch_result(output.local()?.f_double_value(&[0]))?, 3.);
-                }
-                Ok(())
-            })).collect::<Vec<_>>();
-            for handle in handles { handle.join().expect("model thread panicked")?; }
+            let handles = (0..4)
+                .map(|_| {
+                    scope.spawn(|| -> Result<(), ThoError> {
+                        let input = ThoTensor::<AnyDims, DebugId>::new(debug_id!("model lock test"), tch_result(Tensor::f_from_slice(&[2f32]))?)?;
+                        for _ in 0..10 {
+                            let output = model.tho_forward(&input, None, false)?;
+                            assert_eq!(tch_result(output.local()?.f_double_value(&[0]))?, 3.);
+                        }
+                        Ok(())
+                    })
+                })
+                .collect::<Vec<_>>();
+            for handle in handles {
+                handle.join().expect("model thread panicked")?;
+            }
             Ok(())
         })?;
         assert_eq!(completed.load(Ordering::SeqCst), 40);
@@ -918,15 +912,21 @@ mod thread_safety_tests {
             // Repeated reads of the same handle on one thread must not deadlock.
             assert_eq!(tch_result(tensor.local()?.f_double_value(&[0]))?, 2.);
             let tensor_ref = &tensor;
-            scope.spawn(move || {
-                let ThoTensorInner::Val { t } = &tensor_ref.inner else { unreachable!() };
-                assert!(t.try_lock().is_none(), "another thread must not access a borrowed Tensor handle");
-            }).join().expect("tensor access thread panicked");
+            scope
+                .spawn(move || {
+                    let ThoTensorInner::Val { t } = &tensor_ref.inner else { unreachable!() };
+                    assert!(t.try_lock().is_none(), "another thread must not access a borrowed Tensor handle");
+                })
+                .join()
+                .expect("tensor access thread panicked");
             drop(guard);
-            scope.spawn(|| -> Result<(), ThoError> {
-                assert_eq!(tch_result(tensor.local()?.f_double_value(&[1]))?, 3.);
-                Ok(())
-            }).join().expect("tensor access thread panicked")?;
+            scope
+                .spawn(|| -> Result<(), ThoError> {
+                    assert_eq!(tch_result(tensor.local()?.f_double_value(&[1]))?, 3.);
+                    Ok(())
+                })
+                .join()
+                .expect("tensor access thread panicked")?;
             Ok(())
         })
     }
@@ -942,11 +942,15 @@ mod thread_safety_tests {
         }
         std::thread::scope(|scope| -> Result<(), ThoError> {
             let forward = scope.spawn(|| -> Result<(), ThoError> {
-                for _ in 0..100 { assert_eq!(tch_result(add(&a, &b)?.f_double_value(&[0]))?, 5.); }
+                for _ in 0..100 {
+                    assert_eq!(tch_result(add(&a, &b)?.f_double_value(&[0]))?, 5.);
+                }
                 Ok(())
             });
             let reverse = scope.spawn(|| -> Result<(), ThoError> {
-                for _ in 0..100 { assert_eq!(tch_result(add(&b, &a)?.f_double_value(&[0]))?, 5.); }
+                for _ in 0..100 {
+                    assert_eq!(tch_result(add(&b, &a)?.f_double_value(&[0]))?, 5.);
+                }
                 Ok(())
             });
             forward.join().expect("tensor addition thread panicked")?;

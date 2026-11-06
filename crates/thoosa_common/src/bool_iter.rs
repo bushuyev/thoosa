@@ -1,7 +1,6 @@
 use log::trace;
-use tch::{Kind, Tensor};
 use tch::Device::Cpu;
-
+use tch::{Kind, Tensor};
 
 pub struct BoolTensorIterator<'a> {
     data_ptr: *const u8,
@@ -54,8 +53,8 @@ impl<'a> From<&'a Tensor> for BoolTensorIterator<'a> {
 
 #[cfg(test)]
 mod tests {
-    use tch::Tensor;
     use super::BoolTensorIterator;
+    use tch::Tensor;
 
     #[test]
     fn test_bool_tensor_iterator() -> anyhow::Result<()> {
@@ -66,5 +65,4 @@ mod tests {
         }
         Ok(())
     }
-
 }

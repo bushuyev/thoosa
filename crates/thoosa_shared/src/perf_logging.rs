@@ -1,41 +1,35 @@
 use anyhow::Context as _;
+use console_subscriber::ServerAddr;
+use dashmap::DashMap;
+use file_rotate::{ContentLimit, FileRotate, compression::Compression, suffix::AppendCount};
+use log::{LevelFilter, debug};
+use parking_lot::Mutex;
 use std::backtrace::Backtrace;
 use std::cmp::max;
 use std::fmt::Debug;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
-use std::{io, panic};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::atomic::{AtomicU64, AtomicU8, Ordering::Relaxed};
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering::Relaxed};
 use std::sync::{Arc, LazyLock, OnceLock};
 use std::time::{Duration, Instant};
-use console_subscriber::ServerAddr;
-use dashmap::DashMap;
-use log::{debug, LevelFilter};
+use std::{io, panic};
+use thoosa_shared::os_thread_id;
 use tracing::Level;
+use tracing_appender::non_blocking;
 use tracing_log::LogTracer;
+use tracing_subscriber::fmt::MakeWriter;
+use tracing_subscriber::layer::Context;
+use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::{
+    EnvFilter, Layer,
     filter::FilterFn,
     fmt,
     fmt::{format::Writer, time::FormatTime},
     layer::SubscriberExt,
     registry,
-    EnvFilter,
-    Layer,
 };
-use tracing_subscriber::layer::Context;
-use tracing_subscriber::registry::LookupSpan;
-use file_rotate::{
-    compression::Compression,
-    suffix::AppendCount,
-    ContentLimit,
-    FileRotate,
-};
-use parking_lot::Mutex;
-use tracing_appender::non_blocking;
-use tracing_subscriber::fmt::MakeWriter;
-use thoosa_shared::os_thread_id;
 
 #[derive(Clone)]
 pub struct SimplelogLikeEvent<T> {
@@ -50,18 +44,12 @@ impl<T> SimplelogLikeEvent<T> {
     }
 }
 
-
-
-fn write_level(
-    w: &mut fmt::format::Writer<'_>,
-    level: &tracing::Level,
-    use_color: bool,
-) -> std::fmt::Result {
+fn write_level(w: &mut fmt::format::Writer<'_>, level: &tracing::Level, use_color: bool) -> std::fmt::Result {
     if use_color {
         let (start, end) = match *level {
             Level::ERROR => ("\x1b[31m", "\x1b[0m"), // red
-            Level::WARN  => ("\x1b[33m", "\x1b[0m"), // yellow
-            Level::INFO  => ("\x1b[32m", "\x1b[0m"), // green
+            Level::WARN => ("\x1b[33m", "\x1b[0m"),  // yellow
+            Level::INFO => ("\x1b[32m", "\x1b[0m"),  // green
             Level::DEBUG => ("\x1b[34m", "\x1b[0m"), // blue
             Level::TRACE => ("\x1b[35m", "\x1b[0m"), // magenta
         };
@@ -69,7 +57,6 @@ fn write_level(
     } else {
         write!(w, "[{}] ", level.as_str())
     }
-
 }
 
 impl<S, N, T> fmt::FormatEvent<S, N> for SimplelogLikeEvent<T>
@@ -78,12 +65,7 @@ where
     N: for<'a> fmt::FormatFields<'a> + 'static,
     T: FormatTime + Clone + 'static,
 {
-    fn format_event(
-        &self,
-        _ctx: &fmt::FmtContext<'_, S, N>,
-        mut w: Writer<'_>,
-        event: &tracing::Event<'_>,
-    ) -> std::fmt::Result {
+    fn format_event(&self, _ctx: &fmt::FmtContext<'_, S, N>, mut w: Writer<'_>, event: &tracing::Event<'_>) -> std::fmt::Result {
         // timestamp
         self.timer.format_time(&mut w)?;
         write!(w, " ")?;
@@ -92,7 +74,6 @@ where
 
         // level
         write_level(&mut w, meta.level(), self.use_color)?;
-
 
         fn tokio_task_id_string() -> String {
             match tokio::task::try_id() {
@@ -104,7 +85,7 @@ where
         // thread name
         let thread = std::thread::current();
         let tname = thread.name().unwrap_or("unknown");
-        write!(w, "({}/{}/{:?}) ", tname, os_thread_id(),  tokio_task_id_string())?;
+        write!(w, "({}/{}/{:?}) ", tname, os_thread_id(), tokio_task_id_string())?;
 
         // target (module path)
         write!(w, "{}: ", meta.target())?;
@@ -124,22 +105,21 @@ where
                     self.rest.push((name.to_string(), value.to_string()));
                 }
             }
-            fn record_debug(
-                &mut self,
-                field: &tracing::field::Field,
-                value: &dyn std::fmt::Debug,
-            ) {
+            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
                 let name = field.name();
                 if field.name() == "message" {
                     self.msg = Some(format!("{value:?}"));
                 } else if self.include_log_fields || !name.starts_with("log.") {
-                    self.rest
-                        .push((name.to_string(), format!("{value:?}")));
+                    self.rest.push((name.to_string(), format!("{value:?}")));
                 }
             }
         }
 
-        let mut v = Visitor { msg: None, rest: vec![], include_log_fields: self.include_log_fields };
+        let mut v = Visitor {
+            msg: None,
+            rest: vec![],
+            include_log_fields: self.include_log_fields,
+        };
         event.record(&mut v);
 
         if let Some(msg) = v.msg {
@@ -198,12 +178,7 @@ pub(crate) fn perf_log_level() -> LevelFilter {
 
 pub fn set_perf_log_level(perf_filter: &str) -> anyhow::Result<LevelFilter> {
     let perf_filter = perf_filter.trim();
-    let level = if perf_filter.is_empty() {
-        LevelFilter::Off
-    } else {
-        LevelFilter::from_str(perf_filter)
-            .context("parse perf log level")?
-    };
+    let level = if perf_filter.is_empty() { LevelFilter::Off } else { LevelFilter::from_str(perf_filter).context("parse perf log level")? };
     PERF_LOG_LEVEL.store(level_filter_to_u8(level), Relaxed);
     Ok(level)
 }
@@ -225,17 +200,8 @@ pub(crate) fn init_log_tracer(max_level: LevelFilter) {
     log::set_max_level(max_level);
 }
 
-
-
 #[allow(dead_code)]
-fn init_perf_writer(
-    perf_file: Option<PathBuf>,
-) -> anyhow::Result<
-    (
-        tracing_appender::non_blocking::NonBlocking,
-        tracing_appender::non_blocking::WorkerGuard,
-    ),
-> {
+fn init_perf_writer(perf_file: Option<PathBuf>) -> anyhow::Result<(tracing_appender::non_blocking::NonBlocking, tracing_appender::non_blocking::WorkerGuard)> {
     match perf_file {
         Some(perf_file) => {
             let perf_f = File::create(perf_file)?;
@@ -246,13 +212,7 @@ fn init_perf_writer(
 }
 
 #[allow(dead_code)]
-fn make_file_layer<P:AsRef<Path>>(
-    log_path: P,
-    file_level: LevelFilter,
-) -> (
-    impl tracing_subscriber::Layer<tracing_subscriber::Registry> + Send + Sync + 'static,
-    tracing_appender::non_blocking::WorkerGuard,
-) {
+fn make_file_layer<P: AsRef<Path>>(log_path: P, file_level: LevelFilter) -> (impl tracing_subscriber::Layer<tracing_subscriber::Registry> + Send + Sync + 'static, tracing_appender::non_blocking::WorkerGuard) {
     // let log_path = log_dir.into().join("app.log");
 
     // Keep current app.log + 10 rotated files: app.log.1 .. app.log.10
@@ -266,10 +226,7 @@ fn make_file_layer<P:AsRef<Path>>(
 
     let (writer, guard) = non_blocking(rotating);
 
-    let layer = fmt::layer()
-        .with_ansi(false)
-        .with_writer(writer)
-        .with_filter(EnvFilter::new(level_filter_string(file_level)));
+    let layer = fmt::layer().with_ansi(false).with_writer(writer).with_filter(EnvFilter::new(level_filter_string(file_level)));
 
     (layer, guard)
 }
@@ -284,17 +241,13 @@ pub struct SyncMakeWriter<W> {
 
 impl<W> SyncMakeWriter<W> {
     pub fn new(writer: W) -> Self {
-        Self {
-            inner: Arc::new(Mutex::new(writer)),
-        }
+        Self { inner: Arc::new(Mutex::new(writer)) }
     }
-
-
 }
 
 pub struct SyncWriterGuard<'a, W>
 where
-    W:Write
+    W: Write,
 {
     writer: &'a Mutex<W>,
     buffer: Vec<u8>,
@@ -302,7 +255,7 @@ where
 
 impl<'a, W> Write for SyncWriterGuard<'a, W>
 where
-    W:Write
+    W: Write,
 {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.buffer.write(buf)
@@ -318,7 +271,7 @@ where
 
 impl<'a, W> Drop for SyncWriterGuard<'a, W>
 where
-    W:Write
+    W: Write,
 {
     fn drop(&mut self) {
         // File writes are unbuffered; per-event flush adds synchronization without
@@ -334,33 +287,16 @@ where
     type Writer = SyncWriterGuard<'a, W>;
 
     fn make_writer(&'a self) -> Self::Writer {
-        SyncWriterGuard {
-            writer: &self.inner,
-            buffer: Vec::new(),
-        }
+        SyncWriterGuard { writer: &self.inner, buffer: Vec::new() }
     }
 }
 static TRACING_INIT: OnceLock<()> = OnceLock::new();
 
-
 fn open_new_log_file(path: &Path) -> anyhow::Result<File> {
-    OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
-        .with_context(|| format!("refusing to open existing log file: {}", path.display()))
+    OpenOptions::new().write(true).create_new(true).open(path).with_context(|| format!("refusing to open existing log file: {}", path.display()))
 }
 
-pub fn init_tracing(
-    term_level: LevelFilter,
-    term_extra_fields: bool,
-    file_level: LevelFilter,
-    file_extra_fields: bool,
-    log_file: PathBuf,
-    perf_filter: &str,
-    perf_file: Option<PathBuf>,
-    console_addr: Option<ServerAddr>,
-) -> anyhow::Result<()> {
+pub fn init_tracing(term_level: LevelFilter, term_extra_fields: bool, file_level: LevelFilter, file_extra_fields: bool, log_file: PathBuf, perf_filter: &str, perf_file: Option<PathBuf>, console_addr: Option<ServerAddr>) -> anyhow::Result<()> {
     if TRACING_INIT.get().is_some() {
         panic!("init_tracing() called more than once in the same process");
     }
@@ -369,7 +305,7 @@ pub fn init_tracing(
 
     set_perf_log_level(perf_filter)?;
 
-    let timer = tracing_subscriber::fmt::time::ChronoLocal::new( "%Y-%m-%d %H:%M:%S%.3f".to_string());
+    let timer = tracing_subscriber::fmt::time::ChronoLocal::new("%Y-%m-%d %H:%M:%S%.3f".to_string());
 
     let stdout_writer = SyncMakeWriter::new(std::io::stdout());
     let stdout_layer = fmt::layer()
@@ -383,11 +319,7 @@ pub fn init_tracing(
     let file_layer = fmt::layer()
         .with_ansi(false)
         .with_writer(log_writer)
-        .event_format(SimplelogLikeEvent::new(
-            timer.clone(),
-            false,
-            file_extra_fields,
-        ))
+        .event_format(SimplelogLikeEvent::new(timer.clone(), false, file_extra_fields))
         .with_filter(EnvFilter::new(level_filter_string(file_level)));
 
     let perf_layer = if let Some(perf_path) = perf_file {
@@ -406,20 +338,11 @@ pub fn init_tracing(
         None
     };
 
+    let console_layer = console_subscriber::ConsoleLayer::builder().server_addr(console_addr.unwrap_or(([127, 0, 0, 1], 6677).into())).spawn();
 
-    let console_layer = console_subscriber::ConsoleLayer::builder()
-        .server_addr(console_addr.unwrap_or(([127, 0, 0, 1], 6677).into()))
-        .spawn();
-
-    let subscriber = registry()
-        .with(console_layer)
-        .with(stdout_layer)
-        .with(file_layer)
-        .with(perf_layer)
-        .with(PerfLayer::new());
+    let subscriber = registry().with(console_layer).with(stdout_layer).with(file_layer).with(perf_layer).with(PerfLayer::new());
 
     tracing::subscriber::set_global_default(subscriber).context("set global tracing subscriber")?;
-
 
     init_log_tracer(max_level);
 
@@ -431,7 +354,7 @@ pub fn init_tracing(
 #[derive(Debug)]
 pub struct SpanTiming {
     created_at: Instant,
-    busy_ns: u64,//
+    busy_ns: u64, //
     entered_at: Option<Instant>,
 }
 
@@ -462,22 +385,18 @@ impl PerfAgg {
     }
 
     pub fn reset(&self) -> (u64, u64) {
-        (
-            self.busy_ns.swap(0, Relaxed),
-            self.busy_calls.swap(0, Relaxed)
-        )
+        (self.busy_ns.swap(0, Relaxed), self.busy_calls.swap(0, Relaxed))
     }
 
     pub fn busy_time(&self) -> Duration {
         Duration::from_nanos(self.busy_ns.load(Relaxed))
     }
 
-    pub fn track(&self, span_timing:&SpanTiming) {
+    pub fn track(&self, span_timing: &SpanTiming) {
         self.busy_ns.fetch_add(span_timing.busy_ns, Relaxed);
         self.elapsed_ns.fetch_add(span_timing.created_at.elapsed().as_nanos() as u64, Relaxed);
         self.busy_calls.fetch_add(1, Relaxed);
     }
-
 }
 
 #[derive(Default)]
@@ -500,7 +419,7 @@ impl tracing::field::Visit for AggPerfFields {
 }
 
 /// Global, so tests can call reset/print between blocks.
-pub static PERF: LazyLock<DashMap<String, PerfAgg>> =  LazyLock::new(||DashMap::new());
+pub static PERF: LazyLock<DashMap<String, PerfAgg>> = LazyLock::new(|| DashMap::new());
 
 /// Accumulates busy time for spans with `target == "perf"`.
 pub struct PerfLayer;
@@ -516,9 +435,7 @@ where
     S: tracing::Subscriber + for<'a> LookupSpan<'a>,
 {
     fn on_new_span(&self, attrs: &tracing::span::Attributes<'_>, id: &tracing::span::Id, ctx: Context<'_, S>) {
-
         if let Some(span) = ctx.span(id) {
-
             let mut v = AggPerfFields { agg_perf: None };
             attrs.record(&mut v);
 
@@ -532,10 +449,7 @@ where
     }
 
     fn on_enter(&self, id: &tracing::span::Id, ctx: Context<'_, S>) {
-
-        let Some(span) = ctx.span(id) else {
-            return
-        };
+        let Some(span) = ctx.span(id) else { return };
 
         let mut exts = span.extensions_mut();
         let Some(t) = exts.get_mut::<SpanTiming>() else { return };
@@ -545,7 +459,6 @@ where
     }
 
     fn on_exit(&self, id: &tracing::span::Id, ctx: Context<'_, S>) {
-
         let Some(span) = ctx.span(id) else { return };
 
         let mut exts = span.extensions_mut();
@@ -558,18 +471,14 @@ where
     }
 
     fn on_close(&self, id: tracing::span::Id, ctx: Context<'_, S>) {
-
         let Some(span) = ctx.span(&id) else { return };
 
         let extensions = span.extensions();
 
-        if let Some(agg_perf) = extensions
-            .get::<AggPerfFields>()
-            .and_then(|f| f.agg_perf.as_deref()) {
-
+        if let Some(agg_perf) = extensions.get::<AggPerfFields>().and_then(|f| f.agg_perf.as_deref()) {
             log::trace!("PerfLayer::on_close: agg_perf={agg_perf:?}");
 
-            if let Some(t)  = extensions.get::<SpanTiming>() {
+            if let Some(t) = extensions.get::<SpanTiming>() {
                 let perf = PERF.entry(agg_perf.to_string()).or_insert(PerfAgg::new());
 
                 perf.track(t);
@@ -621,51 +530,19 @@ pub fn format_perf_map(map: &DashMap<String, PerfAgg>) -> String {
     let mut fmt_rows: Vec<(String, String, String, String, String)> = Vec::with_capacity(rows.len());
     for (k, busy, elapsed, calls) in rows {
         let per = if calls == 0 { 0 } else { busy / calls };
-        fmt_rows.push((
-            k,
-            fmt_grouped_u64(busy),
-            fmt_grouped_u64(elapsed),
-            fmt_grouped_u64(calls),
-            fmt_grouped_u64(per),
-        ));
+        fmt_rows.push((k, fmt_grouped_u64(busy), fmt_grouped_u64(elapsed), fmt_grouped_u64(calls), fmt_grouped_u64(per)));
     }
 
     // Column widths
-    let key_w = fmt_rows
-        .iter()
-        .map(|(k, _, _, _, _)| k.len())
-        .max()
-        .unwrap_or(0)
-        .max(key_header.len())
-        .min(140);
+    let key_w = fmt_rows.iter().map(|(k, _, _, _, _)| k.len()).max().unwrap_or(0).max(key_header.len()).min(140);
 
-    let busy_w = fmt_rows
-        .iter()
-        .map(|(_, b, _, _, _)| b.len())
-        .max()
-        .unwrap_or(0)
-        .max(busy_header.len());
+    let busy_w = fmt_rows.iter().map(|(_, b, _, _, _)| b.len()).max().unwrap_or(0).max(busy_header.len());
 
-    let elapsed_w = fmt_rows
-        .iter()
-        .map(|(_, _, e, _, _)| e.len())
-        .max()
-        .unwrap_or(0)
-        .max(elapsed_header.len());
+    let elapsed_w = fmt_rows.iter().map(|(_, _, e, _, _)| e.len()).max().unwrap_or(0).max(elapsed_header.len());
 
-    let calls_w = fmt_rows
-        .iter()
-        .map(|(_, _, _, c, _)| c.len())
-        .max()
-        .unwrap_or(0)
-        .max(calls_header.len());
+    let calls_w = fmt_rows.iter().map(|(_, _, _, c, _)| c.len()).max().unwrap_or(0).max(calls_header.len());
 
-    let per_w = fmt_rows
-        .iter()
-        .map(|(_, _, _, _, p)| p.len())
-        .max()
-        .unwrap_or(0)
-        .max(per_header.len());
+    let per_w = fmt_rows.iter().map(|(_, _, _, _, p)| p.len()).max().unwrap_or(0).max(per_header.len());
 
     let mut out = String::new();
 
@@ -718,8 +595,8 @@ pub fn format_perf_map(map: &DashMap<String, PerfAgg>) -> String {
 mod tests {
     #[test]
     fn test_record_formatting_does_not_lock_the_shared_writer() {
-        use tracing_subscriber::fmt::MakeWriter;
         use std::io::Write;
+        use tracing_subscriber::fmt::MakeWriter;
         let writer = super::SyncMakeWriter::new(Vec::<u8>::new());
         let mut first = writer.make_writer();
         first.write_all(b"first").unwrap();
@@ -732,18 +609,18 @@ mod tests {
         assert_eq!(&*writer.inner.lock(), b"secondfirst record");
     }
 
+    use crate::cdt_for_dir;
+    use crate::perf_logging::{PERF, format_perf_map, init_perf_writer};
+    use log::info;
     use std::io::Write;
     use std::path::Path;
     use std::sync::Arc;
     use std::sync::atomic::Ordering;
     use std::thread;
     use std::time::Duration;
-    use log::info;
     use tracing::Instrument;
-    use crate::cdt_for_dir;
-    use crate::perf_logging::{format_perf_map, init_perf_writer, PERF};
 
-    const NS_IN_MLS:u64 = 1_000_000;
+    const NS_IN_MLS: u64 = 1_000_000;
 
     #[test]
     fn test_init_perf_writer_none_uses_sink() {
@@ -761,14 +638,11 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_in_spawned() -> anyhow::Result<()>{
-
+    async fn test_in_spawned() -> anyhow::Result<()> {
         let h = tokio::spawn(async move {
             tokio::time::sleep(Duration::from_secs(3)).await;
-        }).instrument(tracing::debug_span!(
-            "label",
-            agg_perf="label",
-        ));
+        })
+        .instrument(tracing::debug_span!("label", agg_perf = "label",));
 
         h.await?;
 
@@ -781,25 +655,24 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_nested() {
-
-        #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="inner_1"))]
-        async fn inner_1(){
+        #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "inner_1"))]
+        async fn inner_1() {
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
 
-        #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="inner_2"))]
+        #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "inner_2"))]
 
-        async fn inner_2(){
+        async fn inner_2() {
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
 
-        #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="inner_3"))]
-        async fn inner_3(){
+        #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "inner_3"))]
+        async fn inner_3() {
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
 
-        #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="outer"))]
-        async fn outer(){
+        #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "outer"))]
+        async fn outer() {
             inner_1().await;
             inner_2().await;
             inner_3().await;
@@ -809,7 +682,6 @@ mod tests {
 
         info!("\n{}", format_perf_map(&PERF));
 
-
         assert!(PERF.get("inner_1").unwrap().elapsed_ns.load(Ordering::Relaxed) / NS_IN_MLS - 1000 <= 2);
         assert!(PERF.get("inner_2").unwrap().elapsed_ns.load(Ordering::Relaxed) / NS_IN_MLS - 1000 <= 2);
         assert!(PERF.get("inner_3").unwrap().elapsed_ns.load(Ordering::Relaxed) / NS_IN_MLS - 1000 <= 2);
@@ -818,26 +690,23 @@ mod tests {
 
     #[test]
     fn test_impls() {
-
         trait Runnable {
-            #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="Runnable::do_run"))]
-            fn do_run(self:Arc<Self>){
+            #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "Runnable::do_run"))]
+            fn do_run(self: Arc<Self>) {
                 thread::sleep(Duration::from_secs(1))
             }
         }
 
         struct A;
         impl Runnable for A {
-            #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="A::do_run"))]
-            fn do_run(self:Arc<Self>) {
+            #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "A::do_run"))]
+            fn do_run(self: Arc<Self>) {
                 thread::sleep(Duration::from_secs(1))
             }
         }
 
         struct B;
-        impl Runnable for B {
-
-        }
+        impl Runnable for B {}
 
         let a = Arc::new(A);
         a.do_run();
@@ -865,7 +734,6 @@ pub fn set_panic_hook() {
             log::error!("panic payload: {s}");
         }
 
-
         let backtrace = std::backtrace::Backtrace::force_capture();
         for frame in backtrace.frames() {
             debug!("{:?}\n", frame);
@@ -876,10 +744,9 @@ pub fn set_panic_hook() {
     }));
 }
 
-
 pub fn install_panic_hook<W>(make_writer: W)
 where
-    W:  for<'writer> MakeWriter<'writer> + Sync + Send + 'static,
+    W: for<'writer> MakeWriter<'writer> + Sync + Send + 'static,
 {
     let prev = panic::take_hook();
 
@@ -887,17 +754,9 @@ where
         let thread = std::thread::current();
         let thread_name = thread.name().unwrap_or("<unnamed>");
 
-        let location = info
-            .location()
-            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
-            .unwrap_or_else(|| "<unknown>".to_string());
+        let location = info.location().map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column())).unwrap_or_else(|| "<unknown>".to_string());
 
-        let payload = info
-            .payload()
-            .downcast_ref::<&str>()
-            .copied()
-            .or_else(|| info.payload().downcast_ref::<String>().map(|s| s.as_str()))
-            .unwrap_or("<non-string panic payload>");
+        let payload = info.payload().downcast_ref::<&str>().copied().or_else(|| info.payload().downcast_ref::<String>().map(|s| s.as_str())).unwrap_or("<non-string panic payload>");
 
         let backtrace = Backtrace::force_capture();
 
@@ -913,10 +772,7 @@ where
 
         let mut writer = make_writer.make_writer();
         // Synchronous crash log, so it still has a chance to survive abort paths.
-        let _ = writeln!(
-            writer,
-            "\n=== PANIC ===\nthread: {thread_name}\nlocation: {location}\npayload: {payload}\nbacktrace:\n{backtrace}\n"
-        );
+        let _ = writeln!(writer, "\n=== PANIC ===\nthread: {thread_name}\nlocation: {location}\npayload: {payload}\nbacktrace:\n{backtrace}\n");
         let _ = writer.flush();
 
         // Keep the normal stderr panic output too.

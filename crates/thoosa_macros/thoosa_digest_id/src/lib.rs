@@ -2,14 +2,7 @@
 
 use std::{
     borrow::Cow,
-    collections::{
-        BTreeMap,
-        BTreeSet,
-        HashMap,
-        HashSet,
-        LinkedList,
-        VecDeque,
-    },
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet, LinkedList, VecDeque},
     hash::{BuildHasher, Hash as StdHash},
     rc::Rc,
     sync::Arc,
@@ -43,12 +36,11 @@ pub trait DigestHash {
     }
 }
 
-
 /// Implementation details used by the derive macro.
 ///
 /// This is public only because generated code lives in another crate.
 #[doc(hidden)]
-pub mod __private {
+pub mod inner {
     use blake3::Hasher;
 
     pub const UNIT: u8 = 0x01;
@@ -105,11 +97,7 @@ pub mod __private {
     }
 
     #[inline]
-    pub fn begin_struct(
-        hasher: &mut Hasher,
-        type_tag: &str,
-        field_count: usize,
-    ) {
+    pub fn begin_struct(hasher: &mut Hasher, type_tag: &str, field_count: usize) {
         tag(hasher, STRUCT);
         framed_bytes(hasher, type_tag.as_bytes());
         len(hasher, field_count);
@@ -129,11 +117,7 @@ pub mod __private {
     }
 
     #[inline]
-    pub fn variant(
-        hasher: &mut Hasher,
-        name: &str,
-        field_count: usize,
-    ) {
+    pub fn variant(hasher: &mut Hasher, name: &str, field_count: usize) {
         // The stable name makes variant declaration order irrelevant to the digest.
         tag(hasher, VARIANT);
         framed_bytes(hasher, name.as_bytes());
@@ -141,52 +125,49 @@ pub mod __private {
     }
 }
 
-
 // -------------------------------------------------------------------------
 // Primitive types
 // -------------------------------------------------------------------------
 
 impl DigestHash for () {
     fn update_digest(&self, hasher: &mut blake3::Hasher) {
-        __private::tag(hasher, __private::UNIT);
+        inner::tag(hasher, inner::UNIT);
     }
 }
 
 impl DigestHash for bool {
     fn update_digest(&self, hasher: &mut blake3::Hasher) {
-        __private::tag(hasher, __private::BOOL);
+        inner::tag(hasher, inner::BOOL);
         hasher.update(&[*self as u8]);
     }
 }
-
 
 macro_rules! impl_integer {
     ($ty:ty, $tag:expr) => {
         impl DigestHash for $ty {
             fn update_digest(&self, hasher: &mut blake3::Hasher) {
-                __private::tag(hasher, $tag);
+                inner::tag(hasher, $tag);
                 hasher.update(&self.to_le_bytes());
             }
         }
     };
 }
 
-impl_integer!(u8, __private::U8);
-impl_integer!(u16, __private::U16);
-impl_integer!(u32, __private::U32);
-impl_integer!(u64, __private::U64);
-impl_integer!(u128, __private::U128);
+impl_integer!(u8, inner::U8);
+impl_integer!(u16, inner::U16);
+impl_integer!(u32, inner::U32);
+impl_integer!(u64, inner::U64);
+impl_integer!(u128, inner::U128);
 
-impl_integer!(i8, __private::I8);
-impl_integer!(i16, __private::I16);
-impl_integer!(i32, __private::I32);
-impl_integer!(i64, __private::I64);
-impl_integer!(i128, __private::I128);
-
+impl_integer!(i8, inner::I8);
+impl_integer!(i16, inner::I16);
+impl_integer!(i32, inner::I32);
+impl_integer!(i64, inner::I64);
+impl_integer!(i128, inner::I128);
 
 impl DigestHash for usize {
     fn update_digest(&self, hasher: &mut blake3::Hasher) {
-        __private::tag(hasher, __private::USIZE);
+        inner::tag(hasher, inner::USIZE);
 
         // Avoid target-pointer-width-dependent byte encoding.
         hasher.update(&(*self as u128).to_le_bytes());
@@ -195,12 +176,11 @@ impl DigestHash for usize {
 
 impl DigestHash for isize {
     fn update_digest(&self, hasher: &mut blake3::Hasher) {
-        __private::tag(hasher, __private::ISIZE);
+        inner::tag(hasher, inner::ISIZE);
 
         hasher.update(&(*self as i128).to_le_bytes());
     }
 }
-
 
 // -------------------------------------------------------------------------
 // Floating point
@@ -232,24 +212,19 @@ fn canonical_f64_bits(value: f64) -> u64 {
 
 impl DigestHash for f32 {
     fn update_digest(&self, hasher: &mut blake3::Hasher) {
-        __private::tag(hasher, __private::F32);
+        inner::tag(hasher, inner::F32);
 
-        hasher.update(
-            &canonical_f32_bits(*self).to_le_bytes(),
-        );
+        hasher.update(&canonical_f32_bits(*self).to_le_bytes());
     }
 }
 
 impl DigestHash for f64 {
     fn update_digest(&self, hasher: &mut blake3::Hasher) {
-        __private::tag(hasher, __private::F64);
+        inner::tag(hasher, inner::F64);
 
-        hasher.update(
-            &canonical_f64_bits(*self).to_le_bytes(),
-        );
+        hasher.update(&canonical_f64_bits(*self).to_le_bytes());
     }
 }
-
 
 // -------------------------------------------------------------------------
 // Strings / char
@@ -257,27 +232,23 @@ impl DigestHash for f64 {
 
 impl DigestHash for char {
     fn update_digest(&self, hasher: &mut blake3::Hasher) {
-        __private::tag(hasher, __private::CHAR);
+        inner::tag(hasher, inner::CHAR);
         hasher.update(&(*self as u32).to_le_bytes());
     }
 }
 
 impl DigestHash for str {
     fn update_digest(&self, hasher: &mut blake3::Hasher) {
-        __private::tag(hasher, __private::STR);
-        __private::framed_bytes(hasher, self.as_bytes());
+        inner::tag(hasher, inner::STR);
+        inner::framed_bytes(hasher, self.as_bytes());
     }
 }
 
 impl DigestHash for String {
     fn update_digest(&self, hasher: &mut blake3::Hasher) {
-        <str as DigestHash>::update_digest(
-            self.as_str(),
-            hasher,
-        );
+        <str as DigestHash>::update_digest(self.as_str(), hasher);
     }
 }
-
 
 // -------------------------------------------------------------------------
 // Transparent wrappers
@@ -297,10 +268,7 @@ where
     T: DigestHash + ?Sized,
 {
     fn update_digest(&self, hasher: &mut blake3::Hasher) {
-        <T as DigestHash>::update_digest(
-            self.as_ref(),
-            hasher,
-        );
+        <T as DigestHash>::update_digest(self.as_ref(), hasher);
     }
 }
 
@@ -309,10 +277,7 @@ where
     T: DigestHash + ?Sized,
 {
     fn update_digest(&self, hasher: &mut blake3::Hasher) {
-        <T as DigestHash>::update_digest(
-            self.as_ref(),
-            hasher,
-        );
+        <T as DigestHash>::update_digest(self.as_ref(), hasher);
     }
 }
 
@@ -321,10 +286,7 @@ where
     T: DigestHash + ?Sized,
 {
     fn update_digest(&self, hasher: &mut blake3::Hasher) {
-        <T as DigestHash>::update_digest(
-            self.as_ref(),
-            hasher,
-        );
+        <T as DigestHash>::update_digest(self.as_ref(), hasher);
     }
 }
 
@@ -333,29 +295,21 @@ where
     T: DigestHash + ToOwned + ?Sized,
 {
     fn update_digest(&self, hasher: &mut blake3::Hasher) {
-        <T as DigestHash>::update_digest(
-            self.as_ref(),
-            hasher,
-        );
+        <T as DigestHash>::update_digest(self.as_ref(), hasher);
     }
 }
-
 
 // -------------------------------------------------------------------------
 // Sequences
 // -------------------------------------------------------------------------
 
-fn update_sequence<'a, T, I>(
-    hasher: &mut blake3::Hasher,
-    len: usize,
-    values: I,
-)
+fn update_sequence<'a, T, I>(hasher: &mut blake3::Hasher, len: usize, values: I)
 where
     T: DigestHash + 'a,
     I: IntoIterator<Item = &'a T>,
 {
-    __private::tag(hasher, __private::SEQUENCE);
-    __private::len(hasher, len);
+    inner::tag(hasher, inner::SEQUENCE);
+    inner::len(hasher, len);
 
     for value in values {
         <T as DigestHash>::update_digest(value, hasher);
@@ -367,11 +321,7 @@ where
     T: DigestHash,
 {
     fn update_digest(&self, hasher: &mut blake3::Hasher) {
-        update_sequence(
-            hasher,
-            self.len(),
-            self.iter(),
-        );
+        update_sequence(hasher, self.len(), self.iter());
     }
 }
 
@@ -380,10 +330,7 @@ where
     T: DigestHash,
 {
     fn update_digest(&self, hasher: &mut blake3::Hasher) {
-        <[T] as DigestHash>::update_digest(
-            self.as_slice(),
-            hasher,
-        );
+        <[T] as DigestHash>::update_digest(self.as_slice(), hasher);
     }
 }
 
@@ -392,10 +339,7 @@ where
     T: DigestHash,
 {
     fn update_digest(&self, hasher: &mut blake3::Hasher) {
-        <[T] as DigestHash>::update_digest(
-            self.as_slice(),
-            hasher,
-        );
+        <[T] as DigestHash>::update_digest(self.as_slice(), hasher);
     }
 }
 
@@ -404,11 +348,7 @@ where
     T: DigestHash,
 {
     fn update_digest(&self, hasher: &mut blake3::Hasher) {
-        update_sequence(
-            hasher,
-            self.len(),
-            self.iter(),
-        );
+        update_sequence(hasher, self.len(), self.iter());
     }
 }
 
@@ -417,14 +357,9 @@ where
     T: DigestHash,
 {
     fn update_digest(&self, hasher: &mut blake3::Hasher) {
-        update_sequence(
-            hasher,
-            self.len(),
-            self.iter(),
-        );
+        update_sequence(hasher, self.len(), self.iter());
     }
 }
-
 
 // -------------------------------------------------------------------------
 // Option / Result
@@ -435,7 +370,7 @@ where
     T: DigestHash,
 {
     fn update_digest(&self, hasher: &mut blake3::Hasher) {
-        __private::tag(hasher, __private::OPTION);
+        inner::tag(hasher, inner::OPTION);
 
         match self {
             None => {
@@ -444,10 +379,7 @@ where
 
             Some(value) => {
                 hasher.update(&[1]);
-                <T as DigestHash>::update_digest(
-                    value,
-                    hasher,
-                );
+                <T as DigestHash>::update_digest(value, hasher);
             }
         }
     }
@@ -459,28 +391,21 @@ where
     E: DigestHash,
 {
     fn update_digest(&self, hasher: &mut blake3::Hasher) {
-        __private::tag(hasher, __private::RESULT);
+        inner::tag(hasher, inner::RESULT);
 
         match self {
             Ok(value) => {
                 hasher.update(&[0]);
-                <T as DigestHash>::update_digest(
-                    value,
-                    hasher,
-                );
+                <T as DigestHash>::update_digest(value, hasher);
             }
 
             Err(error) => {
                 hasher.update(&[1]);
-                <E as DigestHash>::update_digest(
-                    error,
-                    hasher,
-                );
+                <E as DigestHash>::update_digest(error, hasher);
             }
         }
     }
 }
-
 
 // -------------------------------------------------------------------------
 // Tuples
@@ -499,12 +424,12 @@ macro_rules! impl_tuple {
                 &self,
                 hasher: &mut blake3::Hasher,
             ) {
-                __private::tag(
+                inner::tag(
                     hasher,
-                    __private::TUPLE,
+                    inner::TUPLE,
                 );
 
-                __private::len(hasher, $len);
+                inner::len(hasher, $len);
 
                 $(
                     <$T as DigestHash>::update_digest(
@@ -526,7 +451,6 @@ impl_tuple!(6; A:0, B:1, C:2, D:3, E:4, F:5);
 impl_tuple!(7; A:0, B:1, C:2, D:3, E:4, F:5, G:6);
 impl_tuple!(8; A:0, B:1, C:2, D:3, E:4, F:5, G:6, H:7);
 
-
 // -------------------------------------------------------------------------
 // Maps / sets
 // -------------------------------------------------------------------------
@@ -539,11 +463,7 @@ where
     *DigestHash::blake3_hash(value).as_bytes()
 }
 
-fn update_map<'a, K, V, I>(
-    hasher: &mut blake3::Hasher,
-    len: usize,
-    entries: I,
-)
+fn update_map<'a, K, V, I>(hasher: &mut blake3::Hasher, len: usize, entries: I)
 where
     K: DigestHash + 'a,
     V: DigestHash + 'a,
@@ -552,21 +472,12 @@ where
     // HashMap iteration order is not stable.
     //
     // Convert each entry to fixed-size canonical digests and sort.
-    let mut entries: Vec<([u8; 32], [u8; 32])> =
-        entries
-            .into_iter()
-            .map(|(key, value)| {
-                (
-                    digest_bytes(key),
-                    digest_bytes(value),
-                )
-            })
-            .collect();
+    let mut entries: Vec<([u8; 32], [u8; 32])> = entries.into_iter().map(|(key, value)| (digest_bytes(key), digest_bytes(value))).collect();
 
     entries.sort_unstable();
 
-    __private::tag(hasher, __private::MAP);
-    __private::len(hasher, len);
+    inner::tag(hasher, inner::MAP);
+    inner::len(hasher, len);
 
     for (key, value) in entries {
         hasher.update(&key);
@@ -574,31 +485,22 @@ where
     }
 }
 
-fn update_set<'a, T, I>(
-    hasher: &mut blake3::Hasher,
-    len: usize,
-    values: I,
-)
+fn update_set<'a, T, I>(hasher: &mut blake3::Hasher, len: usize, values: I)
 where
     T: DigestHash + 'a,
     I: IntoIterator<Item = &'a T>,
 {
-    let mut values: Vec<[u8; 32]> =
-        values
-            .into_iter()
-            .map(digest_bytes)
-            .collect();
+    let mut values: Vec<[u8; 32]> = values.into_iter().map(digest_bytes).collect();
 
     values.sort_unstable();
 
-    __private::tag(hasher, __private::SET);
-    __private::len(hasher, len);
+    inner::tag(hasher, inner::SET);
+    inner::len(hasher, len);
 
     for value in values {
         hasher.update(&value);
     }
 }
-
 
 impl<K, V> DigestHash for BTreeMap<K, V>
 where
@@ -606,11 +508,7 @@ where
     V: DigestHash,
 {
     fn update_digest(&self, hasher: &mut blake3::Hasher) {
-        update_map(
-            hasher,
-            self.len(),
-            self.iter(),
-        );
+        update_map(hasher, self.len(), self.iter());
     }
 }
 
@@ -621,11 +519,7 @@ where
     S: BuildHasher,
 {
     fn update_digest(&self, hasher: &mut blake3::Hasher) {
-        update_map(
-            hasher,
-            self.len(),
-            self.iter(),
-        );
+        update_map(hasher, self.len(), self.iter());
     }
 }
 
@@ -634,11 +528,7 @@ where
     T: DigestHash + Ord,
 {
     fn update_digest(&self, hasher: &mut blake3::Hasher) {
-        update_set(
-            hasher,
-            self.len(),
-            self.iter(),
-        );
+        update_set(hasher, self.len(), self.iter());
     }
 }
 
@@ -648,14 +538,9 @@ where
     S: BuildHasher,
 {
     fn update_digest(&self, hasher: &mut blake3::Hasher) {
-        update_set(
-            hasher,
-            self.len(),
-            self.iter(),
-        );
+        update_set(hasher, self.len(), self.iter());
     }
 }
-
 
 // -------------------------------------------------------------------------
 // Custom field encoders
@@ -663,7 +548,7 @@ where
 
 /// Helpers usable with `#[digest(with = "...")]`.
 pub mod with {
-    use crate::{DigestHash, __private};
+    use crate::{DigestHash, inner};
 
     /// Hash an f32 by its exact IEEE-754 bit representation.
     ///
@@ -671,50 +556,31 @@ pub mod with {
     ///
     /// * +0.0 != -0.0
     /// * distinct NaN payloads remain distinct
-    pub fn f32_bits(
-        value: &f32,
-        hasher: &mut blake3::Hasher,
-    ) {
-        __private::tag(hasher, __private::F32);
+    pub fn f32_bits(value: &f32, hasher: &mut blake3::Hasher) {
+        inner::tag(hasher, inner::F32);
 
-        hasher.update(
-            &value.to_bits().to_le_bytes(),
-        );
+        hasher.update(&value.to_bits().to_le_bytes());
     }
 
-    pub fn f64_bits(
-        value: &f64,
-        hasher: &mut blake3::Hasher,
-    ) {
-        __private::tag(hasher, __private::F64);
+    pub fn f64_bits(value: &f64, hasher: &mut blake3::Hasher) {
+        inner::tag(hasher, inner::F64);
 
-        hasher.update(
-            &value.to_bits().to_le_bytes(),
-        );
+        hasher.update(&value.to_bits().to_le_bytes());
     }
 
     /// Efficiently hash byte buffers as a blob rather than as a sequence
     /// of individually tagged u8 values.
-    pub fn bytes<T>(
-        value: &T,
-        hasher: &mut blake3::Hasher,
-    )
+    pub fn bytes<T>(value: &T, hasher: &mut blake3::Hasher)
     where
         T: AsRef<[u8]> + ?Sized,
     {
-        __private::tag(hasher, __private::BYTES);
+        inner::tag(hasher, inner::BYTES);
 
-        __private::framed_bytes(
-            hasher,
-            value.as_ref(),
-        );
+        inner::framed_bytes(hasher, value.as_ref());
     }
 
     /// Example helper useful from custom encoders.
-    pub fn as_digest<T>(
-        value: &T,
-        hasher: &mut blake3::Hasher,
-    )
+    pub fn as_digest<T>(value: &T, hasher: &mut blake3::Hasher)
     where
         T: DigestHash + ?Sized,
     {

@@ -58,11 +58,7 @@ where
             BandwidthFactor::MagicClipExponent(min, magic_clip_exponent) => {
                 let magic_factor = (1.0 / size as f64).powf((*magic_clip_exponent).into());
 
-                if *min < magic_factor.into() {
-                    magic_factor.into()
-                } else {
-                    *min
-                }
+                if *min < magic_factor.into() { magic_factor.into() } else { *min }
             }
         }
     }
@@ -103,11 +99,7 @@ where
     tch::Scalar: From<N>,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Test")
-            .field("lb", &<N as Into<f64>>::into(self.lb))
-            .field("ub", &<N as Into<f64>>::into(self.ub))
-            .field("prior", &self.prior)
-            .finish()
+        f.debug_struct("Test").field("lb", &<N as Into<f64>>::into(self.lb)).field("ub", &<N as Into<f64>>::into(self.ub)).field("prior", &self.prior).finish()
     }
 }
 
@@ -137,14 +129,7 @@ where
     f64: From<N>,
     tch::Scalar: From<N>,
 {
-    pub fn new(
-        name: Option<String>,
-        lb: N,
-        ub: N,
-        bandwidth_factor: BandwidthFactor<N>,
-        prior: bool,
-        quant_step: Option<usize>,
-    ) -> Self {
+    pub fn new(name: Option<String>, lb: N, ub: N, bandwidth_factor: BandwidthFactor<N>, prior: bool, quant_step: Option<usize>) -> Self {
         let i = Self {
             name,
             lb,
@@ -166,14 +151,18 @@ where
             let prior = tch_result(Tensor::f_from_slice(&[midpoint]))?;
             let prior = tch_result(prior.f_to_device(device))?;
             tch_result(Tensor::f_cat(&[samples, prior], 0))?
-        } else { samples };
+        } else {
+            samples
+        };
         let size = samples.size()[0];
         let (means, bandwidth) = self.bandwidth.clc(samples)?;
         let domain_range = self.ub - self.lb;
         let min_bandwidth = self.bandwidth_clip.value(size) * domain_range;
         let clipped = tch_result(bandwidth.f_clamp(min_bandwidth, 0.5.into() * domain_range))?;
         let clipped = tch_result(tch_result(clipped.f_view([1]))?.f_repeat([size]))?;
-        if self.prior { let _ = tch_result(tch_result(clipped.f_select(0, size - 1))?.f_fill_(domain_range))?; }
+        if self.prior {
+            let _ = tch_result(tch_result(clipped.f_select(0, size - 1))?.f_fill_(domain_range))?;
+        }
         let (norm_consts, logpdf_consts) = Self::calculate_norm_consts(&self.lb, &self.ub, &means, &clipped)?;
         let weights = uniform_weight(size, device)?;
         NumericalGaussian::new(means, clipped, norm_consts, logpdf_consts, weights, self.lb.into(), self.ub.into(), self.quant_step)
@@ -206,16 +195,7 @@ pub struct NumericalGaussian {
 }
 
 impl NumericalGaussian {
-    pub fn new(
-        means: Tensor,
-        stds: Tensor,
-        norm_consts: Tensor,
-        logpdf_consts: Tensor,
-        weights: Tensor,
-        lb: f64,
-        ub: f64,
-        quant_step: Option<usize>,
-    ) -> anyhow::Result<Self> {
+    pub fn new(means: Tensor, stds: Tensor, norm_consts: Tensor, logpdf_consts: Tensor, weights: Tensor, lb: f64, ub: f64, quant_step: Option<usize>) -> anyhow::Result<Self> {
         let means_vec = tch_result(Vec::<f64>::try_from(&means))?;
         let stds_vec = tch_result(Vec::<f64>::try_from(&stds))?;
         anyhow::ensure!(!means_vec.is_empty() && means_vec.len() == stds_vec.len(), "Gaussian means and deviations must be nonempty and aligned");
@@ -279,8 +259,7 @@ impl NumericalGaussian {
                             return clamped;
                         }
                         let q_val_f = q_val as f64;
-                        let snapped =
-                            ((clamped - lb) / q_val_f).round() * q_val_f + lb;
+                        let snapped = ((clamped - lb) / q_val_f).round() * q_val_f + lb;
                         snapped.clamp(lb, ub)
                     } else {
                         clamped
@@ -301,8 +280,7 @@ impl NumericalGaussian {
                         continue;
                     }
                     let u2: f64 = rng.random();
-                    let z =
-                        (-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos();
+                    let z = (-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos();
                     let val = mean + std * z;
 
                     if lb <= val && val <= ub {
@@ -318,10 +296,7 @@ impl NumericalGaussian {
 
 impl Distribution for NumericalGaussian {
     fn sample(&self, n_samples: usize) -> anyhow::Result<Vec<Val>> {
-        Ok(self._sample(n_samples)
-            .into_iter()
-            .map(|v| v.into())
-            .collect())
+        Ok(self._sample(n_samples).into_iter().map(|v| v.into()).collect())
     }
 
     fn basis_loglikelihood(&self, x: &mut dyn Iterator<Item = &Val>) -> anyhow::Result<Tensor> {
@@ -340,7 +315,9 @@ pub fn compute_config_loglikelihoods(basis_loglikelihoods: &Tensor, weights: Opt
     let sums = if let Some(weights) = weights {
         let logs = tch_result(tch_result(weights.f_view([-1, 1]))?.f_log())?;
         tch_result(sums.f_add(&logs))?
-    } else { sums };
+    } else {
+        sums
+    };
     Ok(tch_result(sums.f_logsumexp(0, false))?)
 }
 
@@ -351,7 +328,7 @@ mod tests {
     use tch::Tensor;
     use tch::kind::FLOAT_CPU;
 
-    use super::{BandwidthFactor, NumericalParzenEstimator, compute_config_loglikelihoods, NumericalGaussian};
+    use super::{BandwidthFactor, NumericalGaussian, NumericalParzenEstimator, compute_config_loglikelihoods};
 
     #[ctor::ctor]
     fn init() {
@@ -372,67 +349,33 @@ mod tests {
     fn test_npe() {
         StdRng::seed_from_u64(42);
 
-        let npe = NumericalParzenEstimator::new(
-            None,
-            -3.0f64,
-            3.0f64,
-            BandwidthFactor::default(),
-            true,
-            None,
-        );
+        let npe = NumericalParzenEstimator::new(None, -3.0f64, 3.0f64, BandwidthFactor::default(), true, None);
 
         let gaussian = npe.clc_distr(Tensor::from_slice(&[-1.0, 0.0, 1.0])).unwrap();
 
-        assert_eq!(
-            Tensor::from_slice(&[-1., 0., 1., 0.]).round_decimals(4),
-            gaussian.means.round_decimals(4)
-        );
+        assert_eq!(Tensor::from_slice(&[-1., 0., 1., 0.]).round_decimals(4), gaussian.means.round_decimals(4));
 
+        assert_eq!(Tensor::from_slice(&[0.29946714, 0.29946714, 0.29946714, 6.]).round_decimals(4), gaussian.stds.round_decimals(4));
 
-        assert_eq!(
-            Tensor::from_slice(&[0.29946714, 0.29946714, 0.29946714, 6.]).round_decimals(4),
-            gaussian.stds.round_decimals(4)
-        );
+        assert_eq!(Tensor::from_slice(&[1., 1., 1., 2.61147797]).round_decimals(4), gaussian.norm_consts.round_decimals(4));
 
-
-        assert_eq!(
-            Tensor::from_slice(&[1., 1., 1., 2.61147797]).round_decimals(4),
-            gaussian.norm_consts.round_decimals(4)
-        );
-
-        assert_eq!(
-            Tensor::from_slice(&[0.28681207, 0.28681207, 0.28681207, -1.75078167])
-                .round_decimals(4),
-            gaussian.logpdf_consts.round_decimals(4)
-        );
+        assert_eq!(Tensor::from_slice(&[0.28681207, 0.28681207, 0.28681207, -1.75078167]).round_decimals(4), gaussian.logpdf_consts.round_decimals(4));
 
         let pdf = gaussian.pdf(&Tensor::linspace(-3.0, 3.0, 100, FLOAT_CPU)).unwrap();
 
-
         assert_eq!(
             Tensor::from_slice(&[
-                0.03830879, 0.03850079, 0.03868981, 0.03887579, 0.03905869, 0.03923846, 0.03941508,
-                0.0395886, 0.03975921, 0.03992746, 0.0400948, 0.04026458, 0.04044426, 0.04064949,
-                0.04091152, 0.04128953, 0.04188982, 0.04289303, 0.04458879, 0.04741365, 0.05198243,
-                0.0590974, 0.06971465, 0.08484755, 0.10539555, 0.13190615, 0.16430442, 0.20165279,
-                0.24202132, 0.28254343, 0.31969902, 0.34980887, 0.36965828, 0.37711655, 0.37160411,
-                0.35428949, 0.32796568, 0.29663682, 0.26491237, 0.23733607, 0.21776788, 0.20889924,
-                0.21193992, 0.22648462, 0.25055861, 0.2808435, 0.31308289, 0.34264849, 0.36520985,
-                0.37740817, 0.37740817, 0.36520985, 0.34264849, 0.31308289, 0.2808435, 0.25055861,
-                0.22648462, 0.21193992, 0.20889924, 0.21776788, 0.23733607, 0.26491237, 0.29663682,
-                0.32796568, 0.35428949, 0.37160411, 0.37711655, 0.36965828, 0.34980887, 0.31969902,
-                0.28254343, 0.24202132, 0.20165279, 0.16430442, 0.13190615, 0.10539555, 0.08484755,
-                0.06971465, 0.0590974, 0.05198243, 0.04741365, 0.04458879, 0.04289303, 0.04188982,
-                0.04128953, 0.04091152, 0.04064949, 0.04044426, 0.04026458, 0.0400948, 0.03992746,
-                0.03975921, 0.0395886, 0.03941508, 0.03923846, 0.03905869, 0.03887579, 0.03868981,
-                0.03850079, 0.03830879
+                0.03830879, 0.03850079, 0.03868981, 0.03887579, 0.03905869, 0.03923846, 0.03941508, 0.0395886, 0.03975921, 0.03992746, 0.0400948, 0.04026458, 0.04044426, 0.04064949, 0.04091152, 0.04128953, 0.04188982, 0.04289303, 0.04458879, 0.04741365, 0.05198243, 0.0590974, 0.06971465,
+                0.08484755, 0.10539555, 0.13190615, 0.16430442, 0.20165279, 0.24202132, 0.28254343, 0.31969902, 0.34980887, 0.36965828, 0.37711655, 0.37160411, 0.35428949, 0.32796568, 0.29663682, 0.26491237, 0.23733607, 0.21776788, 0.20889924, 0.21193992, 0.22648462, 0.25055861, 0.2808435,
+                0.31308289, 0.34264849, 0.36520985, 0.37740817, 0.37740817, 0.36520985, 0.34264849, 0.31308289, 0.2808435, 0.25055861, 0.22648462, 0.21193992, 0.20889924, 0.21776788, 0.23733607, 0.26491237, 0.29663682, 0.32796568, 0.35428949, 0.37160411, 0.37711655, 0.36965828, 0.34980887,
+                0.31969902, 0.28254343, 0.24202132, 0.20165279, 0.16430442, 0.13190615, 0.10539555, 0.08484755, 0.06971465, 0.0590974, 0.05198243, 0.04741365, 0.04458879, 0.04289303, 0.04188982, 0.04128953, 0.04091152, 0.04064949, 0.04044426, 0.04026458, 0.0400948, 0.03992746, 0.03975921,
+                0.0395886, 0.03941508, 0.03923846, 0.03905869, 0.03887579, 0.03868981, 0.03850079, 0.03830879
             ])
             .round_decimals(4),
             pdf.round_decimals(4)
         );
 
-        let basis_loglikelihood =
-            gaussian.basis_loglikelihood(&Tensor::linspace(0., 10., 10, FLOAT_CPU)).unwrap();
+        let basis_loglikelihood = gaussian.basis_loglikelihood(&Tensor::linspace(0., 10., 10, FLOAT_CPU)).unwrap();
 
         assert_eq!(
             Tensor::from_slice(&[
@@ -489,48 +432,22 @@ mod tests {
     #[test]
     fn test_compute_config_loglikelihoods() {
         assert_eq!(
-            Tensor::from_slice(&[4.86626684, 5.97737795, 7.08848906, 8.19960018, 9.31071129])
-                .round_decimals(3),
-            compute_config_loglikelihoods(
-                &Tensor::linspace(0., 10., 10, FLOAT_CPU).view((1, 2, 5)),
-                Some(&Tensor::from_slice(&[0.5, 0.5]))
-            ).unwrap()
-            .round_decimals(3)
+            Tensor::from_slice(&[4.86626684, 5.97737795, 7.08848906, 8.19960018, 9.31071129]).round_decimals(3),
+            compute_config_loglikelihoods(&Tensor::linspace(0., 10., 10, FLOAT_CPU).view((1, 2, 5)), Some(&Tensor::from_slice(&[0.5, 0.5]))).unwrap().round_decimals(3)
         );
 
         assert_eq!(
-            Tensor::from_slice(&[
-                14.82974904,
-                15.8642318,
-                16.89871456,
-                17.93319732,
-                18.96768008
-            ])
-            .round_decimals(3),
-            compute_config_loglikelihoods(
-                &Tensor::linspace(0., 10., 30, FLOAT_CPU).view((3, 2, 5)),
-                Some(&Tensor::from_slice(&[0.5, 0.5]))
-            ).unwrap()
-            .round_decimals(3)
+            Tensor::from_slice(&[14.82974904, 15.8642318, 16.89871456, 17.93319732, 18.96768008]).round_decimals(3),
+            compute_config_loglikelihoods(&Tensor::linspace(0., 10., 30, FLOAT_CPU).view((3, 2, 5)), Some(&Tensor::from_slice(&[0.5, 0.5]))).unwrap().round_decimals(3)
         )
     }
 
     #[test]
     //std=0 and mean outside bounds
     fn test_numerical_gaussian_sample_degenerate_out_of_bounds() {
-        let gaussian = NumericalGaussian::new(
-            Tensor::from_slice(&[10.0]),
-            Tensor::from_slice(&[0.0]),
-            Tensor::from_slice(&[1.0]),
-            Tensor::from_slice(&[0.0]),
-            Tensor::from_slice(&[1.0]),
-            0.0,
-            1.0,
-            None,
-        ).unwrap();
+        let gaussian = NumericalGaussian::new(Tensor::from_slice(&[10.0]), Tensor::from_slice(&[0.0]), Tensor::from_slice(&[1.0]), Tensor::from_slice(&[0.0]), Tensor::from_slice(&[1.0]), 0.0, 1.0, None).unwrap();
         let samples = gaussian._sample(3);
         assert!(samples.iter().all(|v| (0.0..=1.0).contains(v)), "samples={samples:?}");
         assert_eq!(vec![1.0, 1.0, 1.0], samples);
     }
-
 }

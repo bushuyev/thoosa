@@ -1,6 +1,6 @@
-use std::ffi::{c_char, CStr};
+use std::ffi::{CStr, c_char};
 
-use thoosa_shared::{cuda_cause_from_error_code, ThoError};
+use thoosa_shared::{ThoError, cuda_cause_from_error_code};
 
 pub type CuResult = i32;
 
@@ -21,11 +21,7 @@ fn last_cpp_error_message() -> Option<String> {
     }
 
     let msg = unsafe { CStr::from_ptr(p).to_string_lossy().into_owned() };
-    if msg.is_empty() {
-        None
-    } else {
-        Some(msg)
-    }
+    if msg.is_empty() { None } else { Some(msg) }
 }
 
 pub fn last_cpp_error(prefix: &str) -> String {
@@ -45,17 +41,9 @@ pub fn cuda_error_from_status(label: &str, status: CuResult) -> ThoError {
 
 pub fn cuda_error_from_last_error(label: &str) -> ThoError {
     let status = unsafe { tho_get_last_error_code() };
-    if status == CUDA_SUCCESS {
-        ThoError::from_cuda_message(last_cpp_error(label))
-    } else {
-        cuda_error_from_status(label, status)
-    }
+    if status == CUDA_SUCCESS { ThoError::from_cuda_message(last_cpp_error(label)) } else { cuda_error_from_status(label, status) }
 }
 
 pub fn check_cuda_status(status: CuResult, label: &str) -> Result<(), ThoError> {
-    if status == CUDA_SUCCESS {
-        Ok(())
-    } else {
-        Err(cuda_error_from_status(label, status))
-    }
+    if status == CUDA_SUCCESS { Ok(()) } else { Err(cuda_error_from_status(label, status)) }
 }

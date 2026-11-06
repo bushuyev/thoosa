@@ -2,10 +2,10 @@ use log::{debug, warn};
 use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::fmt::Debug;
-use thoosa_shared::ipc_types::{H2DTensorKey, TensorKey, WorkerOutput};
-use thoosa_common::ipc::tensor_info::{IpcTensorKind, WorkerTensorInfoPayload};
 use thoosa_common::ipc::state_transfer::StageStateInfo;
-use thoosa_shared::{tho_error, CudaAction, SyncStageRunnerError, ThoError};
+use thoosa_common::ipc::tensor_info::{IpcTensorKind, WorkerTensorInfoPayload};
+use thoosa_shared::ipc_types::{H2DTensorKey, TensorKey, WorkerOutput};
+use thoosa_shared::{CudaAction, SyncStageRunnerError, ThoError, tho_error};
 
 /// Numeric tensor and endpoint IDs are only meaningful in their originating
 /// worker. A replacement process may allocate exactly the same IDs again.
@@ -26,23 +26,19 @@ impl CudaWorkerId {
 }
 
 #[typetag::serde(tag = "type")]
-pub trait WorkerInput: Any + Send + Sync + Debug {
-
-}
+pub trait WorkerInput: Any + Send + Sync + Debug {}
 
 #[typetag::serde(name = "void")]
-impl WorkerInput for (){
-
-}
+impl WorkerInput for () {}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DebugOutput {
-    debug_data_snap:Vec<String>
+    debug_data_snap: Vec<String>,
 }
 
 impl DebugOutput {
     pub fn new(debug_data_snap: &Vec<String>) -> Self {
-        Self { debug_data_snap:debug_data_snap.clone() }
+        Self { debug_data_snap: debug_data_snap.clone() }
     }
 
     pub fn debug_data_snap(&self) -> &Vec<String> {
@@ -51,10 +47,7 @@ impl DebugOutput {
 }
 
 #[typetag::serde]
-impl WorkerOutput for DebugOutput {
-
-}
-
+impl WorkerOutput for DebugOutput {}
 
 // A batch has one export lease and one reply, while retaining each tensor's
 // exact shape/type and its independently owned parent allocation.
@@ -67,7 +60,7 @@ pub struct StageStatePurgeDestination {
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Operation {
     DescribeRef {
-        tensor_key: u64
+        tensor_key: u64,
     },
     H2dCopy {
         tensor_key: H2DTensorKey,
@@ -76,7 +69,7 @@ pub enum Operation {
         tensor_byte_len: usize,
         // The parent owns the shared allocator, so the worker addresses the live CPU tensor by its offset in the arena mapping.
         arena_offset: usize,
-        dst_key: Option<H2DTensorKey>
+        dst_key: Option<H2DTensorKey>,
     },
     D2hCopy {
         // State reads must belong to the export that froze this endpoint.
@@ -88,35 +81,70 @@ pub enum Operation {
         // D2H writes into a CPU tensor preallocated by the parent because only the parent may allocate and free arena storage.
         arena_offset: usize,
     },
-    DropThoTensor { tensor_key: u64 },
-    InstallStage { endpoint_name: String, stage_id: Option<String>, init_data: Box<dyn WorkerInput> },
-    InvokeStage { endpoint_name: String, stage_id: Option<String>, input: Box<dyn WorkerInput>, consume: bool },
-    GetStageStateInfo { endpoint_name: String, stage_id: Option<String> },
-    PurgeStage { endpoint_name: String, stage_id: Option<String> },//moves CudaWorker's StageWithState's state into thoosa_common::ipc::proxy::ProxyStage::state
+    DropThoTensor {
+        tensor_key: u64,
+    },
+    InstallStage {
+        endpoint_name: String,
+        stage_id: Option<String>,
+        init_data: Box<dyn WorkerInput>,
+    },
+    InvokeStage {
+        endpoint_name: String,
+        stage_id: Option<String>,
+        input: Box<dyn WorkerInput>,
+        consume: bool,
+    },
+    GetStageStateInfo {
+        endpoint_name: String,
+        stage_id: Option<String>,
+    },
+    PurgeStage {
+        endpoint_name: String,
+        stage_id: Option<String>,
+    }, //moves CudaWorker's StageWithState's state into thoosa_common::ipc::proxy::ProxyStage::state
     // Begin uses its request ID as the transaction identity; finish has its own request ID.
-    BeginStageStatePurge { endpoint_name: String, stage_id: Option<String> },
-    ExportStageTensors { endpoint_name: String, stage_id: Option<String>, export_id: u64, destinations: Vec<StageStatePurgeDestination> },
-    FinishStageStatePurge { endpoint_name: String, stage_id: Option<String>, export_id: u64, commit: bool },
-    ResetStageState { endpoint_name: String, stage_id: Option<String>, info: StageStateInfo },
-    DropStage { endpoint_name: String, stage_id: Option<String> },
+    BeginStageStatePurge {
+        endpoint_name: String,
+        stage_id: Option<String>,
+    },
+    ExportStageTensors {
+        endpoint_name: String,
+        stage_id: Option<String>,
+        export_id: u64,
+        destinations: Vec<StageStatePurgeDestination>,
+    },
+    FinishStageStatePurge {
+        endpoint_name: String,
+        stage_id: Option<String>,
+        export_id: u64,
+        commit: bool,
+    },
+    ResetStageState {
+        endpoint_name: String,
+        stage_id: Option<String>,
+        info: StageStateInfo,
+    },
+    DropStage {
+        endpoint_name: String,
+        stage_id: Option<String>,
+    },
     Debug,
-    Shutdown {dummy: String},//without dummy empty message deserialized as Shutdown?
+    Shutdown {
+        dummy: String,
+    }, //without dummy empty message deserialized as Shutdown?
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CudaWorkerMsgIn {
     pub worker_id: CudaWorkerId,
-    pub request_id:u64,
-    pub operation: Operation
+    pub request_id: u64,
+    pub operation: Operation,
 }
 
 impl CudaWorkerMsgIn {
-    pub fn new(worker_id: CudaWorkerId, request_id: u64, operation:Operation) -> Self {
-        Self {
-            worker_id,
-            request_id,
-            operation
-        }
+    pub fn new(worker_id: CudaWorkerId, request_id: u64, operation: Operation) -> Self {
+        Self { worker_id, request_id, operation }
     }
 }
 
@@ -134,10 +162,11 @@ pub struct WorkerError {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-enum WorkerErrorKind {//TODO remove and use ThoError
+enum WorkerErrorKind {
+    //TODO remove and use ThoError
     Cuda(CudaAction),
-    AdjusterFailed,//TODO it can't happen in Worker
-    NotFound,//TODO add what
+    AdjusterFailed, //TODO it can't happen in Worker
+    NotFound,       //TODO add what
     ContextReset,
     MissingEndpoint(String),
     SubmitErrorClosed,
@@ -166,8 +195,8 @@ impl WorkerErrorKind {
             ThoError::AdjusterFailed => Self::AdjusterFailed,
             ThoError::NotFound(what) => {
                 warn!("WorkerErrorKind:NotFound: what={what:?}");
-                Self::NotFound//TODO add what
-            },//TODO add
+                Self::NotFound //TODO add what
+            } //TODO add
             ThoError::CudaBeingRecovered => Self::ContextReset,
             ThoError::MissingEndpoint(key) => Self::MissingEndpoint(key.clone()),
             ThoError::SyncStageRunner(SyncStageRunnerError::SubmitErrorClosed) => Self::SubmitErrorClosed,
@@ -181,16 +210,17 @@ impl WorkerErrorKind {
 
 impl From<ThoError> for WorkerError {
     fn from(error: ThoError) -> Self {
-        Self { kind: WorkerErrorKind::from_error(&error), message: format!("{error:#}") }
+        Self {
+            kind: WorkerErrorKind::from_error(&error),
+            message: format!("{error:#}"),
+        }
     }
 }
 
 impl WorkerError {
     pub(crate) fn requires_worker_exit(&self) -> bool {
         match &self.kind {
-            WorkerErrorKind::TrainingSessionFailed { original, recovery } => {
-                original.requires_worker_exit() || recovery.as_ref().is_some_and(|error| error.requires_worker_exit())
-            },
+            WorkerErrorKind::TrainingSessionFailed { original, recovery } => original.requires_worker_exit() || recovery.as_ref().is_some_and(|error| error.requires_worker_exit()),
             _ => matches!(self.kind, WorkerErrorKind::Cuda(CudaAction::NeedsRestart) | WorkerErrorKind::CudaRecoveryFailed { .. }),
         }
     }
@@ -214,11 +244,13 @@ impl From<WorkerError> for ThoError {
             WorkerErrorKind::TrainingSessionFailed { original, recovery } => Self::TrainingSessionFailed(std::sync::Arc::new(thoosa_shared::TrainingSessionFailure {
                 original: (*original).into(),
                 recovery: recovery.map(|error| (*error).into()),
-            })).context(message),
+            }))
+            .context(message),
             WorkerErrorKind::CudaRecoveryFailed { original, recovery } => Self::CudaRecoveryFailed(std::sync::Arc::new(thoosa_shared::CudaRecoveryFailure {
                 original: (*original).into(),
                 recovery: recovery.map(|error| (*error).into()),
-            })).context(message),
+            }))
+            .context(message),
         }
     }
 }
@@ -226,8 +258,8 @@ impl From<WorkerError> for ThoError {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CudaWorkerMsgOut {
     pub worker_id: CudaWorkerId,
-    pub request_id:u64,
-    pub status:OpResult
+    pub request_id: u64,
+    pub status: OpResult,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -240,7 +272,7 @@ pub(crate) struct WorkerCopyDonePayload {
 impl WorkerOutput for WorkerCopyDonePayload {}
 
 impl OpResult {
-    pub fn failed(msg:String)-> Self {
+    pub fn failed(msg: String) -> Self {
         ThoError::new(msg).into()
     }
 }
@@ -282,8 +314,14 @@ mod tests {
 
     #[test]
     fn test_retired_worker_identity_is_rejected() {
-        let old = CudaWorkerId { device_idx: 1, generation: thoosa_shared::CudaDeviceGeneration(0) };
-        let replacement = CudaWorkerId { generation: thoosa_shared::CudaDeviceGeneration(1), ..old };
+        let old = CudaWorkerId {
+            device_idx: 1,
+            generation: thoosa_shared::CudaDeviceGeneration(0),
+        };
+        let replacement = CudaWorkerId {
+            generation: thoosa_shared::CudaDeviceGeneration(1),
+            ..old
+        };
         assert!(matches!(old.check(replacement).unwrap_err().what(), ThoError::CudaBeingRecovered));
         assert!(replacement.check(replacement).is_ok());
     }

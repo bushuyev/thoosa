@@ -1,4 +1,4 @@
-use tch::{Device, Kind, Tensor, TchError};
+use tch::{Device, Kind, TchError, Tensor};
 
 #[derive(Debug, Clone)]
 pub struct Stats {
@@ -51,8 +51,12 @@ fn f_quantile_1d(v: &Tensor, q: f64) -> Result<Tensor, TchError> {
     }
     let (sorted, _idx) = v.f_sort(0, false)?;
     let mut i = ((m - 1) as f64 * q).round() as i64;
-    if i < 0 { i = 0; }
-    if i > m - 1 { i = m - 1; }
+    if i < 0 {
+        i = 0;
+    }
+    if i > m - 1 {
+        i = m - 1;
+    }
     sorted.f_select(0, i) // scalar
 }
 
@@ -69,8 +73,12 @@ fn f_quantile_dim1_per_row(x: &Tensor, q: f64) -> Result<Tensor, TchError> {
     }
     let (sorted, _idx) = x.f_sort(1, false)?; // [M,L]
     let mut i = ((l - 1) as f64 * q).round() as i64;
-    if i < 0 { i = 0; }
-    if i > l - 1 { i = l - 1; }
+    if i < 0 {
+        i = 0;
+    }
+    if i > l - 1 {
+        i = l - 1;
+    }
     sorted.f_select(1, i) // [M]
 }
 
@@ -97,10 +105,7 @@ fn per_window_metrics(
     // TV per row: sum |x[t+1]-x[t]|
     let x1 = w.f_narrow(1, 1, l - 1)?;
     let x0 = w.f_narrow(1, 0, l - 1)?;
-    let tv = x1
-        .f_sub(&x0)?
-        .f_abs()?
-        .f_sum_dim_intlist(1, false, w.kind())?; // [M]
+    let tv = x1.f_sub(&x0)?.f_abs()?.f_sum_dim_intlist(1, false, w.kind())?; // [M]
 
     // Curvature per row: sum |x[t+1] - 2x[t] + x[t-1]|
     let curv = if l >= 3 {
@@ -108,15 +113,14 @@ fn per_window_metrics(
         let xc = w.f_narrow(1, 1, l - 2)?;
         let xm = w.f_narrow(1, 0, l - 2)?;
         let two = Tensor::from(2.0).to_device(w.device()).to_kind(w.kind());
-        xp.f_sub(&xc.f_mul(&two)?)?.f_add(&xm)?.f_abs()?
-            .f_sum_dim_intlist(1, false, w.kind())? // [M]
+        xp.f_sub(&xc.f_mul(&two)?)?.f_add(&xm)?.f_abs()?.f_sum_dim_intlist(1, false, w.kind())? // [M]
     } else {
         Tensor::zeros(&[m], (w.kind(), w.device()))
     };
 
     let denom = amp.f_add_scalar(eps)?; // [M]
-    let tvn = tv.f_div(&denom)?;        // [M]
-    let curvn = curv.f_div(&denom)?;    // [M]
+    let tvn = tv.f_div(&denom)?; // [M]
+    let curvn = curv.f_div(&denom)?; // [M]
     Ok((amp, tvn, curvn))
 }
 
@@ -126,32 +130,32 @@ fn avg_rms_to_template(w: &Tensor, t: &Tensor) -> Result<Tensor, TchError> {
     // w: [M,L], t: [L]
     let sz = w.size();
     let _l = sz[1];
-    let diff = w.f_sub(t)?;                      // [M,L]
-    let diff2 = diff.f_mul(&diff)?;              // [M,L]
+    let diff = w.f_sub(t)?; // [M,L]
+    let diff2 = diff.f_mul(&diff)?; // [M,L]
     let mse = diff2.f_mean_dim(1, false, w.kind())?; // [M]
-    let rms = mse.f_sqrt()?;                     // [M]
-    rms.f_mean(w.kind())                         // scalar
+    let rms = mse.f_sqrt()?; // [M]
+    rms.f_mean(w.kind()) // scalar
 }
 
 /// Average Pearson correlation of each window with template.
 /// Returns scalar.
 fn avg_pearson_to_template(w: &Tensor, t: &Tensor, eps: f64) -> Result<Tensor, TchError> {
     // w: [M,L], t: [L]
-    let t_mean = t.f_mean(w.kind())?;                  // scalar
-    let t_c = t.f_sub(&t_mean)?;                       // [L]
-    let t_var = t_c.f_mul(&t_c)?.f_mean(w.kind())?;    // scalar
-    let t_std = t_var.f_add_scalar(eps)?.f_sqrt()?;    // scalar
+    let t_mean = t.f_mean(w.kind())?; // scalar
+    let t_c = t.f_sub(&t_mean)?; // [L]
+    let t_var = t_c.f_mul(&t_c)?.f_mean(w.kind())?; // scalar
+    let t_std = t_var.f_add_scalar(eps)?.f_sqrt()?; // scalar
 
-    let w_mean = w.f_mean_dim(1, true, w.kind())?;  // [M,1]
-    let w_c = w.f_sub(&w_mean)?;                       // [M,L]
+    let w_mean = w.f_mean_dim(1, true, w.kind())?; // [M,1]
+    let w_c = w.f_sub(&w_mean)?; // [M,L]
 
     let cov = w_c.f_mul(&t_c)?.f_mean_dim(1, false, w.kind())?; // [M]
     let w_var = w_c.f_mul(&w_c)?.f_mean_dim(1, false, w.kind())?; // [M]
-    let w_std = w_var.f_add_scalar(eps)?.f_sqrt()?;                 // [M]
+    let w_std = w_var.f_add_scalar(eps)?.f_sqrt()?; // [M]
 
     let denom = w_std.f_mul(&t_std)?.f_add_scalar(eps)?; // [M]
-    let corr = cov.f_div(&denom)?;                        // [M]
-    corr.f_mean(w.kind())                                 // scalar
+    let corr = cov.f_div(&denom)?; // [M]
+    corr.f_mean(w.kind()) // scalar
 }
 
 /// Main function:
@@ -182,7 +186,8 @@ pub fn estimate_channel_stats_from_windows(
     }
 
     // For stats/scalar extraction, easiest is CPU float.
-    let x = channels_windows/*.f_to_device(Device::Cpu)?*/.f_to_kind(Kind::Float)?;
+    let x = channels_windows /*.f_to_device(Device::Cpu)?*/
+        .f_to_kind(Kind::Float)?;
 
     let mut out = Vec::with_capacity(c as usize);
 
@@ -192,8 +197,8 @@ pub fn estimate_channel_stats_from_windows(
         // Template = mean over windows: [L]
         let t = w.f_mean_dim(0, false, w.kind())?; // [L]
 
-        let euc = avg_rms_to_template(&w, &t)?;                 // scalar
-        let pear = avg_pearson_to_template(&w, &t, eps)?;       // scalar
+        let euc = avg_rms_to_template(&w, &t)?; // scalar
+        let pear = avg_pearson_to_template(&w, &t, eps)?; // scalar
 
         let (amp, tvn, curvn) = per_window_metrics(&w, q_lo, q_hi, eps)?; // [M], [M], [M]
 
@@ -217,10 +222,10 @@ pub fn estimate_channel_stats_from_windows(
 
         out.push(Stats {
             euc_dist: f64_scalar(&euc)? as f32,
-            pearson:  f64_scalar(&pear)? as f32,
+            pearson: f64_scalar(&pear)? as f32,
 
-            a0:    f64_scalar(&a0)? as f32,
-            tv0:   f64_scalar(&tv0)? as f32,
+            a0: f64_scalar(&a0)? as f32,
+            tv0: f64_scalar(&tv0)? as f32,
             curv0: f64_scalar(&curv0)? as f32,
 
             amp_p10: f64_scalar(&amp_p10)? as f32,

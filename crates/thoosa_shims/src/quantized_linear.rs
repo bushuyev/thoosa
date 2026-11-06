@@ -1,8 +1,8 @@
+use log::debug;
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_double, c_int};
-use std::ptr::{null, NonNull};
-use log::debug;
-use tch::{nn, Device, Kind, TchError, Tensor};
+use std::ptr::{NonNull, null};
+use tch::{Device, Kind, TchError, Tensor, nn};
 use torch_sys::C_tensor;
 
 pub type TchResult<T> = Result<T, TchError>;
@@ -16,23 +16,11 @@ unsafe extern "C" {
     fn tho_ql_last_error() -> *const c_char;
     fn tho_ql_clear_error();
 
-    fn tho_ql_prepack_dynamic_i8(
-        weight_f32: *const C_tensor,
-        bias_f32_or_null: *const C_tensor,
-        weight_scale_or_negative: c_double,
-    ) -> *mut ThoQuantizedLinearOpaque;
+    fn tho_ql_prepack_dynamic_i8(weight_f32: *const C_tensor, bias_f32_or_null: *const C_tensor, weight_scale_or_negative: c_double) -> *mut ThoQuantizedLinearOpaque;
 
-    fn tho_ql_forward_dynamic_i8(
-        ql: *const ThoQuantizedLinearOpaque,
-        input_f32: *const C_tensor,
-        reduce_range: c_int,
-    ) -> *mut C_tensor;
+    fn tho_ql_forward_dynamic_i8(ql: *const ThoQuantizedLinearOpaque, input_f32: *const C_tensor, reduce_range: c_int) -> *mut C_tensor;
 
-    fn tho_ql_forward_relu_dynamic_i8(
-        ql: *const ThoQuantizedLinearOpaque,
-        input_f32: *const C_tensor,
-        reduce_range: c_int,
-    ) -> *mut C_tensor;
+    fn tho_ql_forward_relu_dynamic_i8(ql: *const ThoQuantizedLinearOpaque, input_f32: *const C_tensor, reduce_range: c_int) -> *mut C_tensor;
 
     fn tho_ql_in_features(ql: *const ThoQuantizedLinearOpaque) -> i64;
     fn tho_ql_out_features(ql: *const ThoQuantizedLinearOpaque) -> i64;
@@ -69,11 +57,7 @@ impl FastQuantizedLinear {
         Self::from_float_weights_with_scale(ws, bs, None)
     }
 
-    pub fn from_float_weights_with_scale(
-        ws: &Tensor,
-        bs: Option<&Tensor>,
-        weight_scale: Option<f64>,
-    ) -> TchResult<Self> {
+    pub fn from_float_weights_with_scale(ws: &Tensor, bs: Option<&Tensor>, weight_scale: Option<f64>) -> TchResult<Self> {
         debug!("FastQuantizedLinear::from_float_weights_with_scale: ws={ws:?} bs={bs:?} weight_scale={weight_scale:?}");
 
         ensure_cpu_float(ws, "FastQuantizedLinear weight")?;
@@ -85,9 +69,7 @@ impl FastQuantizedLinear {
 
             let bias_size = bs.size();
             if bias_size.as_slice() != [out_features] {
-                return Err(TchError::Shape(format!(
-                    "bias shape mismatch: expected [{out_features}], got {bias_size:?}"
-                )));
+                return Err(TchError::Shape(format!("bias shape mismatch: expected [{out_features}], got {bias_size:?}")));
             }
         }
 
@@ -97,11 +79,7 @@ impl FastQuantizedLinear {
         let raw = unsafe {
             tho_ql_clear_error();
 
-            tho_ql_prepack_dynamic_i8(
-                ws.as_ptr(),
-                bias_ptr,
-                scale_arg,
-            )
+            tho_ql_prepack_dynamic_i8(ws.as_ptr(), bias_ptr, scale_arg)
         };
 
         let raw = NonNull::new(raw).ok_or_else(|| ffi_error("tho_ql_prepack_dynamic_i8"))?;
@@ -145,12 +123,7 @@ impl FastQuantizedLinear {
         self.weight_scale
     }
 
-    fn try_forward_impl(
-        &self,
-        xs: &Tensor,
-        relu: bool,
-        reduce_range: bool,
-    ) -> TchResult<Tensor> {
+    fn try_forward_impl(&self, xs: &Tensor, relu: bool, reduce_range: bool) -> TchResult<Tensor> {
         debug!("try_forward_impl: xs={xs:?}");
 
         ensure_cpu_float(xs, "FastQuantizedLinear input")?;
@@ -160,26 +133,14 @@ impl FastQuantizedLinear {
             tho_ql_clear_error();
 
             if relu {
-                tho_ql_forward_relu_dynamic_i8(
-                    self.raw.as_ptr(),
-                    xs.as_ptr(),
-                    reduce_range as c_int,
-                )
+                tho_ql_forward_relu_dynamic_i8(self.raw.as_ptr(), xs.as_ptr(), reduce_range as c_int)
             } else {
-                tho_ql_forward_dynamic_i8(
-                    self.raw.as_ptr(),
-                    xs.as_ptr(),
-                    reduce_range as c_int,
-                )
+                tho_ql_forward_dynamic_i8(self.raw.as_ptr(), xs.as_ptr(), reduce_range as c_int)
             }
         };
 
         if out_ptr.is_null() {
-            return Err(ffi_error(if relu {
-                "tho_ql_forward_relu_dynamic_i8"
-            } else {
-                "tho_ql_forward_dynamic_i8"
-            }));
+            return Err(ffi_error(if relu { "tho_ql_forward_relu_dynamic_i8" } else { "tho_ql_forward_dynamic_i8" }));
         }
 
         Ok(unsafe { Tensor::from_ptr(out_ptr) })
@@ -189,16 +150,11 @@ impl FastQuantizedLinear {
         let size = xs.size();
 
         let Some(&last_dim) = size.last() else {
-            return Err(TchError::Shape(
-                "FastQuantizedLinear input must have at least one dimension".into(),
-            ));
+            return Err(TchError::Shape("FastQuantizedLinear input must have at least one dimension".into()));
         };
 
         if last_dim != self.in_features {
-            return Err(TchError::Shape(format!(
-                "FastQuantizedLinear input last dim mismatch: expected {}, got {}; shape = {:?}",
-                self.in_features, last_dim, size
-            )));
+            return Err(TchError::Shape(format!("FastQuantizedLinear input last dim mismatch: expected {}, got {}; shape = {:?}", self.in_features, last_dim, size)));
         }
 
         Ok(())
@@ -207,24 +163,17 @@ impl FastQuantizedLinear {
 
 impl nn::Module for FastQuantizedLinear {
     fn forward(&self, xs: &Tensor) -> Tensor {
-        self.try_forward(xs)
-            .expect("FastQuantizedLinear::forward failed")
+        self.try_forward(xs).expect("FastQuantizedLinear::forward failed")
     }
 }
 
 fn ensure_cpu_float(t: &Tensor, name: &str) -> TchResult<()> {
     if t.device() != Device::Cpu {
-        return Err(TchError::Torch(format!(
-            "{name} must be on CPU, got {:?}",
-            t.device()
-        )));
+        return Err(TchError::Torch(format!("{name} must be on CPU, got {:?}", t.device())));
     }
 
     if t.kind() != Kind::Float {
-        return Err(TchError::Torch(format!(
-            "{name} must be Float, got {:?}",
-            t.kind()
-        )));
+        return Err(TchError::Torch(format!("{name} must be Float, got {:?}", t.kind())));
     }
 
     Ok(())
@@ -234,11 +183,7 @@ fn ffi_error(op: &str) -> TchError {
     let msg = unsafe {
         let ptr = tho_ql_last_error();
 
-        if ptr.is_null() {
-            "unknown C++ error".to_string()
-        } else {
-            CStr::from_ptr(ptr).to_string_lossy().into_owned()
-        }
+        if ptr.is_null() { "unknown C++ error".to_string() } else { CStr::from_ptr(ptr).to_string_lossy().into_owned() }
     };
 
     TchError::Torch(format!("{op}: {msg}"))

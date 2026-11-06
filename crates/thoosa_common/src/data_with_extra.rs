@@ -4,18 +4,18 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt::Debug;
 use std::sync::Arc;
 use thoosa_shared::applicables_runner::{Input, Output};
-use thoosa_shared::{CopyToDevice, ThoError};
 use thoosa_shared::traits::{Adjustable, ThoSelector};
 use thoosa_shared::traits::{Data, Select, WithId};
+use thoosa_shared::{CopyToDevice, ThoError};
 
 #[derive(Debug)]
 pub struct DataWithExtra<D, E>
 where
-    D:Data+CopyToDevice+WithId,
-    E:Debug + Send + Sync,
+    D: Data + CopyToDevice + WithId,
+    E: Debug + Send + Sync,
 {
-    pub data: D,//needs to be copied to GPU
-    pub extra: Arc<E>,// CPU-only, small, or at least not huge, usually cloneable struct which is logically related to data
+    pub data: D,       //needs to be copied to GPU
+    pub extra: Arc<E>, // CPU-only, small, or at least not huge, usually cloneable struct which is logically related to data
 }
 
 impl<D, E> DataWithExtra<D, E>
@@ -24,7 +24,7 @@ where
     E: Debug + Send + Sync,
 {
     pub fn new(data: D, extra: E) -> Self {
-        Self { data, extra:Arc::new(extra) }
+        Self { data, extra: Arc::new(extra) }
     }
 
     pub fn data(&self) -> &D {
@@ -36,15 +36,14 @@ where
     }
 }
 
-impl <D, E> Serialize for DataWithExtra<D, E>
+impl<D, E> Serialize for DataWithExtra<D, E>
 where
     D: Serialize + Data + CopyToDevice + WithId + Sync,
     E: Serialize + Debug + Send + Sync,
-
 {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
-        S: Serializer
+        S: Serializer,
     {
         let mut state = serializer.serialize_struct("DataWithExtra", 2)?;
 
@@ -55,14 +54,14 @@ where
     }
 }
 
-impl <'de, Da, E> Deserialize<'de > for DataWithExtra<Da, E>
+impl<'de, Da, E> Deserialize<'de> for DataWithExtra<Da, E>
 where
     Da: Deserialize<'de> + Data + CopyToDevice + WithId + Sync,
     E: Deserialize<'de> + Debug + Send + Sync,
 {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
-        D: Deserializer<'de>
+        D: Deserializer<'de>,
     {
         #[derive(Deserialize)]
         struct DataWithExtra_<Da, E> {
@@ -72,20 +71,17 @@ where
 
         let helper = DataWithExtra_::<Da, E>::deserialize(deserializer)?;
 
-        Ok(DataWithExtra{
-            data: helper.data,
-            extra: Arc::new(helper.extra)
-        })
+        Ok(DataWithExtra { data: helper.data, extra: Arc::new(helper.extra) })
     }
 }
 
 #[async_trait]
-impl <D, E> CopyToDevice for DataWithExtra<D, E>
+impl<D, E> CopyToDevice for DataWithExtra<D, E>
 where
     D: Data + CopyToDevice + WithId + Sync,
     E: Debug + Send + Sync,
 {
-    async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoError>{
+    async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoError> {
         Ok(DataWithExtra {
             data: self.data.copy_to_device(dst_device).await?,
             extra: Arc::clone(&self.extra),
@@ -93,10 +89,10 @@ where
     }
 }
 
-impl <D, E> Data for DataWithExtra<D, E>
+impl<D, E> Data for DataWithExtra<D, E>
 where
     D: Data + CopyToDevice + WithId + Sync,
-    E:Debug + Send + Sync,
+    E: Debug + Send + Sync,
 {
     type Metrics = D::Metrics;
 
@@ -113,18 +109,16 @@ where
     }
 }
 
-
-impl <D, E> Input for DataWithExtra<D, E>
+impl<D, E> Input for DataWithExtra<D, E>
 where
     D: Data + CopyToDevice + WithId + Sync,
-    E:Debug + Send + Sync,
+    E: Debug + Send + Sync,
 {
-
 }
-impl <D, E> WithId for DataWithExtra<D, E>
+impl<D, E> WithId for DataWithExtra<D, E>
 where
     D: Data + CopyToDevice + WithId,
-    E:Debug + Send + Sync,
+    E: Debug + Send + Sync,
 {
     type ID = D::ID;
 
@@ -132,18 +126,17 @@ where
         self.data.id()
     }
 }
-impl <D, E> Output for DataWithExtra<D, E>
+impl<D, E> Output for DataWithExtra<D, E>
 where
     D: Data + CopyToDevice + WithId + Sync,
-    E:Debug + Send + Sync,
+    E: Debug + Send + Sync,
 {
 }
 
-
-impl <S, D, E> Select<S> for DataWithExtra<D, E>
+impl<S, D, E> Select<S> for DataWithExtra<D, E>
 where
-    S:ThoSelector,
-    D: Data + CopyToDevice + WithId + Select<S, Output=D> + Sync,
+    S: ThoSelector,
+    D: Data + CopyToDevice + WithId + Select<S, Output = D> + Sync,
     E: Debug + Send + Sync,
 {
     type Output = Self;
@@ -151,13 +144,14 @@ where
     fn subview(&self, selector: S) -> Result<Self::Output, ThoError> {
         Ok(DataWithExtra {
             data: self.data.subview(selector)?,
-            extra: self.extra.clone()
+            extra: self.extra.clone(),
         })
     }
 }
 
-impl <D, E> Adjustable for DataWithExtra<D, E>
+impl<D, E> Adjustable for DataWithExtra<D, E>
 where
     D: Data + CopyToDevice + WithId + Send + Sync,
-    E:Debug + Send + Sync,
-{}
+    E: Debug + Send + Sync,
+{
+}

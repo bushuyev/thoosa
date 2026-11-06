@@ -5,8 +5,8 @@ use log::trace;
 use mockall::automock;
 use rand::rng;
 use rand::seq::SliceRandom;
-use std::collections::HashMap;
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -16,44 +16,21 @@ use thoosa_named_derive::Named;
 #[automock]
 #[async_trait]
 pub trait ResourceStore {
-    async fn list_resources_by_file_stems<'a>(
-        &self,
-        file_stems: &'a [&'a str],
-    ) -> anyhow::Result<Vec<Resource>>;
+    async fn list_resources_by_file_stems<'a>(&self, file_stems: &'a [&'a str]) -> anyhow::Result<Vec<Resource>>;
 
-    async fn list_resource_set_resources_by_descr(
-        &self,
-        descr: &str,
-    ) -> anyhow::Result<Vec<Resource>>;
+    async fn list_resource_set_resources_by_descr(&self, descr: &str) -> anyhow::Result<Vec<Resource>>;
 
-    async fn list_resource_set_group_sets(
-        &self,
-        group_descr: &str,
-    ) -> anyhow::Result<Vec<(usize, String)>>;
+    async fn list_resource_set_group_sets(&self, group_descr: &str) -> anyhow::Result<Vec<(usize, String)>>;
 
-    async fn list_group_labeled_resources_sets(
-        &self,
-        group_decr: &str,
-    ) -> anyhow::Result<Vec<(String, String)>>;
+    async fn list_group_labeled_resources_sets(&self, group_decr: &str) -> anyhow::Result<Vec<(String, String)>>;
 
     async fn list_resource_set_resources(&self, set_id: usize) -> anyhow::Result<Vec<Resource>>;
 
-    async fn list_resource_random_in_group(
-        &self,
-        group_descr: &str,
-    ) -> anyhow::Result<Vec<(Resource, Vec<f32>)>>;
+    async fn list_resource_random_in_group(&self, group_descr: &str) -> anyhow::Result<Vec<(Resource, Vec<f32>)>>;
 
-    async fn list_resources_not_in_group(
-        &self,
-        group_descr: &str,
-        limit: u32,
-    ) -> anyhow::Result<Vec<Resource>>;
+    async fn list_resources_not_in_group(&self, group_descr: &str, limit: u32) -> anyhow::Result<Vec<Resource>>;
 
-    async fn list_random_resources(
-        &self,
-        limit: Option<u32>,
-    ) -> anyhow::Result<Vec<Resource>>;
-
+    async fn list_random_resources(&self, limit: Option<u32>) -> anyhow::Result<Vec<Resource>>;
 }
 
 #[derive(Debug, Clone, CpuData, Named)]
@@ -67,16 +44,10 @@ pub struct Resource {
 }
 
 impl Resource {
-    pub fn new<I:Into<String>+Display>(id: u32, import_id: u32, file_stem: I, length: u32) -> Self {
+    pub fn new<I: Into<String> + Display>(id: u32, import_id: u32, file_stem: I, length: u32) -> Self {
         trace!("Resource::new: id={id} import_id={import_id} file_stem={file_stem}");
 
-        Self {
-            id,
-            import_id,
-            file_stem:file_stem.into(),
-            length,
-
-        }
+        Self { id, import_id, file_stem: file_stem.into(), length }
     }
 
     pub fn id(&self) -> ResourceId {
@@ -94,24 +65,17 @@ impl Resource {
     pub fn length(&self) -> u32 {
         self.length
     }
-
-
-
-
 }
-
 
 impl WithId for Resource {
     type ID = Resource;
 
     fn id(&self) -> &Self::ID {
         &self
-    }//return composite id+import_id?
+    } //return composite id+import_id?
 }
 
-impl Input for Resource {
-    
-}
+impl Input for Resource {}
 
 impl From<(u32, u32, &str, u32)> for Resource {
     fn from(value: (u32, u32, &str, u32)) -> Self {
@@ -155,35 +119,28 @@ impl AsRef<ResourceId> for Resource {
 
 /// Builds a per-label train/valid map and, for each label, a same-sized shuffled sample of
 /// train/valid resources belonging to all other labels.
-pub fn build_resource_maps(
-    train_labels_resource_keys: Vec<(String, Vec<Resource>)>,
-    valid_label_resource_keys: Vec<(String, Vec<Resource>)>,
-) -> (HashMap<String, (Vec<Resource>, Vec<Resource>)>, Arc<HashMap<String, (Vec<Resource>, Vec<Resource>)>>) {
+pub fn build_resource_maps(train_labels_resource_keys: Vec<(String, Vec<Resource>)>, valid_label_resource_keys: Vec<(String, Vec<Resource>)>) -> (HashMap<String, (Vec<Resource>, Vec<Resource>)>, Arc<HashMap<String, (Vec<Resource>, Vec<Resource>)>>) {
     let mut rand = rng();
     build_resource_maps_with_rng(train_labels_resource_keys, valid_label_resource_keys, &mut rand)
 }
 
-fn build_resource_maps_with_rng<R: rand::Rng + ?Sized>(
-    train_labels_resource_keys: Vec<(String, Vec<Resource>)>,
-    valid_label_resource_keys: Vec<(String, Vec<Resource>)>,
-    rng: &mut R,
-) -> (HashMap<String, (Vec<Resource>, Vec<Resource>)>, Arc<HashMap<String, (Vec<Resource>, Vec<Resource>)>>) {
-    assert_eq!(train_labels_resource_keys.len(), valid_label_resource_keys.len(), "train_labels_resource_keys={train_labels_resource_keys:?} valid_label_resource_keys={valid_label_resource_keys:?}");
+fn build_resource_maps_with_rng<R: rand::Rng + ?Sized>(train_labels_resource_keys: Vec<(String, Vec<Resource>)>, valid_label_resource_keys: Vec<(String, Vec<Resource>)>, rng: &mut R) -> (HashMap<String, (Vec<Resource>, Vec<Resource>)>, Arc<HashMap<String, (Vec<Resource>, Vec<Resource>)>>) {
+    assert_eq!(
+        train_labels_resource_keys.len(),
+        valid_label_resource_keys.len(),
+        "train_labels_resource_keys={train_labels_resource_keys:?} valid_label_resource_keys={valid_label_resource_keys:?}"
+    );
 
-    let mut labels_others_train_valid_resources: HashMap<String, (Vec<&Resource>, Vec<&Resource>)> =
-        train_labels_resource_keys.iter().fold(HashMap::new(), |mut acc, entry| {
-            assert!(acc.insert(entry.0.clone(), (vec![], vec![])).is_none());
-            acc
-        });
+    let mut labels_others_train_valid_resources: HashMap<String, (Vec<&Resource>, Vec<&Resource>)> = train_labels_resource_keys.iter().fold(HashMap::new(), |mut acc, entry| {
+        assert!(acc.insert(entry.0.clone(), (vec![], vec![])).is_none());
+        acc
+    });
 
-    let labels_train_and_valid_sets = train_labels_resource_keys
-        .into_iter()
-        .zip(valid_label_resource_keys)
-        .fold(HashMap::new(), |mut acc, (train, valid)| {
-            assert_eq!(train.0, valid.0);
-            assert!(acc.insert(train.0, (train.1, valid.1)).is_none());
-            acc
-        });
+    let labels_train_and_valid_sets = train_labels_resource_keys.into_iter().zip(valid_label_resource_keys).fold(HashMap::new(), |mut acc, (train, valid)| {
+        assert_eq!(train.0, valid.0);
+        assert!(acc.insert(train.0, (train.1, valid.1)).is_none());
+        acc
+    });
 
     for (other_label, train_valid_resources) in labels_others_train_valid_resources.iter_mut() {
         for (label, resources) in &labels_train_and_valid_sets {
@@ -194,23 +151,22 @@ fn build_resource_maps_with_rng<R: rand::Rng + ?Sized>(
         }
     }
 
-    let labels_others_train_valid_resources = Arc::new(labels_others_train_valid_resources.into_iter().map(|(label, resources)| {
-        let mut train_resources = resources.0;
-        train_resources.shuffle(rng);
-        train_resources.truncate(labels_train_and_valid_sets.get(&label).expect(&format!("no {label} for train resources")).0.len());
+    let labels_others_train_valid_resources = Arc::new(
+        labels_others_train_valid_resources
+            .into_iter()
+            .map(|(label, resources)| {
+                let mut train_resources = resources.0;
+                train_resources.shuffle(rng);
+                train_resources.truncate(labels_train_and_valid_sets.get(&label).expect(&format!("no {label} for train resources")).0.len());
 
-        let mut valid_resources = resources.1;
-        valid_resources.shuffle(rng);
-        valid_resources.truncate(labels_train_and_valid_sets.get(&label).expect(&format!("no {label} for valid resources")).1.len());
+                let mut valid_resources = resources.1;
+                valid_resources.shuffle(rng);
+                valid_resources.truncate(labels_train_and_valid_sets.get(&label).expect(&format!("no {label} for valid resources")).1.len());
 
-        (
-            label,
-            (
-                train_resources.into_iter().cloned().collect::<Vec<_>>(),
-                valid_resources.into_iter().cloned().collect::<Vec<_>>(),
-            ),
-        )
-    }).collect::<HashMap<String, (Vec<Resource>, Vec<Resource>)>>());
+                (label, (train_resources.into_iter().cloned().collect::<Vec<_>>(), valid_resources.into_iter().cloned().collect::<Vec<_>>()))
+            })
+            .collect::<HashMap<String, (Vec<Resource>, Vec<Resource>)>>(),
+    );
 
     (labels_train_and_valid_sets, labels_others_train_valid_resources)
 }
@@ -224,10 +180,7 @@ pub struct ResourceStats {
 
 impl ResourceStats {
     pub fn new(size: Vec<u32>) -> Self {
-        assert!(
-            size.len() > 1,
-            "should be two dimensions at least: channels x values, was {size:?}"
-        );
+        assert!(size.len() > 1, "should be two dimensions at least: channels x values, was {size:?}");
         Self {
             size,
             length_dim: 1, //TODO param
@@ -240,12 +193,9 @@ impl ResourceStats {
 }
 
 #[async_trait]
-pub trait ResourcesConfig:Debug {
+pub trait ResourcesConfig: Debug {
     type R;
-    async fn to_resources<S: ResourceStore + ?Sized + Send + Sync>(
-        &self,
-        store: &Arc<S>,
-    ) -> anyhow::Result<Self::R>;
+    async fn to_resources<S: ResourceStore + ?Sized + Send + Sync>(&self, store: &Arc<S>) -> anyhow::Result<Self::R>;
 
     async fn check<S: ResourceStore + ?Sized + Send + Sync>(&self, _store: &Arc<S>) -> anyhow::Result<()> {
         Err(anyhow::anyhow!("resource config check is not implemented"))
@@ -254,11 +204,11 @@ pub trait ResourcesConfig:Debug {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
+    use super::{Resource, build_resource_maps_with_rng};
     use log::debug;
     use rand::SeedableRng;
     use rand::rngs::StdRng;
-    use super::{build_resource_maps_with_rng, Resource};
+    use std::collections::HashSet;
 
     fn resource(id: u32, file_stem: &str) -> Resource {
         Resource::new(id, 1, file_stem, 100)
@@ -271,15 +221,10 @@ mod tests {
             ("label_b".to_string(), vec![resource(3, "b_tr_1"), resource(4, "b_tr_2")]),
             ("label_c".to_string(), vec![resource(5, "c_tr_1"), resource(6, "c_tr_2")]),
         ];
-        let valid = vec![
-            ("label_a".to_string(), vec![resource(11, "a_vl_1")]),
-            ("label_b".to_string(), vec![resource(12, "b_vl_1")]),
-            ("label_c".to_string(), vec![resource(13, "c_vl_1")]),
-        ];
+        let valid = vec![("label_a".to_string(), vec![resource(11, "a_vl_1")]), ("label_b".to_string(), vec![resource(12, "b_vl_1")]), ("label_c".to_string(), vec![resource(13, "c_vl_1")])];
 
         let mut rng = StdRng::seed_from_u64(42);
         let (labels_train_and_valid_sets, labels_others_train_valid_resources) = build_resource_maps_with_rng(train.clone(), valid.clone(), &mut rng);
-
 
         assert_eq!(labels_train_and_valid_sets.get("label_a").expect("missing label_a").0, train[0].1);
         assert_eq!(labels_train_and_valid_sets.get("label_a").expect("missing label_a").1, valid[0].1);
@@ -291,22 +236,12 @@ mod tests {
         assert_eq!(labels_train_and_valid_sets.get("label_c").expect("missing label_c").1, valid[2].1);
 
         for (label, (label_train, label_valid)) in &labels_train_and_valid_sets {
-
-
             let (others_train, others_valid) = labels_others_train_valid_resources.get(label).expect("missing others");
 
             debug!("test_build_resource_maps: label={label} \nlabel_train={label_train:?} \nlabel_valid={label_valid:?} \nothers_train={others_train:?} \nothers_valid={others_valid:?}");
 
-            let other_train_pool = labels_train_and_valid_sets
-                .iter()
-                .filter(|(other_label, _)| *other_label != label)
-                .flat_map(|(_, (train_resources, _))| train_resources.iter().cloned())
-                .collect::<HashSet<_>>();
-            let other_valid_pool = labels_train_and_valid_sets
-                .iter()
-                .filter(|(other_label, _)| *other_label != label)
-                .flat_map(|(_, (_, valid_resources))| valid_resources.iter().cloned())
-                .collect::<HashSet<_>>();
+            let other_train_pool = labels_train_and_valid_sets.iter().filter(|(other_label, _)| *other_label != label).flat_map(|(_, (train_resources, _))| train_resources.iter().cloned()).collect::<HashSet<_>>();
+            let other_valid_pool = labels_train_and_valid_sets.iter().filter(|(other_label, _)| *other_label != label).flat_map(|(_, (_, valid_resources))| valid_resources.iter().cloned()).collect::<HashSet<_>>();
 
             let label_train_set = label_train.iter().cloned().collect::<HashSet<_>>();
             let label_valid_set = label_valid.iter().cloned().collect::<HashSet<_>>();
@@ -326,12 +261,8 @@ mod tests {
 
     #[test]
     fn test_build_resource_maps_single_label() {
-        let train = vec![
-            ("label_a".to_string(), vec![resource(1, "a_tr_1"), resource(2, "a_tr_2")]),
-        ];
-        let valid = vec![
-            ("label_a".to_string(), vec![resource(11, "a_vl_1")]),
-        ];
+        let train = vec![("label_a".to_string(), vec![resource(1, "a_tr_1"), resource(2, "a_tr_2")])];
+        let valid = vec![("label_a".to_string(), vec![resource(11, "a_vl_1")])];
 
         let mut rng = StdRng::seed_from_u64(42);
         let (labels_train_and_valid_sets, labels_others_train_valid_resources) = build_resource_maps_with_rng(train.clone(), valid.clone(), &mut rng);
@@ -340,9 +271,7 @@ mod tests {
         debug!("test_build_resource_maps: labels_train_and_valid_sets={labels_train_and_valid_sets:?} labels_others_train_valid_resources={labels_others_train_valid_resources:?}");
         assert!(train.is_empty());
         assert!(valid.is_empty());
-
     }
-
 }
 
 #[cfg(test)]

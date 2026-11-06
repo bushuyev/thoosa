@@ -13,14 +13,9 @@ use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::{ThoError, panic_to_err};
 
-
 #[allow(dead_code)]
 pub fn z_normalized_euclidean(t_0: &Tensor, t_1: &Tensor, dim: i64) -> anyhow::Result<Tensor> {
-    Ok(z_norm(t_0, 1)?
-        .f_sub(&z_norm(t_1, 1)?)?
-        .f_pow_tensor_scalar(2)?
-        .f_sum_dim_intlist(dim, true, Kind::Float)?
-        .f_pow_tensor_scalar(0.5)?)
+    Ok(z_norm(t_0, 1)?.f_sub(&z_norm(t_1, 1)?)?.f_pow_tensor_scalar(2)?.f_sum_dim_intlist(dim, true, Kind::Float)?.f_pow_tensor_scalar(0.5)?)
 }
 
 pub fn dist_d2(slice_0: &Tensor, slice_1: &Tensor) -> anyhow::Result<Tensor> {
@@ -58,8 +53,8 @@ pub enum MaskMaker<'a> {
         v: Tensor,
     }, //channels x thresholds
     LocalMin {
-        dim: i64,//TODO do in both dims
-        radius: u64
+        dim: i64, //TODO do in both dims
+        radius: u64,
     },
 }
 
@@ -68,21 +63,11 @@ impl<'a> MaskMaker<'a> {
         debug!("make_mask: prev_mask={prev_mask:?} dists={dists:?} self={self:?}");
 
         match self {
-            MaskMaker::LeQuantile { q, with_mask } => Self::apply_prev(
-                &prev_mask,
-                quantile_mask(
-                    *q as f64,
-                    dists,
-                    if *with_mask { prev_mask.as_ref() } else { None },
-                )?,
-            ),
+            MaskMaker::LeQuantile { q, with_mask } => Self::apply_prev(&prev_mask, quantile_mask(*q as f64, dists, if *with_mask { prev_mask.as_ref() } else { None })?),
             MaskMaker::Diagonal => {
                 let has_prev = prev_mask.is_some();
                 if log_enabled!(Trace) && has_prev {
-                    trace!(
-                        "MaskMaker::make_mask Diagonal: perv_mask={}",
-                        prev_mask.as_ref().map(|v| v.shallow_clone()).unwrap()
-                    );
+                    trace!("MaskMaker::make_mask Diagonal: perv_mask={}", prev_mask.as_ref().map(|v| v.shallow_clone()).unwrap());
                 }
 
                 let prev = match prev_mask {
@@ -113,25 +98,9 @@ impl<'a> MaskMaker<'a> {
                 Self::apply_prev(&prev_mask, le)
             }
             MaskMaker::Gt { v } => Self::apply_prev(&prev_mask, dists.f_gt_tensor(v)?),
-            MaskMaker::LocalMin { dim, radius } => {
-                Self::apply_prev(&prev_mask, local_min_mask_suppressed(&dists, *dim, *radius as i64)?)
-            },
-            MaskMaker::LeAccumulatedMean {
-                k,
-                avg,
-                total_samples,
-            } => Self::apply_prev(
-                &prev_mask,
-                accumulating_mean_mask(*k as f64, dists, prev_mask.as_ref(), *avg, total_samples)?,
-            ),
-            MaskMaker::LeAccumulatedQuantile {
-                q,
-                quantiles,
-                total_samples,
-            } => Self::apply_prev(
-                &prev_mask,
-                accumulating_quantile_mask(*q as f64, dists, prev_mask.as_ref(), *quantiles, total_samples)?,
-            ),
+            MaskMaker::LocalMin { dim, radius } => Self::apply_prev(&prev_mask, local_min_mask_suppressed(&dists, *dim, *radius as i64)?),
+            MaskMaker::LeAccumulatedMean { k, avg, total_samples } => Self::apply_prev(&prev_mask, accumulating_mean_mask(*k as f64, dists, prev_mask.as_ref(), *avg, total_samples)?),
+            MaskMaker::LeAccumulatedQuantile { q, quantiles, total_samples } => Self::apply_prev(&prev_mask, accumulating_quantile_mask(*q as f64, dists, prev_mask.as_ref(), *quantiles, total_samples)?),
         }
     }
 
@@ -154,7 +123,7 @@ impl<'a> MaskMaker<'a> {
     t_0, t_1 - channels x slices x slice_len
 */
 /// returns bool mask and, if with_distances is true, distances
-#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="clc_d2_similarity"))]
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "clc_d2_similarity"))]
 pub fn clc_d2_similarity(t_0: &Tensor, t_1: &Tensor, similarity_metric: SimilarityMetric) -> anyhow::Result<Tensor> {
     match similarity_metric {
         SimilarityMetric::EucDist(config) => {
@@ -171,10 +140,10 @@ pub fn clc_d2_similarity(t_0: &Tensor, t_1: &Tensor, similarity_metric: Similari
             debug!("clc_d2_similarity: t_0={t_0:?} t_1={t_1:?}");
 
             for slice in 0..t_0.size()[1] {
-                debug_plot!(&t_0.i((0..1, slice, ..)), "rfft_input_t_0", plot_repeats=t_0.size()[1] as u64)?;
+                debug_plot!(&t_0.i((0..1, slice, ..)), "rfft_input_t_0", plot_repeats = t_0.size()[1] as u64)?;
             }
             for slice in 0..t_1.size()[1] {
-                debug_plot!(&t_1.i((0..1, slice, ..)), "rfft_input_t_1", plot_repeats=t_1.size()[1] as u64)?;
+                debug_plot!(&t_1.i((0..1, slice, ..)), "rfft_input_t_1", plot_repeats = t_1.size()[1] as u64)?;
             }
 
             let (t_0, t_1) = if with_rfft {
@@ -183,7 +152,7 @@ pub fn clc_d2_similarity(t_0: &Tensor, t_1: &Tensor, similarity_metric: Similari
 
                 debug!("clc_d2_similarity: freqs_t_0={freqs_t_0:?} freqs_t_0={freqs_t_0:?}");
 
-                (&z_norm(&freqs_t_0, 2)?, &z_norm(&freqs_t_1, 2)?)//TODO when dim param in z_norm_2 was not used the dim value was hardcoded to 1
+                (&z_norm(&freqs_t_0, 2)?, &z_norm(&freqs_t_1, 2)?) //TODO when dim param in z_norm_2 was not used the dim value was hardcoded to 1
             } else {
                 (t_0, t_1)
             };
@@ -191,10 +160,10 @@ pub fn clc_d2_similarity(t_0: &Tensor, t_1: &Tensor, similarity_metric: Similari
             debug!("clc_d2_similarity: t_0={t_0:?} t_1={t_1:?} /z_norm_2");
 
             for slice in 0..t_0.size()[1] {
-                debug_plot!(&t_0.i((0..1, slice, ..)), "rfft_input_t_0_rfft", plot_repeats=t_0.size()[1] as u64)?;
+                debug_plot!(&t_0.i((0..1, slice, ..)), "rfft_input_t_0_rfft", plot_repeats = t_0.size()[1] as u64)?;
             }
             for slice in 0..t_1.size()[1] {
-                debug_plot!(&t_1.i((0..1, slice, ..)), "rfft_input_t_1_rfft", plot_repeats=t_1.size()[1] as u64)?;
+                debug_plot!(&t_1.i((0..1, slice, ..)), "rfft_input_t_1_rfft", plot_repeats = t_1.size()[1] as u64)?;
             }
 
             let dp = t_0.f_matmul(&t_1.f_transpose(1, 2)?)?.f_neg()?;
@@ -202,62 +171,52 @@ pub fn clc_d2_similarity(t_0: &Tensor, t_1: &Tensor, similarity_metric: Similari
             debug!("clc_d2_similarity: t_0={t_0:?} t_1={t_1:?} rfft, dp=\n{dp}");
 
             Ok(dp)
-        },
+        }
     }
 }
 
-pub static TRIGGER_RESET_IN_CLC_D2_SIMILARITY_AND_MASK:&'static str = "TRIGGER_RESET_IN_CLC_D2_SIMILARITY_AND_MASK.thoosa";
+pub static TRIGGER_RESET_IN_CLC_D2_SIMILARITY_AND_MASK: &'static str = "TRIGGER_RESET_IN_CLC_D2_SIMILARITY_AND_MASK.thoosa";
 
-#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="distance::clc_d2_similarity_and_mask"))]
-pub fn clc_d2_similarity_and_mask(
-    t_0: &Tensor,
-    t_1: &Tensor,
-    similarity_metric: SimilarityMetric,
-    with_distances: bool,
-    mask_makers: &mut [MaskMaker],
-) -> anyhow::Result<(Tensor, Option<Tensor>)> {
-
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "distance::clc_d2_similarity_and_mask"))]
+pub fn clc_d2_similarity_and_mask(t_0: &Tensor, t_1: &Tensor, similarity_metric: SimilarityMetric, with_distances: bool, mask_makers: &mut [MaskMaker]) -> anyhow::Result<(Tensor, Option<Tensor>)> {
     #[cfg(feature = "test-restart-hooks")]
     {
         use log::info;
         use thoosa_shared::test_utils::{is_flag_set, set_flag};
 
-        static CALL_COUNTER:parking_lot::Mutex<u64> = parking_lot::Mutex::new(0);
+        static CALL_COUNTER: parking_lot::Mutex<u64> = parking_lot::Mutex::new(0);
         let mut guard = CALL_COUNTER.lock();
-        *guard +=1;
+        *guard += 1;
 
         if *guard == 10 && !is_flag_set(TRIGGER_RESET_IN_CLC_D2_SIMILARITY_AND_MASK)? {
             set_flag(TRIGGER_RESET_IN_CLC_D2_SIMILARITY_AND_MASK)?;
 
             info!("clc_d2_similarity_and_mask: trigger restart");
 
-            return Err(anyhow::anyhow!("device-side assert triggered"))
+            return Err(anyhow::anyhow!("device-side assert triggered"));
         }
     }
 
     let device = t_0.device();
 
     if t_0.size()[1] < 2 {
-        return Err(anyhow::anyhow!(format!(
-            "not enough slices in dimension 0 to calculate distances and mask: t_0.size={:?} t_1.size={:?}",
-            t_0.size(),
-            t_1.size()
-        )));
+        return Err(anyhow::anyhow!(format!("not enough slices in dimension 0 to calculate distances and mask: t_0.size={:?} t_1.size={:?}", t_0.size(), t_1.size())));
     }
     if t_1.size()[1] < 2 {
-        return Err(anyhow::anyhow!(format!(
-            "not enough slices in dimension 1 to calculate distances and mask: t_0.size={:?} t_1.size={:?}",
-            t_0.size(),
-            t_1.size()
-        )));
+        return Err(anyhow::anyhow!(format!("not enough slices in dimension 1 to calculate distances and mask: t_0.size={:?} t_1.size={:?}", t_0.size(), t_1.size())));
     }
-
 
     let distances = clc_d2_similarity(t_0, t_1, similarity_metric)?;
 
-    debug!("clc_d2_similarity_and_mask: similarity_metric={similarity_metric:?} t_0.size={:?}, t_0.device={:?}, t_1.size={:?}, t_1.device={:?}",t_0.size(),t_0.device(),t_1.size(),t_1.device());
-    debug!("clc_d2_similarity_and_mask: mask_makers={mask_makers:?} distances size={:?}",distances.size());
-    trace!("clc_d2_similarity_and_mask: distances=\n{distances} device={:?}",distances.device());
+    debug!(
+        "clc_d2_similarity_and_mask: similarity_metric={similarity_metric:?} t_0.size={:?}, t_0.device={:?}, t_1.size={:?}, t_1.device={:?}",
+        t_0.size(),
+        t_0.device(),
+        t_1.size(),
+        t_1.device()
+    );
+    debug!("clc_d2_similarity_and_mask: mask_makers={mask_makers:?} distances size={:?}", distances.size());
+    trace!("clc_d2_similarity_and_mask: distances=\n{distances} device={:?}", distances.device());
 
     let mut mask_opt: Option<Tensor> = None;
     for maker in mask_makers.iter_mut() {
@@ -272,14 +231,7 @@ pub fn clc_d2_similarity_and_mask(
         None => Tensor::f_ones(distances.size(), (Bool, device))?,
     };
 
-    Ok((
-        mask,
-        if with_distances {
-            Some(distances)
-        } else {
-            None
-        },
-    ))
+    Ok((mask, if with_distances { Some(distances) } else { None }))
 }
 
 /// distances - [channels x slices 0 x slices 1]
@@ -307,33 +259,20 @@ fn quantile_mask(q: f64, distances: &Tensor, pre_mask: Option<&Tensor>) -> anyho
         let mut quantiles = Vec::with_capacity((distances_size[0] * distances_size[2]) as usize);
         for channel in 0..distances_size[0] {
             for slice_1 in 0..distances_size[2] {
-                let slice_1_t = distances.f_i((channel, .., slice_1))?.f_masked_select(&pm.f_i((
-                    channel,
-                    ..,
-                    slice_1,
-                ))?)?;
+                let slice_1_t = distances.f_i((channel, .., slice_1))?.f_masked_select(&pm.f_i((channel, .., slice_1))?)?;
                 let q_t = slice_1_t.f_quantile_scalar(q, 0, true, "lower")?;
-                trace!(
-                    "quantile_mask: channel={channel} slice_1={slice_1} slice_1_t=\n{slice_1_t} q_t={q_t}"
-                );
+                trace!("quantile_mask: channel={channel} slice_1={slice_1} slice_1_t=\n{slice_1_t} q_t={q_t}");
                 quantiles.push(q_t);
             }
         }
         Tensor::f_stack(quantiles.as_slice(), 0)?.f_view((distances_size[0], 1, distances_size[2]))?
     } else {
-        distances
-            .f_transpose(1, 2)?
-            .f_quantile_scalar(q, 2, true, "lower")?
-            .f_transpose(1, 2)?
+        distances.f_transpose(1, 2)?.f_quantile_scalar(q, 2, true, "lower")?.f_transpose(1, 2)?
     };
 
     // let q_t = distances.quantile_scalar(q, 2, true, "lower");
     trace!("quantile_mask: full. q_t=\n{q_t}");
-    debug!(
-        "quantile_mask: samples.size={:?} q_t.size={:?}",
-        distances.size(),
-        q_t.size()
-    );
+    debug!("quantile_mask: samples.size={:?} q_t.size={:?}", distances.size(), q_t.size());
 
     let le = distances.f_le_tensor(&q_t)?; //channels x motifs x num_slices
 
@@ -350,15 +289,11 @@ fn local_min_mask(distances: &Tensor, dim: i64) -> anyhow::Result<Tensor> {
     trace!("local_min_mask: distances=\n{distances}");
     let distances_size = distances.size();
 
-    let first_min = distances
-        .f_narrow(dim, 0, 1)?
-        .f_lt_tensor(&distances.f_narrow(dim, 1, 1)?)?;
+    let first_min = distances.f_narrow(dim, 0, 1)?.f_lt_tensor(&distances.f_narrow(dim, 1, 1)?)?;
 
     trace!("local_min_mask: first_min=\n{first_min}");
 
-    let last_min = distances
-        .f_narrow(dim, distances_size[dim as usize] - 1, 1)?
-        .f_lt_tensor(&distances.f_narrow(dim, distances_size[dim as usize] - 2, 1)?)?;
+    let last_min = distances.f_narrow(dim, distances_size[dim as usize] - 1, 1)?.f_lt_tensor(&distances.f_narrow(dim, distances_size[dim as usize] - 2, 1)?)?;
 
     trace!("local_min_mask: last_min=\n{first_min}");
 
@@ -385,7 +320,6 @@ fn local_min_mask(distances: &Tensor, dim: i64) -> anyhow::Result<Tensor> {
     Ok(full_mask)
 }
 
-
 fn window_min_2d_last_dims(x_bhw: &Tensor, radius0: i64, radius1: i64) -> anyhow::Result<Tensor> {
     if radius0 <= 0 && radius1 <= 0 {
         return Ok(x_bhw.shallow_clone());
@@ -398,15 +332,11 @@ fn window_min_2d_last_dims(x_bhw: &Tensor, radius0: i64, radius1: i64) -> anyhow
     let x4 = x_bhw.f_unsqueeze(1)?;
 
     // minpool(x) = -maxpool(-x)
-    let win_min4 = x4
-        .f_neg()?
-        .f_max_pool2d(&[k0, k1], &[1, 1], &[radius0, radius1], &[1, 1], false)?
-        .f_neg()?;
+    let win_min4 = x4.f_neg()?.f_max_pool2d(&[k0, k1], &[1, 1], &[radius0, radius1], &[1, 1], false)?.f_neg()?;
 
     // [B, 1, H, W] -> [B, H, W]
     Ok(win_min4.f_squeeze_dim(1)?)
 }
-
 
 #[inline]
 fn kind_size_bytes(kind: Kind) -> usize {
@@ -420,13 +350,7 @@ fn kind_size_bytes(kind: Kind) -> usize {
 }
 
 #[inline]
-fn choose_b_chunk(
-    b: i64,
-    h: i64,
-    w: i64,
-    distances_kind: Kind,
-    idx_kind: Kind,
-) -> i64 {
+fn choose_b_chunk(b: i64, h: i64, w: i64, distances_kind: Kind, idx_kind: Kind) -> i64 {
     // Rough per-element live memory inside one chunk:
     //   win_min      : distances dtype
     //   regional     : bool
@@ -437,9 +361,7 @@ fn choose_b_chunk(
     //   keep_chunk   : bool
     //
     // x_chunk and idx_expand are views, output is allocated once outside the loop.
-    let per_elem = kind_size_bytes(distances_kind)
-        + kind_size_bytes(idx_kind) * 2
-        + 4; // ~4 bool/intermediate bytes
+    let per_elem = kind_size_bytes(distances_kind) + kind_size_bytes(idx_kind) * 2 + 4; // ~4 bool/intermediate bytes
 
     // Aim to keep chunk intermediates around ~128 MiB.
     let target_bytes: usize = 128 * 1024 * 1024;
@@ -454,18 +376,10 @@ fn choose_b_chunk(
 ///   [y-radius0 .. y+radius0] x [x-radius1 .. x+radius1]
 ///
 /// Tie-break: lexicographically smallest (dim0 first, then dim1).
-#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="local_min_mask_suppressed_2d_pool"))]
-pub fn local_min_mask_suppressed_2d_pool(
-    distances: &Tensor,
-    dim0: i64,
-    dim1: i64,
-    radius0: i64,
-    radius1: i64,
-) -> anyhow::Result<Tensor> {
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "local_min_mask_suppressed_2d_pool"))]
+pub fn local_min_mask_suppressed_2d_pool(distances: &Tensor, dim0: i64, dim1: i64, radius0: i64, radius1: i64) -> anyhow::Result<Tensor> {
     if radius0 < 0 || radius1 < 0 {
-        return Err(anyhow::anyhow!(format!(
-            "local_min_mask_suppressed_2d_pool: negative radius radius0={radius0} radius1={radius1}"
-        )));
+        return Err(anyhow::anyhow!(format!("local_min_mask_suppressed_2d_pool: negative radius radius0={radius0} radius1={radius1}")));
     }
 
     let sizes = distances.size();
@@ -475,15 +389,11 @@ pub fn local_min_mask_suppressed_2d_pool(
     let dim1 = if dim1 < 0 { dim1 + ndim } else { dim1 };
 
     if dim0 < 0 || dim0 >= ndim || dim1 < 0 || dim1 >= ndim || dim0 == dim1 {
-        return Err(anyhow::anyhow!(format!(
-            "local_min_mask_suppressed_2d_pool: invalid dims dim0={dim0} dim1={dim1} ndim={ndim}"
-        )));
+        return Err(anyhow::anyhow!(format!("local_min_mask_suppressed_2d_pool: invalid dims dim0={dim0} dim1={dim1} ndim={ndim}")));
     }
 
     // Move the two suppressed dims to the end: [*, H, W]
-    let mut perm: Vec<i64> = (0..ndim)
-        .filter(|&d| d != dim0 && d != dim1)
-        .collect();
+    let mut perm: Vec<i64> = (0..ndim).filter(|&d| d != dim0 && d != dim1).collect();
     perm.push(dim0);
     perm.push(dim1);
 
@@ -498,14 +408,8 @@ pub fn local_min_mask_suppressed_2d_pool(
     let x_bhw = x_perm.f_reshape([b, h, w])?;
 
     // Use Float for lexicographic indices when exactly representable, otherwise Double.
-    let hw = h
-        .checked_mul(w)
-        .ok_or_else(|| anyhow::anyhow!("local_min_mask_suppressed_2d_pool: h*w overflow"))?;
-    let idx_kind = if hw <= 16_777_216 {
-        Kind::Float
-    } else {
-        Kind::Double
-    };
+    let hw = h.checked_mul(w).ok_or_else(|| anyhow::anyhow!("local_min_mask_suppressed_2d_pool: h*w overflow"))?;
+    let idx_kind = if hw <= 16_777_216 { Kind::Float } else { Kind::Double };
 
     // Base lexicographic index [1, H, W]; expand per chunk as a view.
     let idx_hw = panic_to_err!(Tensor::f_arange(hw, (idx_kind, x_bhw.device()))?.f_reshape([1, h, w]))?;
@@ -543,9 +447,7 @@ pub fn local_min_mask_suppressed_2d_pool(
             regional.f_logical_and(&is_first_regional)?
         };
 
-        keep_bhw
-            .f_narrow(0, start, len)?
-            .f_copy_(&keep_chunk)?;
+        keep_bhw.f_narrow(0, start, len)?.f_copy_(&keep_chunk)?;
 
         start += len;
     }
@@ -564,27 +466,12 @@ pub fn local_min_mask_suppressed_2d_pool(
 /// Keep only "well-separated" local minima:
 /// a point must be a local minimum AND the minimum in its ±radius neighborhood.
 fn local_min_mask_suppressed(distances: &Tensor, dim: i64, radius: i64) -> anyhow::Result<Tensor> {
-
-    if radius <= 0 {
-        local_min_mask(distances, dim)
-    } else {
-        local_min_mask_suppressed_2d_pool(
-            distances,
-            1,2,
-            radius,radius
-        )
-    }
+    if radius <= 0 { local_min_mask(distances, dim) } else { local_min_mask_suppressed_2d_pool(distances, 1, 2, radius, radius) }
 }
 
 /// distances - [channels x slices 0 x slices 1]
 /// calculates accumulated means between distances
-fn accumulating_mean_mask(
-    k: f64,
-    distances: &Tensor,
-    pre_mask: Option<&Tensor>,
-    means_acc: &Mutex<Tensor>,
-    total_samples: &Mutex<Tensor>,
-) -> anyhow::Result<Tensor> {
+fn accumulating_mean_mask(k: f64, distances: &Tensor, pre_mask: Option<&Tensor>, means_acc: &Mutex<Tensor>, total_samples: &Mutex<Tensor>) -> anyhow::Result<Tensor> {
     let distances_size = distances.size();
 
     debug!("mean_mask: k={k} distances={distances:?} pre_mask={pre_mask:?} means_acc={means_acc:?} total_samples={total_samples:?}");
@@ -595,43 +482,29 @@ fn accumulating_mean_mask(
         let mut counts = Vec::with_capacity(distances_size[1] as usize);
 
         for channel in 0..distances_size[0] {
-            let channel_dists_t =
-                distances
-                    .f_i((channel, .., ..))?
-                    .f_masked_select(&pm.f_i((channel, .., ..))?)?;
+            let channel_dists_t = distances.f_i((channel, .., ..))?.f_masked_select(&pm.f_i((channel, .., ..))?)?;
             let mean = channel_dists_t.f_mean(Kind::Float)?;
             trace!("mean_mask: channel={channel} channel_dists_t=\n{channel_dists_t} mean={mean}");
             means.push(mean);
             counts.push(channel_dists_t.size()[0])
         }
-        (
-            Tensor::f_stack(means.as_slice(), 0)?.f_view((distances_size[0], 1))?,
-            Tensor::f_from_slice(counts.as_slice())?
-                .f_to_device(distances.device())?
-                .f_view((distances_size[0], 1))?,
-        )
+        (Tensor::f_stack(means.as_slice(), 0)?.f_view((distances_size[0], 1))?, Tensor::f_from_slice(counts.as_slice())?.f_to_device(distances.device())?.f_view((distances_size[0], 1))?)
     } else {
         (
             distances.f_mean_dim(&[1i64, 2i64][..], false, Kind::Float)?,
-
-            Tensor::f_from_slice(&[distances_size[1] * distances_size[2]])?
-                .f_to_device(distances.device())?
-                .f_broadcast_to(distances_size[0])?, //  Tensor of size [channels x 1] with values= distances[1] * distances[2] in each channel
+            Tensor::f_from_slice(&[distances_size[1] * distances_size[2]])?.f_to_device(distances.device())?.f_broadcast_to(distances_size[0])?, //  Tensor of size [channels x 1] with values= distances[1] * distances[2] in each channel
         )
     };
 
     trace!("mean_mask: full. mean_t=\n{mean_t}");
 
-    debug!("mean_mask: samples.size={:?} mean_t.size={:?}",distances.size(),mean_t.size());
+    debug!("mean_mask: samples.size={:?} mean_t.size={:?}", distances.size(), mean_t.size());
 
     debug!("mean_mask: total_samples={total_samples:?} counts={counts_t:?}");
-    debug!("mean_mask: total_samples.device={:?} counts.device={:?}",total_samples.lock().device(),counts_t.device());
+    debug!("mean_mask: total_samples.device={:?} counts.device={:?}", total_samples.lock().device(), counts_t.device());
 
     //TODO remove or use cuda_copier
-    let (mean_t, counts_t) = (
-        mean_t.f_to_device(distances.device())?,
-        counts_t.f_to_device(distances.device())?,
-    );
+    let (mean_t, counts_t) = (mean_t.f_to_device(distances.device())?, counts_t.f_to_device(distances.device())?);
 
     //TODO update means_acc
     // total_means = (total_means * total_samples + current_means * batch_size_i)
@@ -644,10 +517,9 @@ fn accumulating_mean_mask(
     let mut total_samples_guard = total_samples.lock();
     debug!("new_total_means: 1. total_samples_guard=\n{total_samples_guard} ");
 
+    let count_t_added = counts_t.f_add(&total_samples_guard)?;
 
-    let count_t_added =  counts_t.f_add(&total_samples_guard)?;
-
-    debug!("new_total_means: 1. count_t_added=\n{count_t_added} device={:?} thread name={:?}",count_t_added.device(),std::thread::current().name());
+    debug!("new_total_means: 1. count_t_added=\n{count_t_added} device={:?} thread name={:?}", count_t_added.device(), std::thread::current().name());
 
     let weighted = means_guard.f_multiply(&total_samples_guard)?;
     let mean_scaled = mean_t.f_multiply(&counts_t)?;
@@ -665,12 +537,11 @@ fn accumulating_mean_mask(
     let tensor_1 = tensor_0.f_view((-1, 1, 1))?;
     debug!("new_total_means: tensor_1=\n{tensor_1}");
 
-    let tensor_2 =  tensor_1.f_broadcast_to(distances_size)?;
+    let tensor_2 = tensor_1.f_broadcast_to(distances_size)?;
     trace!("new_total_means: tensor_2=\n{tensor_2}");
-    debug!("new_total_means: distances.dev={:?} tensor_1.device={:?}",distances.device(),tensor_1.device());
+    debug!("new_total_means: distances.dev={:?} tensor_1.device={:?}", distances.device(), tensor_1.device());
 
-    let le = distances
-        .f_le_tensor(&tensor_2)?; //channels x motifs x num_slices
+    let le = distances.f_le_tensor(&tensor_2)?; //channels x motifs x num_slices
 
     trace!("mean_mask:  le=\n{le}");
 
@@ -679,13 +550,7 @@ fn accumulating_mean_mask(
 
 /// distances - [channels x slices 0 x slices 1]
 /// calculates accumulated quantiles between distances
-fn accumulating_quantile_mask(
-    q: f64,
-    distances: &Tensor,
-    pre_mask: Option<&Tensor>,
-    quantiles_acc: &Mutex<Tensor>,
-    total_samples: &Mutex<Tensor>,
-) -> anyhow::Result<Tensor> {
+fn accumulating_quantile_mask(q: f64, distances: &Tensor, pre_mask: Option<&Tensor>, quantiles_acc: &Mutex<Tensor>, total_samples: &Mutex<Tensor>) -> anyhow::Result<Tensor> {
     let distances_size = distances.size();
     let q = q.clamp(0.0, 1.0);
 
@@ -698,10 +563,7 @@ fn accumulating_quantile_mask(
         let mut counts = Vec::with_capacity(distances_size[0] as usize);
 
         for channel in 0..distances_size[0] {
-            let channel_dists_t =
-                distances
-                    .f_i((channel, .., ..))?
-                    .f_masked_select(&pm.f_i((channel, .., ..))?)?;
+            let channel_dists_t = distances.f_i((channel, .., ..))?.f_masked_select(&pm.f_i((channel, .., ..))?)?;
             if channel_dists_t.numel() == 0 {
                 let prev_quantile = prev_quantiles.f_i((channel, 0))?.f_view([1])?;
                 trace!("running_quantile_mask: channel={channel} has no samples, reusing prev_quantile={prev_quantile}");
@@ -714,19 +576,11 @@ fn accumulating_quantile_mask(
             quantiles.push(quantile);
             counts.push(channel_dists_t.size()[0])
         }
-        (
-            Tensor::f_stack(quantiles.as_slice(), 0)?.f_view((distances_size[0], 1))?,
-            Tensor::f_from_slice(counts.as_slice())?
-                .f_to_device(distances.device())?
-                .f_view((distances_size[0], 1))?,
-        )
+        (Tensor::f_stack(quantiles.as_slice(), 0)?.f_view((distances_size[0], 1))?, Tensor::f_from_slice(counts.as_slice())?.f_to_device(distances.device())?.f_view((distances_size[0], 1))?)
     } else {
         (
             distances.f_view((distances_size[0], -1))?.f_quantile_scalar(q, 1, true, "lower")?,
-            Tensor::f_from_slice(&[distances_size[1] * distances_size[2]])?
-                .f_to_device(distances.device())?
-                .f_view((1, 1))?
-                .f_broadcast_to([distances_size[0], 1])?,
+            Tensor::f_from_slice(&[distances_size[1] * distances_size[2]])?.f_to_device(distances.device())?.f_view((1, 1))?.f_broadcast_to([distances_size[0], 1])?,
         )
     };
 
@@ -735,10 +589,7 @@ fn accumulating_quantile_mask(
     debug!("running_quantile_mask: total_samples={total_samples:?} counts={counts_t:?}");
     debug!("running_quantile_mask: total_samples.device={:?} counts.device={:?}", total_samples.lock().device(), counts_t.device());
 
-    let (quantile_t, counts_t) = (
-        quantile_t.f_to_device(distances.device())?,
-        counts_t.f_to_device(distances.device())?,
-    );
+    let (quantile_t, counts_t) = (quantile_t.f_to_device(distances.device())?, counts_t.f_to_device(distances.device())?);
 
     let mut quantiles_guard = quantiles_acc.lock();
     debug!("running_quantile_mask: 0. quantiles_guard=\n{quantiles_guard}");
@@ -761,8 +612,7 @@ fn accumulating_quantile_mask(
     trace!("running_quantile_mask: quantiles_threshold=\n{quantiles_threshold}");
     debug!("running_quantile_mask: distances.dev={:?} quantiles_threshold.device={:?}", distances.device(), quantiles_threshold.device());
 
-    let le = distances
-        .f_le_tensor(&quantiles_threshold)?;
+    let le = distances.f_le_tensor(&quantiles_threshold)?;
 
     trace!("running_quantile_mask: le=\n{le}");
 
@@ -773,13 +623,7 @@ pub fn clc_dist_d2(t_0: Tensor, t_1: Tensor, dim: i64) -> anyhow::Result<Tensor>
     let t_0 = t_0.f_unsqueeze(dim + 1)?; // channels x num_slices x 1 x slice_len
     let t_1 = t_1.f_unsqueeze(dim)?; // channels x 1 x num_slices x slice_len
 
-    debug!(
-        "clc_dist_d2: t_0.size()={:?} t_0.mem={:?}  t_1.size()={:?} t_1.mem={:?}",
-        t_0.size(),
-        tensor_mem_size(&t_0),
-        t_1.size(),
-        tensor_mem_size(&t_1)
-    );
+    debug!("clc_dist_d2: t_0.size()={:?} t_0.mem={:?}  t_1.size()={:?} t_1.mem={:?}", t_0.size(), tensor_mem_size(&t_0), t_1.size(), tensor_mem_size(&t_1));
 
     let mut diff = t_0.f_subtract(&t_1)?;
     drop(t_0);
@@ -795,15 +639,9 @@ pub fn clc_dist_d2(t_0: Tensor, t_1: Tensor, dim: i64) -> anyhow::Result<Tensor>
 }
 
 pub fn slice_t(t_0: &Tensor, step: u32, window: u32) -> Tensor {
-    debug!(
-        "slice_t:  t_0.size()={:?} step={step} window={window}",
-        t_0.size()
-    );
+    debug!("slice_t:  t_0.size()={:?} step={step} window={window}", t_0.size());
 
-    let tensors_vec = (0..=t_0.size()[1] - window as i64)
-        .step_by(step as usize)
-        .map(|i| t_0.i((.., i..i + window as i64)))
-        .collect::<Vec<Tensor>>();
+    let tensors_vec = (0..=t_0.size()[1] - window as i64).step_by(step as usize).map(|i| t_0.i((.., i..i + window as i64))).collect::<Vec<Tensor>>();
     trace!("slice_t: tensors_vec={tensors_vec:?}");
     Tensor::stack(&tensors_vec, 0)
 }
@@ -813,9 +651,7 @@ pub fn average_euclidean_distance(t: &Tensor) -> anyhow::Result<f32> {
     debug!("average_euclidean_distance: n={n}");
 
     // Step 2: Compute squared norms of each vector
-    let squared_norms = t
-        .f_pow_tensor_scalar(2)?
-        .f_sum_dim_intlist(1, true, Kind::Float)?;
+    let squared_norms = t.f_pow_tensor_scalar(2)?.f_sum_dim_intlist(1, true, Kind::Float)?;
 
     // Step 3: Compute squared distances matrix D
     let squared_norms_sum = squared_norms.f_add(&squared_norms.f_transpose(0, 1)?)?;
@@ -835,10 +671,7 @@ pub fn average_euclidean_distance(t: &Tensor) -> anyhow::Result<f32> {
     let i = triu_indices.f_get(0)?;
     let j = triu_indices.f_get(1)?;
 
-    let pairwise_squared_dists = dists_squared
-        .f_index_select(0, &i)?
-        .f_gather(1, &j.f_unsqueeze(1)?, false)?
-        .f_squeeze()?;
+    let pairwise_squared_dists = dists_squared.f_index_select(0, &i)?.f_gather(1, &j.f_unsqueeze(1)?, false)?.f_squeeze()?;
     drop(dists_squared);
     drop(i);
     drop(j);
@@ -862,22 +695,17 @@ pub fn average_euclidean_distance(t: &Tensor) -> anyhow::Result<f32> {
 mod distance_tests {
     use super::{DotProductConfig, EucDistConfig, PearsonCorrConfig, SimilarityMetric};
     use crate::distance::MaskMaker::{Diagonal, Le, LeAccumulatedMean, LeAccumulatedQuantile, LeQuantile, LocalMin, Tril};
-    use crate::distance::{
-        accumulating_mean_mask, average_euclidean_distance, clc_d2_similarity_and_mask, clc_dist_d2, local_min_mask,
-        local_min_mask_suppressed, slice_t, z_normalized_euclidean,
-    };
+    use crate::distance::{accumulating_mean_mask, average_euclidean_distance, clc_d2_similarity_and_mask, clc_dist_d2, local_min_mask, local_min_mask_suppressed, slice_t, z_normalized_euclidean};
     use log::{debug, trace};
     use parking_lot::Mutex;
     use std::f32::consts::PI;
     use std::ops::Deref;
     use tch::Device::Cpu;
+    use tch::IndexOp;
     use tch::Kind::{Bool, Float, Int, Int64};
     use tch::Tensor;
     use tch::kind::{FLOAT_CPU, INT64_CPU};
-    use tch::IndexOp;
-    use thoosa_common::utils::{
-        lin_t, z_norm_dims,
-    };
+    use thoosa_common::utils::{lin_t, z_norm_dims};
 
     #[ctor::ctor]
     fn init() {
@@ -887,14 +715,8 @@ mod distance_tests {
     #[test]
     fn test_z_normalized_euclidean() -> anyhow::Result<()> {
         let d = z_normalized_euclidean(
-            &Tensor::vstack(&[
-                Tensor::from_slice(&[1., 0., 1., 0., 1.]),
-                Tensor::from_slice(&[10., 0., 10., 0., 10.]),
-            ]),
-            &Tensor::vstack(&[
-                Tensor::from_slice(&[0., 1., 0., 1., 0.]),
-                Tensor::from_slice(&[0., 10., 0., 10., 0.]),
-            ]),
+            &Tensor::vstack(&[Tensor::from_slice(&[1., 0., 1., 0., 1.]), Tensor::from_slice(&[10., 0., 10., 0., 10.])]),
+            &Tensor::vstack(&[Tensor::from_slice(&[0., 1., 0., 1., 0.]), Tensor::from_slice(&[0., 10., 0., 10., 0.])]),
             1,
         )?;
 
@@ -933,15 +755,11 @@ mod distance_tests {
     fn test_single_channel() {
         // 1 channel, 2 slices, length 2
         // t0 slices: [0,0], [1,1]
-        let t0 = Tensor::from_slice(&[0.0f32, 0.0, 1.0, 1.0])
-            .totype(Float)
-            .view([1, 2, 2]); // [channels=1, num_slices=2, slice_len=2]
+        let t0 = Tensor::from_slice(&[0.0f32, 0.0, 1.0, 1.0]).totype(Float).view([1, 2, 2]); // [channels=1, num_slices=2, slice_len=2]
         let t1 = t0.shallow_clone();
 
         let dist = clc_dist_d2(t0, t1, 1).unwrap();
-        let expected = Tensor::from_slice(&[0.0f32, (2.0f32).sqrt(), (2.0f32).sqrt(), 0.0])
-            .totype(Float)
-            .view([1, 2, 2]);
+        let expected = Tensor::from_slice(&[0.0f32, (2.0f32).sqrt(), (2.0f32).sqrt(), 0.0]).totype(Float).view([1, 2, 2]);
 
         assert!(dist.allclose(&expected, 1e-6, 1e-6, false));
     }
@@ -976,9 +794,7 @@ mod distance_tests {
         // channel 0: [0], [1]
         // channel 1: [2], [5]
         // channel 2: [10], [13]
-        let t0 = Tensor::from_slice(&[0.0, 1.0, 2.0, 5.0, 10.0, 13.0])
-            .totype(Float)
-            .view([3, 2, 1]); // [channels=3, num_slices=2, slice_len=1]
+        let t0 = Tensor::from_slice(&[0.0, 1.0, 2.0, 5.0, 10.0, 13.0]).totype(Float).view([3, 2, 1]); // [channels=3, num_slices=2, slice_len=1]
         let t1 = t0.shallow_clone();
         let dist = clc_dist_d2(t0, t1, 1).unwrap();
 
@@ -1033,63 +849,29 @@ mod distance_tests {
         // [1,0] vs [0,1] => sqrt((1-0)^2 + (0-1)^2) = sqrt(2)
         // [1,0] vs [1,1] => sqrt((1-1)^2 + (0-1)^2) = 1
         // [1,0] vs [2,3] => sqrt((1-2)^2 + (0-3)^2) = sqrt(10)
-        let expected = Tensor::from_slice(&[
-            1.0,
-            (2.0f32).sqrt(),
-            (13.0f32).sqrt(),
-            (2.0f32).sqrt(),
-            1.0,
-            (10.0f32).sqrt(),
-        ])
-        .view([1, 2, 3]);
+        let expected = Tensor::from_slice(&[1.0, (2.0f32).sqrt(), (13.0f32).sqrt(), (2.0f32).sqrt(), 1.0, (10.0f32).sqrt()]).view([1, 2, 3]);
 
         assert!(dist.allclose(&expected, 1e-6, 1e-6, false));
     }
 
     #[test]
     fn test_dist_d2_with_mask_q_05() {
-        let slice_0 = Tensor::from_slice(&[30., 30., 0., 0., 40., 40.])
-            .totype(Float)
-            .view((1, 3, 2));
-        let slice_1 = Tensor::from_slice(&[7., 8., 8., 9., 9., 10.])
-            .totype(Float)
-            .view((1, 3, 2));
+        let slice_0 = Tensor::from_slice(&[30., 30., 0., 0., 40., 40.]).totype(Float).view((1, 3, 2));
+        let slice_1 = Tensor::from_slice(&[7., 8., 8., 9., 9., 10.]).totype(Float).view((1, 3, 2));
         debug!("slice_0={slice_0}");
         debug!("slice_1={slice_1}");
 
         // let dist_t = super::dist_d2(&slice_0, &slice_1).unwrap();
-        let (mask, Some(dist_t)) = super::clc_d2_similarity_and_mask(
-            &slice_0,
-            &slice_1,
-            SimilarityMetric::EucDist(EucDistConfig { z_normalize: false }),
-            true,
-            &mut [LeQuantile {
-                q: 0.2,
-                with_mask: false,
-            }],
-        )
-        .unwrap() else {
+        let (mask, Some(dist_t)) = super::clc_d2_similarity_and_mask(&slice_0, &slice_1, SimilarityMetric::EucDist(EucDistConfig { z_normalize: false }), true, &mut [LeQuantile { q: 0.2, with_mask: false }]).unwrap() else {
             panic!("no dists");
         };
         // debug!("mask={mask}");
         debug!("dist_t={dist_t}");
         let expected_dists = Tensor::stack(
             &[
-                Tensor::from_slice(&[
-                    _dist_2(&[30., 30.], &[7., 8.]),
-                    _dist_2(&[30., 30.], &[8., 9.]),
-                    _dist_2(&[30., 30.], &[9., 10.]),
-                ]),
-                Tensor::from_slice(&[
-                    _dist_2(&[0., 0.], &[7., 8.]),
-                    _dist_2(&[0., 0.], &[8., 9.]),
-                    _dist_2(&[0., 0.], &[9., 10.]),
-                ]),
-                Tensor::from_slice(&[
-                    _dist_2(&[40., 40.], &[7., 8.]),
-                    _dist_2(&[40., 40.], &[8., 9.]),
-                    _dist_2(&[40., 40.], &[9., 10.]),
-                ]),
+                Tensor::from_slice(&[_dist_2(&[30., 30.], &[7., 8.]), _dist_2(&[30., 30.], &[8., 9.]), _dist_2(&[30., 30.], &[9., 10.])]),
+                Tensor::from_slice(&[_dist_2(&[0., 0.], &[7., 8.]), _dist_2(&[0., 0.], &[8., 9.]), _dist_2(&[0., 0.], &[9., 10.])]),
+                Tensor::from_slice(&[_dist_2(&[40., 40.], &[7., 8.]), _dist_2(&[40., 40.], &[8., 9.]), _dist_2(&[40., 40.], &[9., 10.])]),
             ],
             0,
         )
@@ -1099,11 +881,7 @@ mod distance_tests {
 
         debug!("mask=\n{mask}");
 
-        assert_eq!(
-            Tensor::from_slice(&[false, false, false, true, true, true, false, false, false])
-                .view((1, 3, 3)),
-            mask
-        );
+        assert_eq!(Tensor::from_slice(&[false, false, false, true, true, true, false, false, false]).view((1, 3, 3)), mask);
     }
 
     #[test]
@@ -1119,40 +897,18 @@ mod distance_tests {
         debug!("slice_1={slice_1}");
 
         // let dist_t = super::dist_d2(&slice_0, &slice_1).unwrap();
-        let (mask, Some(dist_t)) =
-            super::clc_d2_similarity_and_mask(&slice_0, &slice_1, SimilarityMetric::EucDist(EucDistConfig { z_normalize: false }), true, &mut [LocalMin { dim: 1, radius: 0 }]).unwrap()
-        else {
+        let (mask, Some(dist_t)) = super::clc_d2_similarity_and_mask(&slice_0, &slice_1, SimilarityMetric::EucDist(EucDistConfig { z_normalize: false }), true, &mut [LocalMin { dim: 1, radius: 0 }]).unwrap() else {
             panic!("no dists");
         };
         // debug!("mask={mask}");
         debug!("dist_t=\n{dist_t}");
         let expected_dists = Tensor::stack(
             &[
-                Tensor::from_slice(&[
-                    _dist_2(&[7., 8.], &[0., 0.]),
-                    _dist_2(&[7., 8.], &[1., 1.]),
-                    _dist_2(&[7., 8.], &[2., 2.]),
-                ]),
-                Tensor::from_slice(&[
-                    _dist_2(&[7., 8.], &[0., 0.]),
-                    _dist_2(&[7., 8.], &[1., 1.]),
-                    _dist_2(&[7., 8.], &[2., 2.]),
-                ]),
-                Tensor::from_slice(&[
-                    _dist_2(&[4., 5.], &[0., 0.]),
-                    _dist_2(&[4., 5.], &[1., 1.]),
-                    _dist_2(&[4., 5.], &[2., 2.]),
-                ]),
-                Tensor::from_slice(&[
-                    _dist_2(&[5., 6.], &[0., 0.]),
-                    _dist_2(&[5., 6.], &[1., 1.]),
-                    _dist_2(&[5., 6.], &[2., 2.]),
-                ]),
-                Tensor::from_slice(&[
-                    _dist_2(&[5., 6.], &[0., 0.]),
-                    _dist_2(&[5., 6.], &[1., 1.]),
-                    _dist_2(&[5., 6.], &[2., 2.]),
-                ]),
+                Tensor::from_slice(&[_dist_2(&[7., 8.], &[0., 0.]), _dist_2(&[7., 8.], &[1., 1.]), _dist_2(&[7., 8.], &[2., 2.])]),
+                Tensor::from_slice(&[_dist_2(&[7., 8.], &[0., 0.]), _dist_2(&[7., 8.], &[1., 1.]), _dist_2(&[7., 8.], &[2., 2.])]),
+                Tensor::from_slice(&[_dist_2(&[4., 5.], &[0., 0.]), _dist_2(&[4., 5.], &[1., 1.]), _dist_2(&[4., 5.], &[2., 2.])]),
+                Tensor::from_slice(&[_dist_2(&[5., 6.], &[0., 0.]), _dist_2(&[5., 6.], &[1., 1.]), _dist_2(&[5., 6.], &[2., 2.])]),
+                Tensor::from_slice(&[_dist_2(&[5., 6.], &[0., 0.]), _dist_2(&[5., 6.], &[1., 1.]), _dist_2(&[5., 6.], &[2., 2.])]),
             ],
             0,
         )
@@ -1187,30 +943,13 @@ mod distance_tests {
 
         // let dist_t = super::dist_d2(&slice_0, &slice_1).unwrap();
         //set_max_level(Trace);
-        let (mask, Some(_dist_t)) = clc_d2_similarity_and_mask(
-            &slice_0,
-            &slice_1,
-            SimilarityMetric::EucDist(EucDistConfig { z_normalize: false }),
-            true,
-            &mut [
-                LeQuantile {
-                    q: 1.0,
-                    with_mask: false,
-                },
-                Diagonal,
-            ],
-        )
-        .unwrap() else {
+        let (mask, Some(_dist_t)) = clc_d2_similarity_and_mask(&slice_0, &slice_1, SimilarityMetric::EucDist(EucDistConfig { z_normalize: false }), true, &mut [LeQuantile { q: 1.0, with_mask: false }, Diagonal]).unwrap() else {
             panic!("no dists");
         };
         debug!("mask={mask}");
         // debug!("dist_t={dist_t}");
 
-        assert_eq!(
-            Tensor::from_slice(&[false, true, true, true, false, true, true, true, false])
-                .view((1, 3, 3)),
-            mask
-        );
+        assert_eq!(Tensor::from_slice(&[false, true, true, true, false, true, true, true, false]).view((1, 3, 3)), mask);
         //
         // assert_eq!(5.0, dist_t.double_value(&[0,0,0]));
         // assert_eq!(5.0, dist_t.double_value(&[0,1,1]));
@@ -1219,22 +958,10 @@ mod distance_tests {
 
     #[test]
     fn test_clc_d2_similarity_and_mask_pearson_route() -> anyhow::Result<()> {
-        let t_0 = Tensor::from_slice(&[
-            1.0f32, 2.0, 3.0,
-            2.0, 3.0, 4.0,
-        ]).view((1, 2, 3));
-        let t_1 = Tensor::from_slice(&[
-            3.0f32, 2.0, 1.0,
-            2.0, 4.0, 6.0,
-        ]).view((1, 2, 3));
+        let t_0 = Tensor::from_slice(&[1.0f32, 2.0, 3.0, 2.0, 3.0, 4.0]).view((1, 2, 3));
+        let t_1 = Tensor::from_slice(&[3.0f32, 2.0, 1.0, 2.0, 4.0, 6.0]).view((1, 2, 3));
 
-        let (mask, Some(distances)) = clc_d2_similarity_and_mask(
-            &t_0,
-            &t_1,
-            SimilarityMetric::PearsonCorr(PearsonCorrConfig::default()),
-            true,
-            &mut [],
-        )? else {
+        let (mask, Some(distances)) = clc_d2_similarity_and_mask(&t_0, &t_1, SimilarityMetric::PearsonCorr(PearsonCorrConfig::default()), true, &mut [])? else {
             panic!("no distances");
         };
 
@@ -1246,22 +973,10 @@ mod distance_tests {
 
     #[test]
     fn test_clc_d2_similarity_and_mask_dot_product_route() -> anyhow::Result<()> {
-        let t_0 = Tensor::from_slice(&[
-            1.0f32, 2.0,
-            3.0, 4.0,
-        ]).view((1, 2, 2));
-        let t_1 = Tensor::from_slice(&[
-            5.0f32, 6.0,
-            7.0, 8.0,
-        ]).view((1, 2, 2));
+        let t_0 = Tensor::from_slice(&[1.0f32, 2.0, 3.0, 4.0]).view((1, 2, 2));
+        let t_1 = Tensor::from_slice(&[5.0f32, 6.0, 7.0, 8.0]).view((1, 2, 2));
 
-        let (_, Some(distances)) = clc_d2_similarity_and_mask(
-            &t_0,
-            &t_1,
-            SimilarityMetric::DotProduct(DotProductConfig::default()),
-            true,
-            &mut [],
-        )? else {
+        let (_, Some(distances)) = clc_d2_similarity_and_mask(&t_0, &t_1, SimilarityMetric::DotProduct(DotProductConfig::default()), true, &mut [])? else {
             panic!("no distances");
         };
 
@@ -1272,31 +987,14 @@ mod distance_tests {
 
     #[test]
     fn test_clc_d2_similarity_and_mask_z_normalized_euclidean_route() -> anyhow::Result<()> {
-        let t_0 = Tensor::from_slice(&[
-            1.0f32, 3.0, 5.0,
-            2.0, 4.0, 6.0,
-        ]).view((1, 2, 3));
-        let t_1 = Tensor::from_slice(&[
-            10.0f32, 30.0, 50.0,
-            3.0, 2.0, 1.0,
-        ]).view((1, 2, 3));
+        let t_0 = Tensor::from_slice(&[1.0f32, 3.0, 5.0, 2.0, 4.0, 6.0]).view((1, 2, 3));
+        let t_1 = Tensor::from_slice(&[10.0f32, 30.0, 50.0, 3.0, 2.0, 1.0]).view((1, 2, 3));
 
-        let (_, Some(distances)) = clc_d2_similarity_and_mask(
-            &t_0,
-            &t_1,
-            SimilarityMetric::EucDist(EucDistConfig { z_normalize: true }),
-            true,
-            &mut [],
-        )? else {
+        let (_, Some(distances)) = clc_d2_similarity_and_mask(&t_0, &t_1, SimilarityMetric::EucDist(EucDistConfig { z_normalize: true }), true, &mut [])? else {
             panic!("no distances");
         };
 
-        let expected = Tensor::f_cdist(
-            &z_norm_dims(&t_0, &[2], 1e-8)?,
-            &z_norm_dims(&t_1, &[2], 1e-8)?,
-            2.0,
-            0,
-        )?;
+        let expected = Tensor::f_cdist(&z_norm_dims(&t_0, &[2], 1e-8)?, &z_norm_dims(&t_1, &[2], 1e-8)?, 2.0, 0)?;
         assert!(distances.allclose(&expected, 1e-6, 1e-6, false));
         Ok(())
     }
@@ -1305,47 +1003,29 @@ mod distance_tests {
     fn test_dist_le_mask() {
         //5 motifs 7 slices
         let dists_t = Tensor::from_slice(&[
-            0.00, 0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.10, 0.11, 0.12, 0.13, 0.14, 0.15, 0.16,
-            0.20, 0.21, 0.22, 0.23, 0.24, 0.25, 0.26, 0.30, 0.31, 0.32, 0.33, 0.34, 0.35, 0.36,
-            0.40, 0.41, 0.42, 0.43, 0.44, 0.45, 0.46, 1.00, 1.01, 1.02, 1.03, 1.04, 1.05, 1.06,
-            1.10, 1.11, 1.12, 1.13, 1.14, 1.15, 1.16, 1.20, 1.21, 1.22, 1.23, 1.24, 1.25, 1.26,
-            1.30, 1.31, 1.32, 1.33, 1.34, 1.35, 1.36, 1.40, 1.41, 1.42, 1.43, 1.44, 1.45, 1.46,
-            2.00, 2.01, 2.02, 2.03, 2.04, 2.05, 2.06, 2.10, 2.11, 2.12, 2.13, 2.14, 2.15, 2.16,
-            2.20, 2.21, 2.22, 2.23, 2.24, 2.25, 2.26, 2.30, 2.31, 2.32, 2.33, 2.34, 2.35, 2.36,
-            2.40, 2.41, 2.42, 2.43, 2.44, 2.45, 2.46,
+            0.00, 0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.10, 0.11, 0.12, 0.13, 0.14, 0.15, 0.16, 0.20, 0.21, 0.22, 0.23, 0.24, 0.25, 0.26, 0.30, 0.31, 0.32, 0.33, 0.34, 0.35, 0.36, 0.40, 0.41, 0.42, 0.43, 0.44, 0.45, 0.46, 1.00, 1.01, 1.02, 1.03, 1.04, 1.05, 1.06, 1.10, 1.11, 1.12, 1.13, 1.14, 1.15,
+            1.16, 1.20, 1.21, 1.22, 1.23, 1.24, 1.25, 1.26, 1.30, 1.31, 1.32, 1.33, 1.34, 1.35, 1.36, 1.40, 1.41, 1.42, 1.43, 1.44, 1.45, 1.46, 2.00, 2.01, 2.02, 2.03, 2.04, 2.05, 2.06, 2.10, 2.11, 2.12, 2.13, 2.14, 2.15, 2.16, 2.20, 2.21, 2.22, 2.23, 2.24, 2.25, 2.26, 2.30, 2.31, 2.32, 2.33, 2.34,
+            2.35, 2.36, 2.40, 2.41, 2.42, 2.43, 2.44, 2.45, 2.46,
         ])
         .view((3, 5, 7));
 
         debug!("dists_t=\n{dists_t}");
 
-        let thresholds_t = Tensor::from_slice(&[
-            0.01, 0.11, 0.21, 0.31, 0.41, 1.01, 1.11, 1.21, 1.31, 1.41, 2.01, 2.11, 2.21, 2.31,
-            2.41,
-        ])
-        .view((3, 5));
+        let thresholds_t = Tensor::from_slice(&[0.01, 0.11, 0.21, 0.31, 0.41, 1.01, 1.11, 1.21, 1.31, 1.41, 2.01, 2.11, 2.21, 2.31, 2.41]).view((3, 5));
 
         let thresholds_t_broadcasted = thresholds_t.unsqueeze(2).broadcast_to(&[3, 5, 7]);
 
         debug!("thresholds_t_broadcasted=\n{thresholds_t_broadcasted}");
 
-        let mask = Le {
-            v: &thresholds_t_broadcasted,
-        }
-        .make_mask(None, &dists_t).unwrap();
+        let mask = Le { v: &thresholds_t_broadcasted }.make_mask(None, &dists_t).unwrap();
 
         debug!("mask=\n{mask}");
 
         assert_eq!(
             Tensor::from_slice(&[
-                true, true, false, false, false, false, false, true, true, false, false, false,
-                false, false, true, true, false, false, false, false, false, true, true, false,
-                false, false, false, false, true, true, false, false, false, false, false, true,
-                true, false, false, false, false, false, true, true, false, false, false, false,
-                false, true, true, false, false, false, false, false, true, true, false, false,
-                false, false, false, true, true, false, false, false, false, false, true, true,
-                false, false, false, false, false, true, true, false, false, false, false, false,
-                true, true, false, false, false, false, false, true, true, false, false, false,
-                false, false, true, true, false, false, false, false, false
+                true, true, false, false, false, false, false, true, true, false, false, false, false, false, true, true, false, false, false, false, false, true, true, false, false, false, false, false, true, true, false, false, false, false, false, true, true, false, false, false, false, false,
+                true, true, false, false, false, false, false, true, true, false, false, false, false, false, true, true, false, false, false, false, false, true, true, false, false, false, false, false, true, true, false, false, false, false, false, true, true, false, false, false, false, false,
+                true, true, false, false, false, false, false, true, true, false, false, false, false, false, true, true, false, false, false, false, false
             ])
             .view((3, 5, 7)),
             mask
@@ -1364,20 +1044,15 @@ mod distance_tests {
             avg: &mut means,
             total_samples: &mut Mutex::new(Tensor::zeros([3], INT64_CPU)),
         }
-        .make_mask(None, &dists_t).unwrap();
+        .make_mask(None, &dists_t)
+        .unwrap();
 
         debug!("mask=\n{mask}");
         assert_eq!(
             Tensor::from_slice(&[
-                true, true, true, false, false, true, true, true, false, false, true, true, true,
-                false, false, true, true, true, false, false, true, true, false, false, false,
-                true, true, false, false, false, true, true, false, false, false, true, true, true,
-                false, false, true, true, true, false, false, true, true, true, false, false, true,
-                true, true, false, false, true, true, false, false, false, true, true, false,
-                false, false, true, true, false, false, false, true, true, true, false, false,
-                true, true, true, false, false, true, true, true, false, false, true, true, true,
-                false, false, true, true, false, false, false, true, true, false, false, false,
-                true, true, false, false, false
+                true, true, true, false, false, true, true, true, false, false, true, true, true, false, false, true, true, true, false, false, true, true, false, false, false, true, true, false, false, false, true, true, false, false, false, true, true, true, false, false, true, true, true, false,
+                false, true, true, true, false, false, true, true, true, false, false, true, true, false, false, false, true, true, false, false, false, true, true, false, false, false, true, true, true, false, false, true, true, true, false, false, true, true, true, false, false, true, true, true,
+                false, false, true, true, false, false, false, true, true, false, false, false, true, true, false, false, false
             ])
             .view((3, 7, 5)),
             mask
@@ -1407,7 +1082,8 @@ mod distance_tests {
             avg: &mut means,
             total_samples: &mut total_samples,
         }
-        .make_mask(None, &dists_t_1).unwrap();
+        .make_mask(None, &dists_t_1)
+        .unwrap();
 
         debug!("mask=\n{mask}");
         //
@@ -1446,12 +1122,8 @@ mod distance_tests {
     fn test_running_quantile_mask_two_chunks() {
         const CHANNELS: i64 = 1;
 
-        let dists_t_0 = Tensor::from_slice(&[
-            1.0, 2.0, 3.0, 4.0, 5.0, 6.0,
-        ]).view((CHANNELS, 3, 2));
-        let dists_t_1 = Tensor::from_slice(&[
-            7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
-        ]).view((CHANNELS, 3, 2));
+        let dists_t_0 = Tensor::from_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).view((CHANNELS, 3, 2));
+        let dists_t_1 = Tensor::from_slice(&[7.0, 8.0, 9.0, 10.0, 11.0, 12.0]).view((CHANNELS, 3, 2));
 
         let mut quantiles_acc = Mutex::new(Tensor::zeros([CHANNELS, 1], FLOAT_CPU));
         let mut total_samples = Mutex::new(Tensor::zeros([CHANNELS, 1], INT64_CPU));
@@ -1461,32 +1133,22 @@ mod distance_tests {
             quantiles: &mut quantiles_acc,
             total_samples: &mut total_samples,
         }
-        .make_mask(None, &dists_t_0).unwrap();
+        .make_mask(None, &dists_t_0)
+        .unwrap();
 
         let mask = LeAccumulatedQuantile {
             q: 0.5,
             quantiles: &mut quantiles_acc,
             total_samples: &mut total_samples,
         }
-        .make_mask(None, &dists_t_1).unwrap();
+        .make_mask(None, &dists_t_1)
+        .unwrap();
 
-        assert_eq!(
-            Tensor::from_slice(&[
-                false, false, false,
-                false, false, false,
-            ]).view((CHANNELS, 3, 2)),
-            mask
-        );
+        assert_eq!(Tensor::from_slice(&[false, false, false, false, false, false,]).view((CHANNELS, 3, 2)), mask);
 
-        assert_eq!(
-            &Tensor::from_slice(&[6.0]).view((CHANNELS, 1)).totype(Float),
-            quantiles_acc.lock().deref()
-        );
+        assert_eq!(&Tensor::from_slice(&[6.0]).view((CHANNELS, 1)).totype(Float), quantiles_acc.lock().deref());
 
-        assert_eq!(
-            &Tensor::from_slice(&[12]).view((CHANNELS, 1)).totype(Int64),
-            total_samples.lock().deref()
-        );
+        assert_eq!(&Tensor::from_slice(&[12]).view((CHANNELS, 1)).totype(Int64), total_samples.lock().deref());
     }
 
     #[test]
@@ -1508,24 +1170,14 @@ mod distance_tests {
             None,
             &mut means_acc,
             &mut total_samples,
-        ).unwrap();
+        )
+        .unwrap();
 
-        assert_eq!(
-            Tensor::from_slice(&[false, false, false, false, false, false,])
-                .view((1, 3, 2))
-                .totype(Bool),
-            mask
-        );
+        assert_eq!(Tensor::from_slice(&[false, false, false, false, false, false,]).view((1, 3, 2)).totype(Bool), mask);
 
-        assert_eq!(
-            &Tensor::from_slice(&[0.2]).view((1, -1)).totype(Float),
-            means_acc.lock().deref()
-        );
+        assert_eq!(&Tensor::from_slice(&[0.2]).view((1, -1)).totype(Float), means_acc.lock().deref());
 
-        assert_eq!(
-            &Tensor::from_slice(&[6]).view((1, -1)).totype(Int64),
-            total_samples.lock().deref()
-        );
+        assert_eq!(&Tensor::from_slice(&[6]).view((1, -1)).totype(Int64), total_samples.lock().deref());
 
         let mask = accumulating_mean_mask(
             0.5,
@@ -1537,24 +1189,14 @@ mod distance_tests {
             None,
             &mut means_acc,
             &mut total_samples,
-        ).unwrap();
+        )
+        .unwrap();
 
-        assert_eq!(
-            Tensor::from_slice(&[false, false, false, false, false, false,])
-                .view((1, 3, 2))
-                .totype(Bool),
-            mask
-        );
+        assert_eq!(Tensor::from_slice(&[false, false, false, false, false, false,]).view((1, 3, 2)).totype(Bool), mask);
 
-        assert_eq!(
-            &Tensor::from_slice(&[0.3]).view((1, -1)).totype(Float),
-            means_acc.lock().deref()
-        );
+        assert_eq!(&Tensor::from_slice(&[0.3]).view((1, -1)).totype(Float), means_acc.lock().deref());
 
-        assert_eq!(
-            &Tensor::from_slice(&[12]).view((1, -1)).totype(Int64),
-            total_samples.lock().deref()
-        );
+        assert_eq!(&Tensor::from_slice(&[12]).view((1, -1)).totype(Int64), total_samples.lock().deref());
 
         let mask = accumulating_mean_mask(
             0.5,
@@ -1566,28 +1208,22 @@ mod distance_tests {
             None,
             &mut means_acc,
             &mut total_samples,
-        ).unwrap();
+        )
+        .unwrap();
 
         assert_eq!(
             Tensor::from_slice(&[
-                false, false, false,//0.2 > 0.25 * 0.5
-                true, true, true,   //0.1 < 0.25 * 0.5
+                false, false, false, //0.2 > 0.25 * 0.5
+                true, true, true, //0.1 < 0.25 * 0.5
             ])
             .view((1, 3, 2))
             .totype(Bool),
             mask
         );
 
-        assert_eq!(
-            &Tensor::from_slice(&[0.25]).view((1, -1)).totype(Float),
-            means_acc.lock().deref()
-        );
+        assert_eq!(&Tensor::from_slice(&[0.25]).view((1, -1)).totype(Float), means_acc.lock().deref());
 
-        assert_eq!(
-            &Tensor::from_slice(&[18]).view((1, -1)).totype(Int64),
-            total_samples.lock().deref()
-        );
-
+        assert_eq!(&Tensor::from_slice(&[18]).view((1, -1)).totype(Int64), total_samples.lock().deref());
 
         let mask = accumulating_mean_mask(
             0.0,
@@ -1595,21 +1231,14 @@ mod distance_tests {
                 // distances 3x2 slices
                 0.2, 0.2, 0.2, 0.1, 0.1, 0.1,
             ])
-                .view((CHANNELS, 3, 2)),
+            .view((CHANNELS, 3, 2)),
             None,
             &mut means_acc,
             &mut total_samples,
-        ).unwrap();
+        )
+        .unwrap();
 
-        assert_eq!(
-            Tensor::from_slice(&[
-                false, false, false,
-                false, false, false,
-            ])
-                .view((1, 3, 2))
-                .totype(Bool),
-            mask
-        );
+        assert_eq!(Tensor::from_slice(&[false, false, false, false, false, false,]).view((1, 3, 2)).totype(Bool), mask);
         debug!("mask=\n{mask}");
     }
 
@@ -1629,13 +1258,7 @@ mod distance_tests {
 
         debug!("mask=\n{mask}");
 
-        assert_eq!(
-            Tensor::from_slice(&[
-                false, true, true, false, false, false, true, true, false, false
-            ])
-            .view((1, 5, 2)),
-            mask
-        );
+        assert_eq!(Tensor::from_slice(&[false, true, true, false, false, false, true, true, false, false]).view((1, 5, 2)), mask);
     }
 
     #[test]
@@ -1644,10 +1267,7 @@ mod distance_tests {
 
         let mask = local_min_mask_suppressed(&distances, 1, 2).unwrap();
 
-        assert_eq!(
-            Tensor::from_slice(&[false, false, false, true, false]).view((1, 5, 1)),
-            mask
-        );
+        assert_eq!(Tensor::from_slice(&[false, false, false, true, false]).view((1, 5, 1)), mask);
     }
 
     // #[test]TODO
@@ -1657,26 +1277,16 @@ mod distance_tests {
 
         let dists_t = tensor_3_7_5_lin();
 
-        let mask = LeQuantile {
-            q: 0.5,
-            with_mask: false,
-        }
-        .make_mask(None, &dists_t).unwrap();
+        let mask = LeQuantile { q: 0.5, with_mask: false }.make_mask(None, &dists_t).unwrap();
 
         debug!("mask=\n{mask}");
 
         //means [0.2300, 1.2300, 2.2300]
         assert_eq!(
             Tensor::from_slice(&[
-                true, true, true, true, true, true, true, true, true, true, true, true, true, true,
-                true, true, true, true, true, true, false, false, false, false, false, false,
-                false, false, false, false, false, false, false, false, false, true, true, true,
-                true, true, true, true, true, true, true, true, true, true, true, true, true, true,
-                true, true, true, false, false, false, false, false, false, false, false, false,
-                false, false, false, false, false, false, true, true, true, true, true, true, true,
-                true, true, true, true, true, true, true, true, true, true, true, true, true,
-                false, false, false, false, false, false, false, false, false, false, false, false,
-                false, false, false
+                true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true, true, true, true, true, true, true, true, true,
+                true, true, true, true, true, true, true, true, true, true, true, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true,
+                true, true, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false
             ])
             .view((3, 7, 5)),
             mask
@@ -1689,41 +1299,27 @@ mod distance_tests {
 
         let dists_t = tensor_3_7_5_lin();
 
-        let mask = LeQuantile {
-            q: 0.5,
-            with_mask: true,
-        }
-        .make_mask(
-            Some(
-                Tensor::from_slice(&[
-                    true, true, true, true, true, true, true, true, true, true, true, true, true,
-                    true, true, true, true, true, true, true, true, true, true, true, true, true,
-                    true, true, true, true, true, true, true, true, true, true, true, true, true,
-                    true, true, true, true, true, true, true, true, true, true, true, true, true,
-                    true, true, true, true, true, true, true, true, true, true, true, true, true,
-                    true, true, true, true, true, true, true, true, true, true, true, true, true,
-                    true, true, true, true, true, true, true, true, true, true, true, true, true,
-                    true, true, true, true, true, true, true, true, true, true, true, true, true,
-                    true,
-                ])
-                .view((3, 7, 5)),
-            ),
-            &dists_t,
-        ).unwrap();
+        let mask = LeQuantile { q: 0.5, with_mask: true }
+            .make_mask(
+                Some(
+                    Tensor::from_slice(&[
+                        true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true,
+                        true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true,
+                        true, true, true, true, true, true, true, true, true, true, true, true, true,
+                    ])
+                    .view((3, 7, 5)),
+                ),
+                &dists_t,
+            )
+            .unwrap();
 
         debug!("mask=\n{mask}");
 
         assert_eq!(
             Tensor::from_slice(&[
-                true, true, true, true, true, true, true, true, true, true, true, true, true, true,
-                true, true, true, true, true, true, false, false, false, false, false, false,
-                false, false, false, false, false, false, false, false, false, true, true, true,
-                true, true, true, true, true, true, true, true, true, true, true, true, true, true,
-                true, true, true, false, false, false, false, false, false, false, false, false,
-                false, false, false, false, false, false, true, true, true, true, true, true, true,
-                true, true, true, true, true, true, true, true, true, true, true, true, true,
-                false, false, false, false, false, false, false, false, false, false, false, false,
-                false, false, false
+                true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true, true, true, true, true, true, true, true, true,
+                true, true, true, true, true, true, true, true, true, true, true, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true,
+                true, true, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false
             ])
             .view((3, 7, 5)),
             mask
@@ -1736,41 +1332,27 @@ mod distance_tests {
 
         let dists_t = tensor_3_7_5_lin();
 
-        let mask = LeQuantile {
-            q: 0.5,
-            with_mask: true,
-        }
-        .make_mask(
-            Some(
-                Tensor::from_slice(&[
-                    false, false, false, false, false, true, true, true, true, true, true, true,
-                    true, true, true, true, true, true, true, true, true, true, true, true, true,
-                    true, true, true, true, true, true, true, true, true, true, false, false,
-                    false, false, false, true, true, true, true, true, true, true, true, true,
-                    true, true, true, true, true, true, true, true, true, true, true, true, true,
-                    true, true, true, true, true, true, true, true, false, false, false, false,
-                    false, true, true, true, true, true, true, true, true, true, true, true, true,
-                    true, true, true, true, true, true, true, true, true, true, true, true, true,
-                    true, true, true, true, true,
-                ])
-                .view((3, 7, 5)),
-            ),
-            &dists_t,
-        ).unwrap();
+        let mask = LeQuantile { q: 0.5, with_mask: true }
+            .make_mask(
+                Some(
+                    Tensor::from_slice(&[
+                        false, false, false, false, false, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, false, false, false, false, false, true, true, true, true,
+                        true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, false, false, false, false, false, true, true, true, true, true, true, true, true, true, true, true, true, true, true,
+                        true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true,
+                    ])
+                    .view((3, 7, 5)),
+                ),
+                &dists_t,
+            )
+            .unwrap();
 
         debug!("mask=\n{mask}");
 
         assert_eq!(
             Tensor::from_slice(&[
-                false, false, false, false, false, true, true, true, true, true, true, true, true,
-                true, true, true, true, true, true, true, false, false, false, false, false, false,
-                false, false, false, false, false, false, false, false, false, false, false, false,
-                false, false, true, true, true, true, true, true, true, true, true, true, true,
-                true, true, true, true, false, false, false, false, false, false, false, false,
-                false, false, false, false, false, false, false, false, false, false, false, false,
-                true, true, true, true, true, true, true, true, true, true, true, true, true, true,
-                true, false, false, false, false, false, false, false, false, false, false, false,
-                false, false, false, false
+                false, false, false, false, false, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true, true, true,
+                true, true, true, true, true, true, true, true, true, true, true, true, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true, true, true, true, true, true, true, true, true, true, true, true,
+                true, true, true, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false
             ])
             .view((3, 7, 5)),
             mask
@@ -1783,41 +1365,27 @@ mod distance_tests {
 
         let dists_t = tensor_3_7_5_lin();
 
-        let mask = LeQuantile {
-            q: 0.5,
-            with_mask: true,
-        }
-        .make_mask(
-            Some(
-                Tensor::from_slice(&[
-                    true, true, true, true, true, true, true, true, true, true, true, true, true,
-                    true, true, true, true, true, true, true, true, true, true, true, true, true,
-                    true, true, true, true, false, false, false, false, false, true, true, true,
-                    true, true, true, true, true, true, true, true, true, true, true, true, true,
-                    true, true, true, true, true, true, true, true, true, true, true, true, true,
-                    true, false, false, false, false, false, true, true, true, true, true, true,
-                    true, true, true, true, true, true, true, true, true, true, true, true, true,
-                    true, true, true, true, true, true, true, true, true, true, true, false, false,
-                    false, false, false,
-                ])
-                .view((3, 7, 5)),
-            ),
-            &dists_t,
-        ).unwrap();
+        let mask = LeQuantile { q: 0.5, with_mask: true }
+            .make_mask(
+                Some(
+                    Tensor::from_slice(&[
+                        true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, false, false, false, false, false, true, true, true, true, true, true, true, true, true, true,
+                        true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, false, false, false, false, false, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true,
+                        true, true, true, true, true, true, true, true, true, true, false, false, false, false, false,
+                    ])
+                    .view((3, 7, 5)),
+                ),
+                &dists_t,
+            )
+            .unwrap();
 
         debug!("mask=\n{mask}");
 
         assert_eq!(
             Tensor::from_slice(&[
-                true, true, true, true, true, true, true, true, true, true, true, true, true, true,
-                true, false, false, false, false, false, false, false, false, false, false, false,
-                false, false, false, false, false, false, false, false, false, true, true, true,
-                true, true, true, true, true, true, true, true, true, true, true, true, false,
-                false, false, false, false, false, false, false, false, false, false, false, false,
-                false, false, false, false, false, false, false, true, true, true, true, true,
-                true, true, true, true, true, true, true, true, true, true, false, false, false,
-                false, false, false, false, false, false, false, false, false, false, false, false,
-                false, false, false, false, false
+                true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true, true, true, true, true, true, true, true, true,
+                true, true, true, true, true, true, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, false, false,
+                false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false
             ])
             .view((3, 7, 5)),
             mask
@@ -1900,11 +1468,7 @@ mod distance_tests {
         ])
         .view((1, 7, 5));
 
-        let mask = LeQuantile {
-            q: 0.5,
-            with_mask: true,
-        }
-        .make_mask(None, &dists_t).unwrap();
+        let mask = LeQuantile { q: 0.5, with_mask: true }.make_mask(None, &dists_t).unwrap();
 
         debug!("mask=\n{mask}");
         //Quantiles (0.5):             (matlab ignores infs)
@@ -1915,9 +1479,7 @@ mod distance_tests {
 
         assert_eq!(
             Tensor::from_slice(&[
-                true, true, true, true, false, true, true, true, true, false, true, true, true,
-                true, false, true, true, true, true, true, false, true, true, false, true, false,
-                false, false, false, true, false, false, false, false, true
+                true, true, true, true, false, true, true, true, true, false, true, true, true, true, false, true, true, true, true, true, false, true, true, false, true, false, false, false, false, true, false, false, false, false, true
             ])
             .view((1, 7, 5)),
             mask
@@ -1977,31 +1539,25 @@ mod distance_tests {
         ])
         .view((1, 9, 5));
 
-        let mask = LeQuantile {
-            q: 0.5,
-            with_mask: true,
-        }
-        .make_mask(
-            Some(
-                Tensor::from_slice(&[
-                    false, false, false, false, false, true, true, true, true, true, true, true,
-                    true, true, true, true, true, true, true, true, true, true, true, true, true,
-                    true, true, true, true, true, true, true, true, true, true, true, true, true,
-                    true, true, false, false, false, false, false,
-                ])
-                .view((1, 9, 5)),
-            ),
-            &dists_t,
-        ).unwrap();
+        let mask = LeQuantile { q: 0.5, with_mask: true }
+            .make_mask(
+                Some(
+                    Tensor::from_slice(&[
+                        false, false, false, false, false, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, false, false, false, false,
+                        false,
+                    ])
+                    .view((1, 9, 5)),
+                ),
+                &dists_t,
+            )
+            .unwrap();
 
         debug!("mask=\n{mask}");
 
         assert_eq!(
             Tensor::from_slice(&[
-                false, false, false, false, false, true, true, true, true, false, true, true, true,
-                true, false, true, true, true, true, false, true, true, true, true, true, false,
-                true, true, false, true, false, false, false, false, true, false, false, false,
-                false, true, false, false, false, false, false
+                false, false, false, false, false, true, true, true, true, false, true, true, true, true, false, true, true, true, true, false, true, true, true, true, true, false, true, true, false, true, false, false, false, false, true, false, false, false, false, true, false, false, false,
+                false, false
             ])
             .view((1, 9, 5)),
             mask
@@ -2014,42 +1570,24 @@ mod distance_tests {
             //slice_1: 0       1       2       3       4
             //slice_0
             /*0*/
-            0.0000, 0.1000, 0.2000, 0.3000, 0.4000, /*1*/ 0.0100, 0.1100, 0.2100, 0.3100,
-            0.4100, /*2*/ 0.0200, 0.1200, 0.2200, 0.3200, 0.4200, /*3*/ 0.0300, 0.1300,
-            0.2300, 0.3300, 0.4300, /*4*/ 0.0400, 0.1400, 0.2400, 0.3400, 0.4400,
-            /*5*/ 0.0500, 0.1500, 0.2500, 0.3500, 0.4500, /*6*/ 0.0600, 0.1600, 0.2600,
-            0.3600, 0.4600, //channel 1
-            1.0000, 1.1000, 1.2000, 1.3000, 1.4000, 1.0100, 1.1100, 1.2100, 1.3100, 1.4100, 1.0200,
-            1.1200, 1.2200, 1.3200, 1.4200, 1.0300, 1.1300, 1.2300, 1.3300, 1.4300, 1.0400, 1.1400,
-            1.2400, 1.3400, 1.4400, 1.0500, 1.1500, 1.2500, 1.3500, 1.4500, 1.0600, 1.1600, 1.2600,
-            1.3600, 1.4600, //channel 2
-            2.0000, 2.1000, 2.2000, 2.3000, 2.4000, 2.0100, 2.1100, 2.2100, 2.3100, 2.4100, 2.0200,
-            2.1200, 2.2200, 2.3200, 2.4200, 2.0300, 2.1300, 2.2300, 2.3300, 2.4300, 2.0400, 2.1400,
-            2.2400, 2.3400, 2.4400, 2.0500, 2.1500, 2.2500, 2.3500, 2.4500, 2.0600, 2.1600, 2.2600,
-            2.3600, 2.4600,
+            0.0000, 0.1000, 0.2000, 0.3000, 0.4000, /*1*/ 0.0100, 0.1100, 0.2100, 0.3100, 0.4100, /*2*/ 0.0200, 0.1200, 0.2200, 0.3200, 0.4200, /*3*/ 0.0300, 0.1300, 0.2300, 0.3300, 0.4300, /*4*/ 0.0400, 0.1400, 0.2400, 0.3400, 0.4400, /*5*/ 0.0500, 0.1500, 0.2500, 0.3500,
+            0.4500, /*6*/ 0.0600, 0.1600, 0.2600, 0.3600, 0.4600, //channel 1
+            1.0000, 1.1000, 1.2000, 1.3000, 1.4000, 1.0100, 1.1100, 1.2100, 1.3100, 1.4100, 1.0200, 1.1200, 1.2200, 1.3200, 1.4200, 1.0300, 1.1300, 1.2300, 1.3300, 1.4300, 1.0400, 1.1400, 1.2400, 1.3400, 1.4400, 1.0500, 1.1500, 1.2500, 1.3500, 1.4500, 1.0600, 1.1600, 1.2600, 1.3600,
+            1.4600, //channel 2
+            2.0000, 2.1000, 2.2000, 2.3000, 2.4000, 2.0100, 2.1100, 2.2100, 2.3100, 2.4100, 2.0200, 2.1200, 2.2200, 2.3200, 2.4200, 2.0300, 2.1300, 2.2300, 2.3300, 2.4300, 2.0400, 2.1400, 2.2400, 2.3400, 2.4400, 2.0500, 2.1500, 2.2500, 2.3500, 2.4500, 2.0600, 2.1600, 2.2600, 2.3600, 2.4600,
         ])
         .view((3, 7, 5))
     }
 
     #[test]
     fn test_q() {
-        let samples =
-            Tensor::from_slice(&[0.0000, 0.0100, 0.0200, 0.0300, 0.0400]).view((1, 1, -1));
+        let samples = Tensor::from_slice(&[0.0000, 0.0100, 0.0200, 0.0300, 0.0400]).view((1, 1, -1));
         let q_t = samples.quantile_scalar(0.5, 2, true, "lower");
 
         debug!("full: q_t=\n{q_t}");
         assert_eq!(q_t.double_value(&[0, 0, 0]), 0.0200);
 
-        let samples = Tensor::from_slice(&[
-            0.0000,
-            0.0100,
-            0.0200,
-            0.0300,
-            0.0400,
-            f64::INFINITY,
-            f64::INFINITY,
-        ])
-        .view((1, 1, -1));
+        let samples = Tensor::from_slice(&[0.0000, 0.0100, 0.0200, 0.0300, 0.0400, f64::INFINITY, f64::INFINITY]).view((1, 1, -1));
 
         let q_t = samples.quantile_scalar(0.5, 2, true, "lower");
 
@@ -2064,8 +1602,7 @@ mod distance_tests {
 
         for (i_0, x_0) in x.windows(2).enumerate() {
             for (i_1, x_1) in x.windows(2).enumerate() {
-                let dist: f64 =
-                    (x_0[0] - x_1[0]) * (x_0[0] - x_1[0]) + (x_0[1] - x_1[1]) * (x_0[1] - x_1[1]);
+                let dist: f64 = (x_0[0] - x_1[0]) * (x_0[0] - x_1[0]) + (x_0[1] - x_1[1]) * (x_0[1] - x_1[1]);
                 let dist = dist.sqrt();
                 debug!("[{i_0},{i_1}] x_0={x_0:?} x_1={x_1:?} dist={}", dist);
             }
@@ -2086,16 +1623,9 @@ mod distance_tests {
 
     #[test]
     fn test_slice_t() {
-        let tensor = slice_t(
-            &Tensor::from_slice(&[1., 2., 3., 4., 5.]).view((1, -1)),
-            1,
-            2,
-        );
+        let tensor = slice_t(&Tensor::from_slice(&[1., 2., 3., 4., 5.]).view((1, -1)), 1, 2);
 
-        assert_eq!(
-            Tensor::from_slice(&[1., 2., 2., 3., 3., 4., 4., 5.,]).view((4, 1, 2)),
-            tensor
-        );
+        assert_eq!(Tensor::from_slice(&[1., 2., 2., 3., 3., 4., 4., 5.,]).view((4, 1, 2)), tensor);
     }
 
     #[test]
@@ -2119,20 +1649,11 @@ mod distance_tests {
         Ok(())
     }
 
-
     #[test]
     fn test_mask_maker_diag() {
         let mask = Diagonal.make_mask(None, &Tensor::ones(&[2, 3, 3], (Bool, Cpu))).unwrap();
 
-        assert_eq!(
-            Tensor::from_slice(&[
-                false, true, true, true, false, true, true, true, false, false, true, true, true,
-                false, true, true, true, false
-            ])
-            .view((2, 3, 3)),
-            mask
-        );
-
+        assert_eq!(Tensor::from_slice(&[false, true, true, true, false, true, true, true, false, false, true, true, true, false, true, true, true, false]).view((2, 3, 3)), mask);
     }
 
     #[test]
@@ -2140,14 +1661,7 @@ mod distance_tests {
         let mask = Tril.make_mask(None, &Tensor::ones(&[2, 3, 3], (Bool, Cpu))).unwrap();
         debug!("mask=\n{mask}");
 
-        assert_eq!(
-            Tensor::from_slice(&[
-                false, true, true, false, false, true, false, false, false, false, true, true,
-                false, false, true, false, false, false
-            ])
-            .view((2, 3, 3)),
-            mask
-        );
+        assert_eq!(Tensor::from_slice(&[false, true, true, false, false, true, false, false, false, false, true, true, false, false, true, false, false, false]).view((2, 3, 3)), mask);
 
         debug!("mask=\n{mask}");
     }
@@ -2159,12 +1673,8 @@ mod distance_tests {
 
         let input_n = 1000;
 
-        let ch_0 = (0..input_n)
-            .map(|x| (2. * PI * (x as f32 / input_n as f32)).sin())
-            .collect::<Vec<f32>>(); //sin_v(input_n, 1.);
-        let ch_1 = (0..input_n)
-            .map(|x| (4. * PI * (x as f32 / input_n as f32)).sin())
-            .collect::<Vec<f32>>(); //sin_v(input_n, 0.5);
+        let ch_0 = (0..input_n).map(|x| (2. * PI * (x as f32 / input_n as f32)).sin()).collect::<Vec<f32>>(); //sin_v(input_n, 1.);
+        let ch_1 = (0..input_n).map(|x| (4. * PI * (x as f32 / input_n as f32)).sin()).collect::<Vec<f32>>(); //sin_v(input_n, 0.5);
 
         let _x = lin_t(input_n);
         /*plot_series(
@@ -2178,14 +1688,7 @@ mod distance_tests {
         let min_ch1 = [3. / 8. * input_n as f32, 7. / 8. * input_n as f32];
         debug!("min_ch0={min_ch0:?} min_ch1={min_ch1:?}");
 
-        let distances = Tensor::stack(
-            &[
-                Tensor::from_slice(ch_0.as_slice()),
-                Tensor::from_slice(ch_1.as_slice()),
-            ],
-            0,
-        )
-        .view((2, input_n as i64)); //unsqueeze to make it [channels x t_0 slices x t_1 slices]
+        let distances = Tensor::stack(&[Tensor::from_slice(ch_0.as_slice()), Tensor::from_slice(ch_1.as_slice())], 0).view((2, input_n as i64)); //unsqueeze to make it [channels x t_0 slices x t_1 slices]
 
         debug!("distances={distances:?}");
 
@@ -2194,10 +1697,7 @@ mod distance_tests {
         trace!("mask=\n{mask}");
         debug!("mask.nonzero=\n{}", mask.nonzero());
 
-        assert_eq!(
-            Tensor::from_slice(&[0, 0, 0, 750, 1, 0, 1, 375, 1, 875,]).view((5, 2)),
-            mask.nonzero().totype(Int)
-        );
+        assert_eq!(Tensor::from_slice(&[0, 0, 0, 750, 1, 0, 1, 375, 1, 875,]).view((5, 2)), mask.nonzero().totype(Int));
 
         Ok(())
     }
@@ -2229,9 +1729,7 @@ pub struct EucDistConfig {
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, DigestHash, Debug, PartialEq, Eq, Hash, Clone, Copy, Default)]
 #[digest(tag = "thoosa.PearsonCorrConfig:v1")]
-pub struct PearsonCorrConfig {
-
-}
+pub struct PearsonCorrConfig {}
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, DigestHash, Debug, PartialEq, Eq, Hash, Clone, Copy, Default)]
 #[digest(tag = "thoosa.DotProductConfig:v1")]

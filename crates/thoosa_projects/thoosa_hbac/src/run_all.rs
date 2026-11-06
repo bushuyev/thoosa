@@ -1,4 +1,3 @@
-use thoosa_common::tch_error::tch_result;
 use log::{debug, error, info};
 use parking_lot::RwLock;
 use std::collections::HashMap;
@@ -9,9 +8,10 @@ use thoosa_common::nets::common_nets::{AdamWRangeOrValue, AttnPool1dArgsRangeOrV
 use thoosa_common::nets::nodes::{InitDummyRangeOrValue, InitModeRangeOrValue};
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::run_ctx::RunCtxImpl;
+use thoosa_common::tch_error::tch_result;
 use thoosa_common::tho_device::ThoDevice;
-use thoosa_common::transforms::filters::{AverageFilterParamsRangeOrValue, BandPassFilterParamsRangeOrValue, InputFilter, InputFilterRangeOrValue, MedianFilterParamsRangeOrValue, PaddingRangeOrValue, SavGolFilterParamsRangeOrValue, ZeroPaddingRangeOrValue};
 use thoosa_common::transforms::filters::InputFilterRangeOrValue::{AverageFilter, BandPassFilter, MedianFilter, SavGolFilter};
+use thoosa_common::transforms::filters::{AverageFilterParamsRangeOrValue, BandPassFilterParamsRangeOrValue, InputFilter, InputFilterRangeOrValue, MedianFilterParamsRangeOrValue, PaddingRangeOrValue, SavGolFilterParamsRangeOrValue, ZeroPaddingRangeOrValue};
 use thoosa_common::ws::Workspace;
 use thoosa_motifs::cli::{RunAllArgs, dyn_step_find_and_select, median_window_from_find_and_select, run_grid, run_opt, run_plot};
 use thoosa_motifs::distance::{DotProductConfigRangeOrValue, EucDistConfigRangeOrValue, SimilarityMetricRangeOrValue};
@@ -22,7 +22,11 @@ use thoosa_motifs::stages::apply_motif_nets::ApplyMotifNets;
 use thoosa_motifs::stages::cross_loader::ResourcesConfigInput;
 use thoosa_motifs::stages::extend_motifs::ExtendMotifsStage;
 use thoosa_motifs::stages::find_and_select_motifs::{FindAndSelectMotifsInput, FindAndSelectMotifsRunConfig, FindAndSelectMotifsRunConfigFields, FindAndSelectMotifsRunConfigRangeOrValue, FindAndSelectMotifsStage};
-use thoosa_motifs::stages::find_motifs_run_config::{AccumulateStatsRangeOrValue, AggrRangeOrValue, CoherenceRunConfigRangeOrValue, CrossLoaderRunConfig, CrossLoaderRunConfigRangeOrValue, ExtendMotifsConfigRangeOrValue, ExtendMotifsRunConfigRangeOrValue, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, FinderKindRangeOrValue, InlierRatioRunConfigRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MetricsRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, PeriodicityAcfRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigFields, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
+use thoosa_motifs::stages::find_motifs_run_config::{
+    AccumulateStatsRangeOrValue, AggrRangeOrValue, CoherenceRunConfigRangeOrValue, CrossLoaderRunConfig, CrossLoaderRunConfigRangeOrValue, ExtendMotifsConfigRangeOrValue, ExtendMotifsRunConfigRangeOrValue, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, FinderKindRangeOrValue,
+    InlierRatioRunConfigRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MetricsRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, PeriodicityAcfRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue,
+    SelectMotifsRunConfigFields, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue,
+};
 use thoosa_motifs::stages::motif_loader::MotifLoader;
 use thoosa_motifs::stages::select_motifs::{SelectMotifsInput, SelectMotifsStage};
 use thoosa_motifs::stages::tensor_loader::RawTensorLoader;
@@ -39,77 +43,71 @@ use thoosa_shared::val::NamedVal;
 use thoosa_shared::{RangeOrValue, ThoError};
 use tracing::Instrument;
 
-
 #[derive(Debug)]
 pub enum FindAndSelect {
     #[allow(dead_code)]
-    GridOnly{
+    GridOnly {
         find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue,
-        fixed_find_motifs_config:FixedFindMotifsConfig,
+        fixed_find_motifs_config: FixedFindMotifsConfig,
         extend_motifs_run_config: Option<ExtendMotifsRunConfigRangeOrValue<SelectMotifsRunConfigFields>>,
-        select_motifs_run_config:SelectMotifsRunConfigRangeOrValue,
+        select_motifs_run_config: SelectMotifsRunConfigRangeOrValue,
     },
     // The optional search configuration is kept for future run-all profiles.
     #[allow(dead_code)]
-    WithOpt{
+    WithOpt {
         find_and_select_run_config_range_or_value: FindAndSelectMotifsRunConfigRangeOrValue,
-        fixed_find_motifs_config:FixedFindMotifsConfig,
-        find_and_select_motifs_opt_config:OptConfig,
-    }
+        fixed_find_motifs_config: FixedFindMotifsConfig,
+        find_and_select_motifs_opt_config: OptConfig,
+    },
 }
 
 #[derive(Debug)]
 pub(crate) struct AllConfigs {
     pub find_and_select: FindAndSelect,
 
-
-    pub train_motif_nets_run_config_range_or_value:TrainMotifNetRunConfigRangeOrValue,
-    pub train_label_nets_run_config_range_or_value:TrainLabelNetRunConfigRangeOrValue,
+    pub train_motif_nets_run_config_range_or_value: TrainMotifNetRunConfigRangeOrValue,
+    pub train_label_nets_run_config_range_or_value: TrainLabelNetRunConfigRangeOrValue,
     #[allow(dead_code)]
-    pub train_final_net_run_config_range_or_value:TrainFinalNetRunConfigRangeOrValue,
-    pub train_motifs_opt_config:Arc<OptConfig>,
-    pub train_labels_opt_config:Arc<OptConfig>,
+    pub train_final_net_run_config_range_or_value: TrainFinalNetRunConfigRangeOrValue,
+    pub train_motifs_opt_config: Arc<OptConfig>,
+    pub train_labels_opt_config: Arc<OptConfig>,
     #[allow(dead_code)]
-    pub train_final_opt_config:Arc<OptConfig>,
+    pub train_final_opt_config: Arc<OptConfig>,
 }
 
-
-#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="thoosa_hbac::run_all"))]
-pub(crate) async fn run_all(
-    ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>,
-    store: &Arc<dyn MotifsStore>,
-    loader: &Arc<RawTensorLoader<RunCtxImpl>>,
-    mut root_ctx: RunCtxImpl,
-    run_all_args: &RunAllArgs,
-    all_config:AllConfigs
-) -> anyhow::Result<()> {
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "thoosa_hbac::run_all"))]
+pub(crate) async fn run_all(ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>, store: &Arc<dyn MotifsStore>, loader: &Arc<RawTensorLoader<RunCtxImpl>>, mut root_ctx: RunCtxImpl, run_all_args: &RunAllArgs, all_config: AllConfigs) -> anyhow::Result<()> {
     debug!("run_all: run_all_args={run_all_args:?} all_config={all_config:?}");
 
     let find_motifs_input = Arc::new(t!(ResourcesConfigInput::new(run_all_args.find_resource_config()?).check(&store)).await?);
 
     let select_motifs_input = Arc::new(SelectMotifsInput::standalone(t!(ResourcesConfigInput::new(run_all_args.select_resource_config()?).check(&store)).await?));
 
-    let train_labels_input = Arc::new(t!(ResourcesConfigInput::new( //TODO the group is needed to load resources not belonging to label being trained
-       run_all_args.train_resource_config()
-    ).check(&store)).await?);
+    let train_labels_input = Arc::new(
+        t!(ResourcesConfigInput::new(
+            //TODO the group is needed to load resources not belonging to label being trained
+            run_all_args.train_resource_config()
+        )
+        .check(&store))
+        .await?,
+    );
 
-    let train_final_input = Arc::new(t!(ResourcesConfigInput::new(
-        run_all_args.train_final_resource_config()).check(&store)).await?);
-
+    let train_final_input = Arc::new(t!(ResourcesConfigInput::new(run_all_args.train_final_resource_config()).check(&store)).await?);
 
     let init_ctx_find_motifs = root_ctx.branch(true);
     let store_in_find_motifs = Arc::clone(&store);
     let ws_in_find_motifs = Arc::clone(&ws);
     let loader_in_find_motifs = Arc::clone(&loader);
 
-    let find_and_select_input = FindAndSelectMotifsInput::new(
-        run_all_args.find_resources.clone(),
-        run_all_args.select_resources.clone(),
-    );
-
+    let find_and_select_input = FindAndSelectMotifsInput::new(run_all_args.find_resources.clone(), run_all_args.select_resources.clone());
 
     let select_motifs_run_config_ids = match all_config.find_and_select {
-        FindAndSelect::GridOnly { find_motifs_run_config_range_or_value, fixed_find_motifs_config, extend_motifs_run_config, select_motifs_run_config } => {
+        FindAndSelect::GridOnly {
+            find_motifs_run_config_range_or_value,
+            fixed_find_motifs_config,
+            extend_motifs_run_config,
+            select_motifs_run_config,
+        } => {
             info!("run_all: find and select motifs opt skipped: no opt params in run config, falling back to grid search");
 
             //gpt Run a grid over FindMotifs configs, constructing a stage per grid point and executing it.
@@ -121,19 +119,13 @@ pub(crate) async fn run_all(
                 &store,
                 async move |run_configs| {
                     Ok(Arc::new(
-                        t!(stages::find_motifs::FindMotifsStage::new(
-                            &ws_in_find_motifs,
-                            &store_in_find_motifs,
-                            loader_in_find_motifs,
-                            run_configs,
-                            fixed_find_motifs_config,
-                            init_ctx_find_motifs
-                        )).await?,
+                        t!(stages::find_motifs::FindMotifsStage::new(&ws_in_find_motifs, &store_in_find_motifs, loader_in_find_motifs, run_configs, fixed_find_motifs_config, init_ctx_find_motifs)).await?,
                     ))
                 },
                 || root_ctx.branch(true),
                 "find motifs"
-            )).await?;
+            ))
+            .await?;
 
             info!("run_all: find motifs done, find_motif_run_config_ids={find_motifs_run_config_ids:?}");
 
@@ -149,24 +141,25 @@ pub(crate) async fn run_all(
                     &ws,
                     &store,
                     async |run_configs| {
-                        Ok(Arc::new(t!(SelectMotifsStage::<RawTensorLoader<RunCtxImpl>, MotifLoader<RawTensorLoader<RunCtxImpl>, RunCtxImpl>, RunCtxImpl>::new(
-                            &ws,
-                            &store,
-                            Arc::clone(&loader),
-                            MotifLoader::new(
-                                Arc::clone(&store),
+                        Ok(Arc::new(
+                            t!(SelectMotifsStage::<RawTensorLoader<RunCtxImpl>, MotifLoader<RawTensorLoader<RunCtxImpl>, RunCtxImpl>, RunCtxImpl>::new(
+                                &ws,
+                                &store,
                                 Arc::clone(&loader),
-                                &ws
-                            ).await?,
-                            run_configs,
-                            vec![*find_motifs_run_config_id],
-                            // #[cfg(test)]
-                            None
-                        )).await?))
+                                MotifLoader::new(Arc::clone(&store), Arc::clone(&loader), &ws).await?,
+                                run_configs,
+                                vec![*find_motifs_run_config_id],
+                                // #[cfg(test)]
+                                None
+                            ))
+                            .await?,
+                        ))
                     },
                     || root_ctx.branch(true),
                     "find_motifs"
-                )).await {
+                ))
+                .await
+                {
                     Ok(ids) => {
                         select_motifs_run_config_ids.extend(ids);
                     }
@@ -180,8 +173,12 @@ pub(crate) async fn run_all(
 
             select_motifs_run_config_ids
         }
-        FindAndSelect::WithOpt { find_and_select_run_config_range_or_value, fixed_find_motifs_config, find_and_select_motifs_opt_config } => {
-            let best_find_and_select_result_ids:Vec<RunConfigId>= t!(run_opt::</*Simple,*/ _, _, FindAndSelectMotifsRunConfig, _, _>(
+        FindAndSelect::WithOpt {
+            find_and_select_run_config_range_or_value,
+            fixed_find_motifs_config,
+            find_and_select_motifs_opt_config,
+        } => {
+            let best_find_and_select_result_ids: Vec<RunConfigId> = t!(run_opt::</*Simple,*/ _, _, FindAndSelectMotifsRunConfig, _, _>(
                 find_and_select_run_config_range_or_value,
                 find_and_select_input,
                 &ws,
@@ -198,16 +195,13 @@ pub(crate) async fn run_all(
                     )))
                 },
                 || root_ctx.branch(true),
-            )).await?;
+            ))
+            .await?;
 
             info!("run_all: opt FindAndSelectMotifsRunConfig done: find_and_select_run_config_ids={best_find_and_select_result_ids:?}");
             assert_eq!(best_find_and_select_result_ids.len(), 1); //should be one from run_opt
 
-            let select_motifs_run_config_ids = t!(store
-                .list_input_run_config_ids(&best_find_and_select_result_ids)).await?
-                .into_iter().map(
-                |opt_select_result_ids| opt_select_result_ids.1
-            ).collect::<Vec<_>>();
+            let select_motifs_run_config_ids = t!(store.list_input_run_config_ids(&best_find_and_select_result_ids)).await?.into_iter().map(|opt_select_result_ids| opt_select_result_ids.1).collect::<Vec<_>>();
 
             info!("run_all: opt FindAndSelectMotifsRunConfig done: select_motifs_run_config_ids={select_motifs_run_config_ids:?}");
 
@@ -215,20 +209,34 @@ pub(crate) async fn run_all(
         }
     };
 
-
     if run_all_args.with_plots {
         for select_motifs_run_config_id in &select_motifs_run_config_ids {
-            t!(run_plot(&ws, &store, &loader, &PlotDataArgs::new(DataBy::SelectedMotifs { select_motifs_run_config_ids: vec![*select_motifs_run_config_id] }), run_all_args.resolution, &Cpu, root_ctx.branch(false))).await?;
+            t!(run_plot(
+                &ws,
+                &store,
+                &loader,
+                &PlotDataArgs::new(DataBy::SelectedMotifs {
+                    select_motifs_run_config_ids: vec![*select_motifs_run_config_id]
+                }),
+                run_all_args.resolution,
+                &Cpu,
+                root_ctx.branch(false)
+            ))
+            .await?;
         }
     }
 
     info!("run_all: find and select motifs  done: select_motifs_run_config_ids={select_motifs_run_config_ids:?}");
     assert!(!select_motifs_run_config_ids.is_empty(), "No selected motifs");
 
-
-
     //gpt Train motif nets needs a custom input wrapper (motif ids + opt config) rather than a resource config.
-    let input_wrapper = TrainMotifNetInput::new(MotifsBy::SelectMotifsRunIds { select_motifs_run_config_ids: select_motifs_run_config_ids.clone() }, Arc::clone(&all_config.train_motifs_opt_config), run_all_args.motifs_limit);
+    let input_wrapper = TrainMotifNetInput::new(
+        MotifsBy::SelectMotifsRunIds {
+            select_motifs_run_config_ids: select_motifs_run_config_ids.clone(),
+        },
+        Arc::clone(&all_config.train_motifs_opt_config),
+        run_all_args.motifs_limit,
+    );
 
     //gpt Run a grid over motif-net training configs; output is a set of run ids for trained motif nets.
     let train_motif_nets_run_config_ids = t!(run_opt::</*Labeled,*/ _, _, TrainMotifNetRunConfig, _, _>(
@@ -236,61 +244,60 @@ pub(crate) async fn run_all(
         input_wrapper,
         &ws,
         &store,
-        async |run_configs| {
-            Ok(Arc::new(TrainMotifNets::<_, RunCtxImpl>::new(
-                Arc::clone(&loader),
-                &ws,
-                &store,
-                run_configs,
-                run_all_args.train_motifs_epoch_size,
-                None,
-            ).await?))
-        },
+        async |run_configs| { Ok(Arc::new(TrainMotifNets::<_, RunCtxImpl>::new(Arc::clone(&loader), &ws, &store, run_configs, run_all_args.train_motifs_epoch_size, None,).await?)) },
         || root_ctx.branch(true),
-    )).await?;
+    ))
+    .await?;
 
     info!("run_all: train motif nets done: train_motif_nets_run_config_ids={train_motif_nets_run_config_ids:?}");
 
     assert!(!train_motif_nets_run_config_ids.is_empty(), "No trained motif nets");
-    
+
     let mut init_ctx_train_labels = root_ctx.branch(true);
     let store_in_train_labels = Arc::clone(&store);
     let ws_in_train_labels = Arc::clone(&ws);
     let labels_filter = run_all_args.labels_filter();
 
     //run a grid over label-net training configs; consumes motif nets from previous stage.
-    let train_label_nets_run_config_ids = t!(run_opt::< _, _, TrainLabelNetRunConfig, _, _>(
+    let train_label_nets_run_config_ids = t!(run_opt::<_, _, TrainLabelNetRunConfig, _, _>(
         all_config.train_label_nets_run_config_range_or_value,
         train_labels_input,
         &ws,
         &store,
         async move |run_configs| {
-            let apply_motif_nets = Arc::new(t!(ApplyMotifNets::new(
-                &ws_in_train_labels,
-                &store_in_train_labels,
-                train_motif_nets_run_config_ids.clone(),
-                init_ctx_train_labels.branch(false),
-                Some(run_all_args.max_motif_net_loss), //to RunAll args,
-                run_all_args.selected_motif_nets_limit,
-                run_all_args.motif_slices_step,
-                None,
-                false,
-            )).await?);
+            let apply_motif_nets = Arc::new(
+                t!(ApplyMotifNets::new(
+                    &ws_in_train_labels,
+                    &store_in_train_labels,
+                    train_motif_nets_run_config_ids.clone(),
+                    init_ctx_train_labels.branch(false),
+                    Some(run_all_args.max_motif_net_loss), //to RunAll args,
+                    run_all_args.selected_motif_nets_limit,
+                    run_all_args.motif_slices_step,
+                    None,
+                    false,
+                ))
+                .await?,
+            );
 
-            Ok(Arc::new(t!(new_train_label_nets(
-                train_motif_nets_run_config_ids.clone(),
-                Arc::clone(&loader),
-                apply_motif_nets,
-                run_configs,
-                &ws_in_train_labels,
-                &store_in_train_labels,
-                Arc::clone(&all_config.train_labels_opt_config),
-                labels_filter.clone(),
-                init_ctx_train_labels.branch(false)
-            )).await?))
+            Ok(Arc::new(
+                t!(new_train_label_nets(
+                    train_motif_nets_run_config_ids.clone(),
+                    Arc::clone(&loader),
+                    apply_motif_nets,
+                    run_configs,
+                    &ws_in_train_labels,
+                    &store_in_train_labels,
+                    Arc::clone(&all_config.train_labels_opt_config),
+                    labels_filter.clone(),
+                    init_ctx_train_labels.branch(false)
+                ))
+                .await?,
+            ))
         },
         || root_ctx.branch(true),
-    )).await?;
+    ))
+    .await?;
 
     info!("run_all: train label nets done: run_config_ids={train_label_nets_run_config_ids:?}");
     assert!(!train_label_nets_run_config_ids.is_empty(), "No trained label nets");
@@ -305,33 +312,36 @@ pub(crate) async fn run_all(
     let loader_in_train_final = Arc::clone(&loader);
 
     //gpt Run a grid over final-net training configs; consumes label-net run ids and produces final models.
-    let _run_config_ids = t!(run_opt::< _, _, TrainFinalNetRunConfig, _, _>(
+    let _run_config_ids = t!(run_opt::<_, _, TrainFinalNetRunConfig, _, _>(
         all_config.train_final_net_run_config_range_or_value,
         train_final_input,
         &ws,
         &store,
         async move |run_configs| {
-            Ok(Arc::new(t!(new_train_final_net(
-                train_label_nets_run_config_ids,
-                loader_in_train_final,
-                run_configs,
-                &ws_in_train_final,
-                &store_in_train_final,
-                init_ctx_in_train_final,
-                Arc::clone(&all_config.train_final_opt_config),
-                10, //TODO
-            )).await?))
+            Ok(Arc::new(
+                t!(new_train_final_net(
+                    train_label_nets_run_config_ids,
+                    loader_in_train_final,
+                    run_configs,
+                    &ws_in_train_final,
+                    &store_in_train_final,
+                    init_ctx_in_train_final,
+                    Arc::clone(&all_config.train_final_opt_config),
+                    10, //TODO
+                ))
+                .await?,
+            ))
         },
         || root_ctx.branch(true),
-    )).await?;
-
+    ))
+    .await?;
 
     Ok(())
 }
 // Some settings belong to the retained but currently disabled test profile.
 #[allow(dead_code)]
 pub struct RunAllSettings {
-    pub resources_per_label:usize,
+    pub resources_per_label: usize,
     pub pure_sets_len: [(usize, bool); 2],
     pub train_resource_group: String,
     pub valid_resource_group: String,
@@ -344,11 +354,9 @@ pub struct RunAllSettings {
     pub max_batch_size: u32,
 }
 
-
 // This alternative test profile is currently not selected.
 #[cfg(test)]
-pub fn run_all_config_test(run_all_args: &RunAllArgs, profile:&RunAllSettings) -> AllConfigs {
-
+pub fn run_all_config_test(run_all_args: &RunAllArgs, profile: &RunAllSettings) -> AllConfigs {
     //let find_motifs_run_config_range_or_value = run_all_find_motifs_config_grid_0(2, 2, 4);
     let find_motifs_run_config_range_or_value = run_all_find_motifs_config_1();
     // let find_motifs_run_config_range_or_value = run_all_find_motifs_config_no_filters(2);
@@ -356,9 +364,9 @@ pub fn run_all_config_test(run_all_args: &RunAllArgs, profile:&RunAllSettings) -
     let fixed_find_motifs_config = FixedFindMotifsConfig::new(run_all_args.max_chunk_size, false);
     let select_motifs_run_config = run_all_select_motifs_config_1::<SelectMotifsRunConfigFields>();
 
-    let find_and_select_grid =  FindAndSelect::GridOnly {
+    let find_and_select_grid = FindAndSelect::GridOnly {
         find_motifs_run_config_range_or_value,
-        fixed_find_motifs_config:fixed_find_motifs_config.clone(),
+        fixed_find_motifs_config: fixed_find_motifs_config.clone(),
         extend_motifs_run_config: None,
         select_motifs_run_config,
     };
@@ -382,10 +390,13 @@ pub fn run_all_config_test(run_all_args: &RunAllArgs, profile:&RunAllSettings) -
             // batch_size: RangeOrValue::Range { range: Range { start: 10, end: profile.max_batch_size }, step: None },
             batch_size: RangeOrValue::Value(20),
             // lr: RangeOrValue::Value(0.0001),
-            lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
+            lr: RangeOrValue::Range {
+                range: Range { start: 0.00001, end: 0.001 },
+                step: None,
+            },
             patience: RangeOrValue::Value(10),
             min_delta: RangeOrValue::Value(1e-4_f32),
-            optimizer: Some(OptimizersRangeOrValue::AdamW(AdamWRangeOrValue{
+            optimizer: Some(OptimizersRangeOrValue::AdamW(AdamWRangeOrValue {
                 beta1: RangeOrValue::Value(0.9),
                 beta2: RangeOrValue::Value(0.999),
                 wd: RangeOrValue::Value(0.01),
@@ -393,26 +404,29 @@ pub fn run_all_config_test(run_all_args: &RunAllArgs, profile:&RunAllSettings) -
             })),
         },
         // net: train_nets::MotifNetTypeArgsRangeOrValue::ConvNet(train_nets::MotifConvNetArgsRangeOrValue { _dummy: 0 }),
-        net: train_nets::MotifNetTypeArgsRangeOrValue::CosineNet(MotifCosineNetArgsRangeOrValue{
+        net: train_nets::MotifNetTypeArgsRangeOrValue::CosineNet(MotifCosineNetArgsRangeOrValue {
             a: RangeOrValue::Range { range: Range { start: 1.0, end: 10.0 }, step: None },
             b: RangeOrValue::Range { range: Range { start: 0.0, end: 1.0 }, step: None },
-            init_mode: InitModeRangeOrValue::Vec(vec![
-                InitModeRangeOrValue::Mean(InitDummyRangeOrValue { _path_pd: Default::default() })
-            ])
+            init_mode: InitModeRangeOrValue::Vec(vec![InitModeRangeOrValue::Mean(InitDummyRangeOrValue { _path_pd: Default::default() })]),
         }),
         // num_layers: RangeOrValue::Range { range: Range { start: 2, end: 8 }, step: None },
-
     };
     //////////////////////train labels
     let train_label_nets_run_config_range_or_value: TrainLabelNetRunConfigRangeOrValue = TrainLabelNetRunConfigRangeOrValue {
         id: None,
         common_training_args: CommonTrainingRunConfigRangeOrValue {
             epochs: RangeOrValue::Value(profile.labels_epochs),
-            batch_size: RangeOrValue::Range { range: Range { start: 10, end: profile.max_batch_size }, step: None },
-            lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
+            batch_size: RangeOrValue::Range {
+                range: Range { start: 10, end: profile.max_batch_size },
+                step: None,
+            },
+            lr: RangeOrValue::Range {
+                range: Range { start: 0.00001, end: 0.001 },
+                step: None,
+            },
             patience: RangeOrValue::Value(10),
             min_delta: RangeOrValue::Value(1e-4_f32),
-            optimizer: Some(OptimizersRangeOrValue::AdamW(AdamWRangeOrValue{
+            optimizer: Some(OptimizersRangeOrValue::AdamW(AdamWRangeOrValue {
                 beta1: RangeOrValue::Value(0.9),
                 beta2: RangeOrValue::Value(0.999),
                 wd: RangeOrValue::Value(0.01),
@@ -431,9 +445,8 @@ pub fn run_all_config_test(run_all_args: &RunAllArgs, profile:&RunAllSettings) -
         //     // joint: ConvNetJointArgsRangeOrValue::MinMax(MinMaxArgsRangeOrValue{ _dummy: 0 }),
         //     joint: ConvNetJointArgsRangeOrValue::AttnPool1d(AttnPool1dArgsRangeOrValue{ _path_pd: Default::default() }),
         // }),
-
-        net: LabelNetTypeArgsRangeOrValue::SelfAttentionNet( SelfAttentionNetArgsRangeOrValue {
-            head_size:  RangeOrValue::Range { range: Range { start: 4, end: 256 }, step: None },
+        net: LabelNetTypeArgsRangeOrValue::SelfAttentionNet(SelfAttentionNetArgsRangeOrValue {
+            head_size: RangeOrValue::Range { range: Range { start: 4, end: 256 }, step: None },
             n_heads: RangeOrValue::Range { range: Range { start: 2, end: 4 }, step: None },
             ff_mult: RangeOrValue::Value(2),
             dropout: RangeOrValue::Range { range: Range { start: 0.01, end: 0.2 }, step: None },
@@ -449,11 +462,17 @@ pub fn run_all_config_test(run_all_args: &RunAllArgs, profile:&RunAllSettings) -
         id: None,
         common_training_args: CommonTrainingRunConfigRangeOrValue {
             epochs: RangeOrValue::Value(profile.final_epochs),
-            batch_size: RangeOrValue::Range { range: Range { start: 2, end: profile.max_batch_size }, step: None },
-            lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
+            batch_size: RangeOrValue::Range {
+                range: Range { start: 2, end: profile.max_batch_size },
+                step: None,
+            },
+            lr: RangeOrValue::Range {
+                range: Range { start: 0.00001, end: 0.001 },
+                step: None,
+            },
             patience: RangeOrValue::Value(10),
             min_delta: RangeOrValue::Value(1e-4_f32),
-            optimizer: Some(OptimizersRangeOrValue::AdamW(AdamWRangeOrValue{
+            optimizer: Some(OptimizersRangeOrValue::AdamW(AdamWRangeOrValue {
                 // beta1: RangeOrValue::Range { range: Range { start: 0.85, end: 0.95 }, step: None },
                 beta1: RangeOrValue::Value(0.9),
                 beta2: RangeOrValue::Value(0.999),
@@ -468,21 +487,19 @@ pub fn run_all_config_test(run_all_args: &RunAllArgs, profile:&RunAllSettings) -
         },
     };
 
-    AllConfigs{
+    AllConfigs {
         find_and_select: find_and_select_grid,
         train_motif_nets_run_config_range_or_value,
         train_label_nets_run_config_range_or_value,
         train_final_net_run_config_range_or_value,
-        train_motifs_opt_config:Arc::clone(&profile.train_motifs_opt_config),
+        train_motifs_opt_config: Arc::clone(&profile.train_motifs_opt_config),
         train_labels_opt_config: Arc::clone(&profile.train_labels_opt_config),
         train_final_opt_config: Arc::clone(&profile.train_final_opt_config),
     }
 }
 
-
 pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
-
-    let find_and_select =  FindAndSelect::GridOnly {
+    let find_and_select = FindAndSelect::GridOnly {
         find_motifs_run_config_range_or_value: run_all_find_motifs_config_grid_0(4, 4, 8),
         fixed_find_motifs_config: FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false),
         extend_motifs_run_config: Some(run_all_extend_motifs_config_grid_0::<SelectMotifsRunConfigFields>()),
@@ -506,11 +523,14 @@ pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
             epochs: RangeOrValue::Value(10),
             batch_size: RangeOrValue::Value(10),
             // lr: RangeOrValue::Value(0.0001),
-            lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
+            lr: RangeOrValue::Range {
+                range: Range { start: 0.00001, end: 0.001 },
+                step: None,
+            },
             patience: RangeOrValue::Value(10),
             min_delta: RangeOrValue::Value(1e-4_f32),
 
-            optimizer: Some(OptimizersRangeOrValue::AdamW(AdamWRangeOrValue{
+            optimizer: Some(OptimizersRangeOrValue::AdamW(AdamWRangeOrValue {
                 beta1: RangeOrValue::Value(0.9),
                 beta2: RangeOrValue::Value(0.999),
                 wd: RangeOrValue::Value(0.01),
@@ -523,26 +543,22 @@ pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         //     channels: RangeOrValue::Value(32),
         //     kernel: RangeOrValue::Value(10),
         // }),
-
-        net: train_nets::MotifNetTypeArgsRangeOrValue::CosineNet(MotifCosineNetArgsRangeOrValue{
+        net: train_nets::MotifNetTypeArgsRangeOrValue::CosineNet(MotifCosineNetArgsRangeOrValue {
             // step: RangeOrValue::Value(1),
             // channels: RangeOrValue::Range { range: Range { start: 4, end: 32 }, step: None },
             // kernel: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: None },
             a: RangeOrValue::Range { range: Range { start: 1.0, end: 10.0 }, step: None },
             b: RangeOrValue::Range { range: Range { start: 0.0, end: 1.0 }, step: None },
             init_mode: InitModeRangeOrValue::Mean(InitDummyRangeOrValue { _path_pd: Default::default() }),
-        })
-
-        // net: train_nets::MotifNetTypeArgsRangeOrValue::ConvNet(train_nets::MotifConvNetArgsRangeOrValue {
-        //     conv_layers: RangeOrValue::Range { range: Range { start: 2, end: 24 }, step: None },
-        //     head_layers: RangeOrValue::Range { range: Range { start: 2, end: 24 }, step: None },
-        //     step: RangeOrValue::Value(10),
-        //     channels: RangeOrValue::Range{ range: Range {start: 8, end: 256}, step: None },
-        //     // kernel: RangeOrValue::Value(10),
-        //     kernel: RangeOrValue::Range{ range: Range {start: 10, end: 100}, step: None },
-        //     head_pool: None,
-        // })
-
+        }), // net: train_nets::MotifNetTypeArgsRangeOrValue::ConvNet(train_nets::MotifConvNetArgsRangeOrValue {
+            //     conv_layers: RangeOrValue::Range { range: Range { start: 2, end: 24 }, step: None },
+            //     head_layers: RangeOrValue::Range { range: Range { start: 2, end: 24 }, step: None },
+            //     step: RangeOrValue::Value(10),
+            //     channels: RangeOrValue::Range{ range: Range {start: 8, end: 256}, step: None },
+            //     // kernel: RangeOrValue::Value(10),
+            //     kernel: RangeOrValue::Range{ range: Range {start: 10, end: 100}, step: None },
+            //     head_pool: None,
+            // })
     };
 
     //////////////////////train labels
@@ -551,10 +567,13 @@ pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         common_training_args: CommonTrainingRunConfigRangeOrValue {
             epochs: RangeOrValue::Value(300),
             batch_size: RangeOrValue::Value(10),
-            lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
+            lr: RangeOrValue::Range {
+                range: Range { start: 0.00001, end: 0.001 },
+                step: None,
+            },
             patience: RangeOrValue::Value(10),
             min_delta: RangeOrValue::Value(1e-4_f32),
-            optimizer: Some(OptimizersRangeOrValue::AdamW(AdamWRangeOrValue{
+            optimizer: Some(OptimizersRangeOrValue::AdamW(AdamWRangeOrValue {
                 beta1: RangeOrValue::Value(0.9),
                 beta2: RangeOrValue::Value(0.999),
                 wd: RangeOrValue::Value(0.01),
@@ -595,10 +614,13 @@ pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
             epochs: RangeOrValue::Value(300),
             // batch_size: RangeOrValue::Value(2),
             batch_size: RangeOrValue::Range { range: Range { start: 2, end: 10 }, step: None },
-            lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
+            lr: RangeOrValue::Range {
+                range: Range { start: 0.00001, end: 0.001 },
+                step: None,
+            },
             patience: RangeOrValue::Value(10),
             min_delta: RangeOrValue::Value(1e-4_f32),
-            optimizer: Some(OptimizersRangeOrValue::AdamW(AdamWRangeOrValue{
+            optimizer: Some(OptimizersRangeOrValue::AdamW(AdamWRangeOrValue {
                 beta1: RangeOrValue::Value(0.9),
                 beta2: RangeOrValue::Value(0.999),
                 wd: RangeOrValue::Value(0.01),
@@ -610,21 +632,20 @@ pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
             mid_features: RangeOrValue::Range { range: Range { start: 8, end: 8000 }, step: None },
         },
     };
-    AllConfigs{
+    AllConfigs {
         find_and_select,
         train_motif_nets_run_config_range_or_value,
         train_label_nets_run_config_range_or_value,
         train_final_net_run_config_range_or_value,
         train_motifs_opt_config: Arc::new(OptConfig::new(30, 10)),
         train_labels_opt_config: Arc::new(OptConfig::new(100, 10)),
-        train_final_opt_config: Arc::new(OptConfig::new(100, 10))
+        train_final_opt_config: Arc::new(OptConfig::new(100, 10)),
     }
 }
 
-
 // Retained for the currently commented-out optimization profile.
 #[allow(dead_code)]
-fn run_all_find_motifs_config_opt_0<P: FieldName + 'static, F, F1>(median_window: F, _dyn_step:F1) -> FindMotifsRunConfigRangeOrValue<P>
+fn run_all_find_motifs_config_opt_0<P: FieldName + 'static, F, F1>(median_window: F, _dyn_step: F1) -> FindMotifsRunConfigRangeOrValue<P>
 where
     F: Fn(&[NamedVal<P>]) -> RangeOrValue<u32> + Send + Sync + Clone + 'static,
     F1: Fn(&[NamedVal<P>]) -> RangeOrValue<u32> + Send + Sync + Clone + 'static,
@@ -634,15 +655,16 @@ where
         step: RangeOrValue::Value(100),
         // step: RangeOrValue::dynamic(dyn_step),
         // window: RangeOrValue::Value(200),
-        window: RangeOrValue::Range { range: Range { start: 10, end: 170 }, step: Some((40, 0)) },
+        window: RangeOrValue::Range {
+            range: Range { start: 10, end: 170 },
+            step: Some((40, 0)),
+        },
         freq_filter: Some(vec![
             // AverageFilter(AverageFilterParamsRangeOrValue {
             //     window: RangeOrValue::dynamic(median_window),
             //     step: RangeOrValue::Value(10),
             // }),
-            MedianFilter(MedianFilterParamsRangeOrValue {
-                window: RangeOrValue::dynamic(median_window),
-            }),
+            MedianFilter(MedianFilterParamsRangeOrValue { window: RangeOrValue::dynamic(median_window) }),
             // InputFilterRangeOrValue::SavGolFilter(SavGolFilterParamsRangeOrValue {
             //         window_len: RangeOrValue::dynamic(median_window),//RangeOrValue::Range { range: Range { start: 100, end: 200 }, step: None },
             //         poly_order: RangeOrValue::Range { range: Range { start: 1, end: 10 }, step: None },
@@ -672,7 +694,6 @@ where
     }
 }
 
-
 #[allow(dead_code)]
 fn run_all_extend_motifs_config_grid_0<P: FieldName + 'static>() -> ExtendMotifsRunConfigRangeOrValue<P> {
     ExtendMotifsRunConfigRangeOrValue {
@@ -689,17 +710,17 @@ fn run_all_extend_motifs_config_grid_0<P: FieldName + 'static>() -> ExtendMotifs
     }
 }
 
-fn run_all_find_motifs_config_grid_0(min_k:u32, max_k:u32, steps:u32) -> FindMotifsRunConfigRangeOrValue<FindMotifsRunConfigFields> {
-
-    let median_window = move |named_vals: &[NamedVal<FindMotifsRunConfigFields>]| {
-        match named_vals.iter().find(|field| field.path().eq(&FindMotifsRunConfigFields::Window)) {
-            None => RangeOrValue::Value(100),
-            Some(value) => {
-                let window = value.val().to_i64(0) as u32;
-                debug!("Window: window={window}");
-                let end = window.saturating_mul(max_k);
-                let start = window / min_k;
-                RangeOrValue::Range { range: Range { start, end }, step: Some(((end-start)/steps, 0)) }
+fn run_all_find_motifs_config_grid_0(min_k: u32, max_k: u32, steps: u32) -> FindMotifsRunConfigRangeOrValue<FindMotifsRunConfigFields> {
+    let median_window = move |named_vals: &[NamedVal<FindMotifsRunConfigFields>]| match named_vals.iter().find(|field| field.path().eq(&FindMotifsRunConfigFields::Window)) {
+        None => RangeOrValue::Value(100),
+        Some(value) => {
+            let window = value.val().to_i64(0) as u32;
+            debug!("Window: window={window}");
+            let end = window.saturating_mul(max_k);
+            let start = window / min_k;
+            RangeOrValue::Range {
+                range: Range { start, end },
+                step: Some(((end - start) / steps, 0)),
             }
         }
     };
@@ -707,7 +728,10 @@ fn run_all_find_motifs_config_grid_0(min_k:u32, max_k:u32, steps:u32) -> FindMot
         id: None,
         step: RangeOrValue::Value(10),
         // window: RangeOrValue::Value(200),
-        window: RangeOrValue::Range { range: Range { start: 100, end: 1000 }, step: Some((100, 0)) },
+        window: RangeOrValue::Range {
+            range: Range { start: 100, end: 1000 },
+            step: Some((100, 0)),
+        },
         freq_filter: Some(vec![
             AverageFilter(AverageFilterParamsRangeOrValue {
                 window: RangeOrValue::dynamic(median_window),
@@ -731,20 +755,17 @@ fn run_all_find_motifs_config_grid_0(min_k:u32, max_k:u32, steps:u32) -> FindMot
         ]),
         min_slices: Some(RangeOrValue::Value(4)),
         max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue { count: RangeOrValue::Value(1000) })),
-        finder_kind: FinderKindRangeOrValue::CrossLoader(
-            CrossLoaderRunConfigRangeOrValue {
-                similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
-                slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue {
-                    aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue {
-                        q: RangeOrValue::Value(0.5),
-                        // q: RangeOrValue::Range { range: 0.0..0.1, step: Some((0.05, 2)) },
-                    }),
+        finder_kind: FinderKindRangeOrValue::CrossLoader(CrossLoaderRunConfigRangeOrValue {
+            similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
+            slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue {
+                aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue {
+                    q: RangeOrValue::Value(0.5),
+                    // q: RangeOrValue::Range { range: 0.0..0.1, step: Some((0.05, 2)) },
                 }),
-            }
-        ),
+            }),
+        }),
     }
 }
-
 
 #[allow(dead_code)]
 fn run_all_select_motifs_config_grid_0<P: FieldName + 'static>() -> SelectMotifsRunConfigRangeOrValue<P> {
@@ -752,9 +773,7 @@ fn run_all_select_motifs_config_grid_0<P: FieldName + 'static>() -> SelectMotifs
         id: None,
         motif_criteria: vec![
             MotifCriterionConstraintRangeOrValue {
-                metric: MetricsRangeOrValue::NormThickness(NormThicknessRunConfigRangeOrValue {
-                    eps: RangeOrValue::Value(1e-8),
-                }),
+                metric: MetricsRangeOrValue::NormThickness(NormThicknessRunConfigRangeOrValue { eps: RangeOrValue::Value(1e-8) }),
                 min: RangeOrValue::Value(0.85),
             },
             MotifCriterionConstraintRangeOrValue {
@@ -780,9 +799,7 @@ fn run_all_select_motifs_config_opt_0<P: FieldName + 'static>() -> SelectMotifsR
         id: None,
         motif_criteria: vec![
             MotifCriterionConstraintRangeOrValue {
-                metric: MetricsRangeOrValue::NormThickness(NormThicknessRunConfigRangeOrValue {
-                    eps: RangeOrValue::Value(1e-8),
-                }),
+                metric: MetricsRangeOrValue::NormThickness(NormThicknessRunConfigRangeOrValue { eps: RangeOrValue::Value(1e-8) }),
                 min: RangeOrValue::Value(0.7),
             },
             // MotifCriterionConstraintRangeOrValue {
@@ -803,11 +820,13 @@ fn run_all_select_motifs_config_opt_0<P: FieldName + 'static>() -> SelectMotifsR
 
 #[expect(dead_code, reason = "Alternative no-filter profile retained for manual experiments.")]
 pub fn run_all_find_motifs_config_no_filters(min_slices: u32) -> FindMotifsRunConfigRangeOrValue<FindMotifsRunConfigFields> {
-
     FindMotifsRunConfigRangeOrValue {
         id: None,
         step: RangeOrValue::Value(10),
-        window: RangeOrValue::Range { range: Range { start: 50, end: 1000 }, step: Some((50, 0)) },
+        window: RangeOrValue::Range {
+            range: Range { start: 50, end: 1000 },
+            step: Some((50, 0)),
+        },
         freq_filter: None,
 
         // finder_kind: FinderKindRangeOrValue::CrossLoader(CrossLoaderRunConfigRangeOrValue {
@@ -817,39 +836,36 @@ pub fn run_all_find_motifs_config_no_filters(min_slices: u32) -> FindMotifsRunCo
         //         slices: RangeOrValue::Value(200),
         //     }),
         // }),
-        finder_kind: FinderKindRangeOrValue::CrossLoader(
-            CrossLoaderRunConfigRangeOrValue {
-                similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
-                slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue {
-                    aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue {
-                        q: RangeOrValue::Value(0.5),
-                        // q: RangeOrValue::Range { range: 0.0..0.1, step: Some((0.05, 2)) },
-                    }),
+        finder_kind: FinderKindRangeOrValue::CrossLoader(CrossLoaderRunConfigRangeOrValue {
+            similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
+            slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue {
+                aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue {
+                    q: RangeOrValue::Value(0.5),
+                    // q: RangeOrValue::Range { range: 0.0..0.1, step: Some((0.05, 2)) },
                 }),
-            }
-        ),
+            }),
+        }),
         max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue { count: RangeOrValue::Value(100) })),
         min_slices: Some(RangeOrValue::Value(min_slices)),
     }
 }
 
-
-
 // Only the alternative test profile uses this configuration.
 #[cfg(test)]
 pub fn run_all_find_motifs_config_1() -> FindMotifsRunConfigRangeOrValue<FindMotifsRunConfigFields> {
-    let max_k =2;
-    let min_k =2;
-    let steps =4;
-    let kernel_size = move |named_vals: &[NamedVal<FindMotifsRunConfigFields>]| {
-        match named_vals.iter().find(|field| field.path().eq(&FindMotifsRunConfigFields::Window)) {
-            None => RangeOrValue::Value(100),
-            Some(value) => {
-                let window = value.val().to_i64(0) as u32;
-                debug!("Window: window={window}");
-                let end = window.saturating_mul(max_k);
-                let start = window / min_k;
-                RangeOrValue::Range { range: Range { start, end }, step: Some(((end-start)/steps, 0)) }
+    let max_k = 2;
+    let min_k = 2;
+    let steps = 4;
+    let kernel_size = move |named_vals: &[NamedVal<FindMotifsRunConfigFields>]| match named_vals.iter().find(|field| field.path().eq(&FindMotifsRunConfigFields::Window)) {
+        None => RangeOrValue::Value(100),
+        Some(value) => {
+            let window = value.val().to_i64(0) as u32;
+            debug!("Window: window={window}");
+            let end = window.saturating_mul(max_k);
+            let start = window / min_k;
+            RangeOrValue::Range {
+                range: Range { start, end },
+                step: Some(((end - start) / steps, 0)),
             }
         }
     };
@@ -857,22 +873,25 @@ pub fn run_all_find_motifs_config_1() -> FindMotifsRunConfigRangeOrValue<FindMot
     FindMotifsRunConfigRangeOrValue {
         id: None,
         step: RangeOrValue::Value(10),
-        window: RangeOrValue::Range { range: Range { start: 10, end: 101 }, step: Some((10, 0)) },
+        window: RangeOrValue::Range {
+            range: Range { start: 10, end: 101 },
+            step: Some((10, 0)),
+        },
         // freq_filter: None,
         freq_filter: Some(vec![
             AverageFilter(AverageFilterParamsRangeOrValue {
                 window: RangeOrValue::dynamic(kernel_size),
                 step: RangeOrValue::Value(2),
             }),
-        //     // BandPassFilter(BandPassFilterParamsRangeOrValue {
-        //     //     low_hz: RangeOrValue::Range { range: Range { start: 0., end: 100. }, step: Some((10., 1)) },
-        //     //     band_hz: RangeOrValue::Value(2.),
-        //     //     // kernel_size: RangeOrValue::Value(10),
-        //     //     // kernel_size: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: Some((50, 0)) },
-        //     //     kernel_size: RangeOrValue::dynamic(kernel_size),
-        //     //     stride: RangeOrValue::Value(10),
-        //     //     padding: PaddingRangeOrValue::Zero(ZeroPaddingRangeOrValue::default()),
-        //     // })
+            //     // BandPassFilter(BandPassFilterParamsRangeOrValue {
+            //     //     low_hz: RangeOrValue::Range { range: Range { start: 0., end: 100. }, step: Some((10., 1)) },
+            //     //     band_hz: RangeOrValue::Value(2.),
+            //     //     // kernel_size: RangeOrValue::Value(10),
+            //     //     // kernel_size: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: Some((50, 0)) },
+            //     //     kernel_size: RangeOrValue::dynamic(kernel_size),
+            //     //     stride: RangeOrValue::Value(10),
+            //     //     padding: PaddingRangeOrValue::Zero(ZeroPaddingRangeOrValue::default()),
+            //     // })
         ]),
         // finder_kind: FinderKindRangeOrValue::CrossLoader(CrossLoaderRunConfigRangeOrValue {
         //     similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
@@ -881,17 +900,15 @@ pub fn run_all_find_motifs_config_1() -> FindMotifsRunConfigRangeOrValue<FindMot
         //         slices: RangeOrValue::Value(200),
         //     }),
         // }),
-        finder_kind: FinderKindRangeOrValue::CrossLoader(
-            CrossLoaderRunConfigRangeOrValue {
-                similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(true) }),
-                slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue {
-                    aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue {
-                        q: RangeOrValue::Value(0.5),
-                        // q: RangeOrValue::Range { range: 0.0..0.1, step: Some((0.05, 2)) },
-                    }),
+        finder_kind: FinderKindRangeOrValue::CrossLoader(CrossLoaderRunConfigRangeOrValue {
+            similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(true) }),
+            slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue {
+                aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue {
+                    q: RangeOrValue::Value(0.5),
+                    // q: RangeOrValue::Range { range: 0.0..0.1, step: Some((0.05, 2)) },
                 }),
-            }
-        ),
+            }),
+        }),
         max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue { count: RangeOrValue::Value(100) })),
         min_slices: Some(RangeOrValue::Value(2)),
     }
@@ -938,8 +955,7 @@ fn run_all_select_motifs_config_1<P: FieldName + 'static>() -> SelectMotifsRunCo
 
 #[cfg(test)]
 mod tests {
-    use thoosa_common::tch_error::tch_result;
-    use crate::run_all::{run_all, run_all_config_0, AllConfigs, FindAndSelect, RunAllSettings, run_all_config_test};
+    use crate::run_all::{AllConfigs, FindAndSelect, RunAllSettings, run_all, run_all_config_0, run_all_config_test};
     use futures::executor::block_on;
     use futures::future::BoxFuture;
     use log::LevelFilter::Debug;
@@ -964,6 +980,7 @@ mod tests {
     use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, OOMHandler};
     use thoosa_common::runner::run_ctx::RunCtxImpl;
+    use thoosa_common::tch_error::tch_result;
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::transforms::filters::InputFilterRangeOrValue::BandPassFilter;
@@ -975,22 +992,25 @@ mod tests {
     use thoosa_motifs::fragments::Resolution;
     use thoosa_motifs::motifs_store::{MotifsStore, create_motif_tables};
     use thoosa_motifs::stages::find_and_select_motifs::{FindAndSelectMotifsRunConfigFields, FindAndSelectMotifsRunConfigRangeOrValue};
-    use thoosa_motifs::stages::find_motifs_run_config::{AggrRangeOrValue, CoherenceRunConfigRangeOrValue, CrossLoaderRunConfigRangeOrValue, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, FinderKindRangeOrValue, InlierRatioRunConfigRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MetricsRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigFields, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
+    use thoosa_motifs::stages::find_motifs_run_config::{
+        AggrRangeOrValue, CoherenceRunConfigRangeOrValue, CrossLoaderRunConfigRangeOrValue, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, FinderKindRangeOrValue, InlierRatioRunConfigRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MetricsRangeOrValue,
+        MotifCriterionConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigFields, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue,
+    };
     use thoosa_motifs::stages::tensor_loader::RawTensorLoader;
     use thoosa_motifs::stages::train_label_nets::TrainLabelNetRunConfigRangeOrValue;
     use thoosa_motifs::tch_test_utils::{Interval, resource_tensor_two_easy_motifs};
     use thoosa_motifs::train_nets;
-    use thoosa_motifs::train_nets::{FinalNetArgsRangeOrValue, LabelNetTypeArgsRangeOrValue, LinNetArgs, LinNetArgsRangeOrValue, MotifCosineNetArgsRangeOrValue, TrainFinalNetRunConfigRangeOrValue, TrainMotifNetRunConfigRangeOrValue, TRIGGER_RESET_IN_COSINE_MOTIF_NODE};
+    use thoosa_motifs::train_nets::{FinalNetArgsRangeOrValue, LabelNetTypeArgsRangeOrValue, LinNetArgs, LinNetArgsRangeOrValue, MotifCosineNetArgsRangeOrValue, TRIGGER_RESET_IN_COSINE_MOTIF_NODE, TrainFinalNetRunConfigRangeOrValue, TrainMotifNetRunConfigRangeOrValue};
     use thoosa_shared::applicables_runner::{Input, Output};
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::copy_mode::CpuOnly;
     use thoosa_shared::hyperparameter::FieldName;
     use thoosa_shared::perf_logging::{PERF, format_perf_map};
 
-    use thoosa_shared::test_utils::{clear_flag, TestSignalKind};
+    use thoosa_common::runner::sync_stage::SyncStage;
+    use thoosa_shared::test_utils::{TestSignalKind, clear_flag};
     use thoosa_shared::traits::{Adjustable, Data, WithId};
     use thoosa_shared::traits::{OutId, Stage};
-    use thoosa_common::runner::sync_stage::{SyncStage};
     use thoosa_shared::{RangeOrValue, ThoError, mono_key, panic_to_err_async};
     use thoosa_shims::context::ThoCudaContext;
     use thoosa_store::rusqlite::Transaction;
@@ -1011,19 +1031,26 @@ mod tests {
 
     impl PrepareRunAllDataInput {
         fn new(tensors_path: PathBuf, resources_per_label: usize) -> Self {
-            Self { id: mono_key!("prepare_run_all_data", "stage").into(), tensors_path, resources_per_label }
+            Self {
+                id: mono_key!("prepare_run_all_data", "stage").into(),
+                tensors_path,
+                resources_per_label,
+            }
         }
     }
 
     impl Data for PrepareRunAllDataInput {
         type Metrics = ();
 
-
         fn size(&self) -> Self::Metrics {}
 
-        fn tho_device_idx(&self) -> usize { 0 }
+        fn tho_device_idx(&self) -> usize {
+            0
+        }
 
-        fn mem_size(&self) -> u64 { 0 }
+        fn mem_size(&self) -> u64 {
+            0
+        }
     }
 
     impl Input for PrepareRunAllDataInput {}
@@ -1031,18 +1058,27 @@ mod tests {
     impl WithId for PrepareRunAllDataInput {
         type ID = SynKey;
 
-        fn id(&self) -> &Self::ID { &self.id }
+        fn id(&self) -> &Self::ID {
+            &self.id
+        }
     }
 
     impl BorrowRef for PrepareRunAllDataInput {
-        fn protect(&self, _device: usize) -> thoosa_common::runner::residency::ResidencyLease { thoosa_common::runner::residency::ResidencyLease::default() }
-
-        type Out<'a> = Self where Self: 'a;
-
-        fn borrow_ref<'a>(&'a self, _to_tho_device_idx: usize) -> impl std::future::Future<Output = Result<Self::Out<'a>, ThoError>> + Send where Self: 'a {
-            std::future::ready(Ok(self.clone()))
+        fn protect(&self, _device: usize) -> thoosa_common::runner::residency::ResidencyLease {
+            thoosa_common::runner::residency::ResidencyLease::default()
         }
 
+        type Out<'a>
+            = Self
+        where
+            Self: 'a;
+
+        fn borrow_ref<'a>(&'a self, _to_tho_device_idx: usize) -> impl std::future::Future<Output = Result<Self::Out<'a>, ThoError>> + Send
+        where
+            Self: 'a,
+        {
+            std::future::ready(Ok(self.clone()))
+        }
     }
 
     #[derive(Debug)]
@@ -1054,12 +1090,15 @@ mod tests {
     impl Data for PrepareRunAllDataOutput {
         type Metrics = ();
 
-
         fn size(&self) -> Self::Metrics {}
 
-        fn tho_device_idx(&self) -> usize { 0 }
+        fn tho_device_idx(&self) -> usize {
+            0
+        }
 
-        fn mem_size(&self) -> u64 { 0 }
+        fn mem_size(&self) -> u64 {
+            0
+        }
     }
 
     impl Output for PrepareRunAllDataOutput {}
@@ -1067,12 +1106,14 @@ mod tests {
     impl WithId for PrepareRunAllDataOutput {
         type ID = SynKey;
 
-        fn id(&self) -> &Self::ID { &self.id }
+        fn id(&self) -> &Self::ID {
+            &self.id
+        }
     }
 
     #[derive(Debug)]
     struct PrepareRunAllData {
-        label_makers: Vec<fn() -> anyhow::Result<(Tensor, Vec<Vec<Vec<Interval>>>)>>
+        label_makers: Vec<fn() -> anyhow::Result<(Tensor, Vec<Vec<Vec<Interval>>>)>>,
     }
 
     impl PrepareRunAllData {
@@ -1084,7 +1125,9 @@ mod tests {
     impl Adjustable for PrepareRunAllData {}
 
     impl OutId for PrepareRunAllData {
-        fn out_id<'a>(&self, input_id: &<Self::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID { input_id.clone() }
+        fn out_id<'a>(&self, input_id: &<Self::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
+            input_id.clone()
+        }
     }
 
     impl Stage for PrepareRunAllData {
@@ -1097,7 +1140,6 @@ mod tests {
         fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
             let mut import_hash = HashMap::new();
             for i in 0..input.resources_per_label {
-
                 for (label_i, maker) in self.label_makers.iter().enumerate() {
                     let (t, _intervals) = maker()?;
                     let stem = format!("t_{label_i}_{i}");
@@ -1125,11 +1167,9 @@ mod tests {
         do_heavy_test_run_all("heavy_test_run_all_local").await?;
         global_ctx.shutdown().await;
 
-
         info!("local perf:\n{}", format_perf_map(&PERF));
         Ok(())
     }
-
 
     // RUST_LOG=Info cargo nextest run  --no-capture --profile heavy heavy_test_run_all_ipc --features test-restart-hooks > /tmp/heavy_test_run_all_ipc.log 2>&1
     #[test]
@@ -1151,29 +1191,21 @@ mod tests {
                 // set_max_level(Debug);
                 let test_dir = Path::new("/tmp").join(test_fn_name);
                 return {
-                    let ws = Arc::new(RwLock::new(thoosa_motifs::motifs_ws::new_motifs_workspace(
-                        test_dir.clone(),
-                        WsConfigs::new(1, 0, 100)
-                    )?));
+                    let ws = Arc::new(RwLock::new(thoosa_motifs::motifs_ws::new_motifs_workspace(test_dir.clone(), WsConfigs::new(1, 0, 100))?));
                     // Heavy IPC tests use the same typed worker protocol as the application entry point.
-                    let r = CudaWorker::run_worker(
-                        sock_path,
-                        &ws,
-                        crate::cuda_worker_endpoint_inits(),
-                        ThoDevice::from(1usize),
-                    ).await;
+                    let r = CudaWorker::run_worker(sock_path, &ws, crate::cuda_worker_endpoint_inits(), ThoDevice::from(1usize)).await;
 
                     info!("heavy_test_run_all_ipc: r={r:?}");
 
                     r
-                }
+                };
             },
         )?)
     }
 
-    const CHANNELS:u32 = 3;
+    const CHANNELS: u32 = 3;
 
-    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="do_heavy_test_run_all"))]
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "do_heavy_test_run_all"))]
     async fn do_heavy_test_run_all(test_name: &str) -> anyhow::Result<()> {
         tch::manual_seed(42);
         let settings = RunAllSettings {
@@ -1182,13 +1214,13 @@ mod tests {
             train_resource_group: "pure group 20".to_string(),
             valid_resource_group: "pure group 10".to_string(),
 
-            motifs_epochs : 30,
-            labels_epochs : 30,
-            final_epochs : 30,
-            train_motifs_opt_config : Arc::new(OptConfig::new(10, 3)),
-            train_labels_opt_config : Arc::new(OptConfig::new(10, 3)),
-            train_final_opt_config : Arc::new(OptConfig::new(10, 3)),
-            max_batch_size : 10,
+            motifs_epochs: 30,
+            labels_epochs: 30,
+            final_epochs: 30,
+            train_motifs_opt_config: Arc::new(OptConfig::new(10, 3)),
+            train_labels_opt_config: Arc::new(OptConfig::new(10, 3)),
+            train_final_opt_config: Arc::new(OptConfig::new(10, 3)),
+            max_batch_size: 10,
         };
         // let settings = RunAllSettings {
         //     resources_per_label: 90,
@@ -1230,34 +1262,19 @@ mod tests {
 
         let base_path = test_dir.to_string_lossy().to_string();
 
-
-        let ws = Arc::new(RwLock::new(thoosa_motifs::motifs_ws::new_motifs_workspace(
-            test_dir.clone(),
-            WsConfigs::new(CHANNELS,
-                           0,
-                           100)
-        )?));
+        let ws = Arc::new(RwLock::new(thoosa_motifs::motifs_ws::new_motifs_workspace(test_dir.clone(), WsConfigs::new(CHANNELS, 0, 100))?));
         let ws_rc = Arc::clone(&ws);
         let max_y = 30.0;
 
-
-        let prepare_stage = Arc::new(PrepareRunAllData::new(vec![
-            tensor_0,
-            tensor_1,
-            tensor_2,
-        ]));
+        let prepare_stage = Arc::new(PrepareRunAllData::new(vec![tensor_0, tensor_1, tensor_2]));
         let prepare_input = Arc::new(PrepareRunAllDataInput::new(ws.read().tensors_path().clone(), settings.resources_per_label));
         let prepare_oom_handler = OOMHandler::<NoInputAdjuster, NoStageAdjuster, NoRunCtxAdjuster, ()>::new(vec![], None);
         let PrepareRunAllDataOutput { import_hash, .. } = prepare_oom_handler.run(&prepare_stage, prepare_input, RunCtxImpl::new(0, "prepare_run_all_data"), NoContexts).await?;
 
-
         let tensors_path = ws.read().tensors_path().clone();
         let tensors_path_for_import = ws.read().tensors_path().clone();
 
-        let sql_store = Arc::new(SqlStore::from_path_with_tables(ws.read().store_path(), vec![
-            create_tables,
-            create_motif_tables
-        ]).await?);
+        let sql_store = Arc::new(SqlStore::from_path_with_tables(ws.read().store_path(), vec![create_tables, create_motif_tables]).await?);
         let mut store: Arc<dyn MotifsStore> = sql_store.clone();
 
         debug!("heavy_test_run_all: import_hash={import_hash:?}");
@@ -1266,16 +1283,12 @@ mod tests {
             &ws,
             sql_store.as_ref(),
             &["label_0", "label_1", "label_2"],
-            move || {
-                Ok(import_hash.clone())
-            },
+            move || Ok(import_hash.clone()),
             // None::<Box<dyn Fn(String) -> Result<Tensor, ThoosaError> + Sync + Send>>,
-            |key| {
-                Ok(Tensor::load(tensors_path_for_import.join(format!("{}.pt", key)))?)
-            },
+            |key| Ok(Tensor::load(tensors_path_for_import.join(format!("{}.pt", key)))?),
             None,
             true,
-            |t: &Transaction|{
+            |t: &Transaction| {
                 for pure_sets_len in settings.pure_sets_len {
                     SqlStore::save_pure_sets(pure_sets_len.0, pure_sets_len.1, &t)?;
                 }
@@ -1283,7 +1296,8 @@ mod tests {
                 Ok(())
             },
             // Some(&[(20, true), (10, true)])
-        ).await?;
+        )
+        .await?;
 
         store.bind_run(store.save_run("heavy_test_run_all".into()).await?)?;
 
@@ -1319,17 +1333,10 @@ mod tests {
         // let all_configs = run_all_config_0(&run_all_args);
         let all_configs = run_all_config_test(&run_all_args, &settings);
 
-        let r = panic_to_err_async!({run_all(
-            &ws,
-            &store,
-            &loader,
-            ctx,
-            &run_all_args,
-            all_configs,
-        )});
+        let r = panic_to_err_async!(run_all(&ws, &store, &loader, ctx, &run_all_args, all_configs,));
 
         let final_nets = store.list_trained_nets_loss_gt(0.0, TRAIN_FINAL_NETS_RUN_CONFIG_TYPE).await?;
-        let final_nets =store.list_trained_nets(TrainedNetsBy::TrainNetId(final_nets.into_iter().map(|tne|tne.id).collect()), None, None).await?;
+        let final_nets = store.list_trained_nets(TrainedNetsBy::TrainNetId(final_nets.into_iter().map(|tne| tne.id).collect()), None, None).await?;
 
         info!("heavy_test_run_all: final_nets={final_nets:?}");
 
@@ -1337,61 +1344,17 @@ mod tests {
     }
 
     fn tensor_0() -> anyhow::Result<(Tensor, Vec<Vec<Vec<Interval>>>)> {
-
-        let r = resource_tensor_two_easy_motifs(
-            rng().random_range(1000..2000),
-            CHANNELS as usize,
-            100,
-            2,
-            TestSignalKind::Pulse,
-            2,
-            TestSignalKind::Triangle,
-            100,
-            0.01,
-            0.2,
-            None
-        )?;
+        let r = resource_tensor_two_easy_motifs(rng().random_range(1000..2000), CHANNELS as usize, 100, 2, TestSignalKind::Pulse, 2, TestSignalKind::Triangle, 100, 0.01, 0.2, None)?;
         Ok((r.0, r.1))
     }
 
     fn tensor_1() -> anyhow::Result<(Tensor, Vec<Vec<Vec<Interval>>>)> {
-
-        let r = resource_tensor_two_easy_motifs(
-            rng().random_range(1000..2000),
-            CHANNELS as usize,
-            100,
-            2,
-            TestSignalKind::Sin,
-            2,
-            TestSignalKind::Trill,
-            100,
-            0.01,
-            0.2,
-            None
-        )?;
+        let r = resource_tensor_two_easy_motifs(rng().random_range(1000..2000), CHANNELS as usize, 100, 2, TestSignalKind::Sin, 2, TestSignalKind::Trill, 100, 0.01, 0.2, None)?;
         Ok((r.0, r.1))
     }
 
     fn tensor_2() -> anyhow::Result<(Tensor, Vec<Vec<Vec<Interval>>>)> {
-
-        let r = resource_tensor_two_easy_motifs(
-            rng().random_range(1000..2000),
-            CHANNELS as usize,
-            100,
-            2,
-            TestSignalKind::ChirpDown,
-            2,
-            TestSignalKind::ChirpUp,
-            100,
-            0.01,
-            0.2,
-            None
-        )?;
+        let r = resource_tensor_two_easy_motifs(rng().random_range(1000..2000), CHANNELS as usize, 100, 2, TestSignalKind::ChirpDown, 2, TestSignalKind::ChirpUp, 100, 0.01, 0.2, None)?;
         Ok((r.0, r.1))
     }
-
-
-
-
-
 }

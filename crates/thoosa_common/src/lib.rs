@@ -8,30 +8,32 @@
 extern crate core;
 extern crate self as thoosa_common;
 
-pub mod utils;
 pub mod run_config_loader;
 pub mod tho_device;
+pub mod utils;
 
+pub mod args;
 pub mod bool_iter;
+pub mod commands;
 pub mod cuda_copier;
 pub mod cuda_utils;
+pub mod data_with_extra;
 pub mod dims;
+pub mod ipc;
+pub mod nets;
 pub mod parzen;
+pub mod progress_socket;
 pub mod resources;
+pub mod runner;
+pub mod stages;
 pub mod tho_tensor;
+pub mod torch_runner;
 pub mod transforms;
 pub mod ws;
-pub mod torch_runner;
-pub mod runner;
-pub mod nets;
-pub mod ipc;
-pub mod data_with_extra;
-pub mod args;
-pub mod stages;
-pub mod commands;
-pub mod progress_socket;
 
-mod version { include!(concat!(env!("OUT_DIR"), "/version.rs")); }
+mod version {
+    include!(concat!(env!("OUT_DIR"), "/version.rs"));
+}
 
-pub mod tch_error;
 pub mod instance_cache;
+pub mod tch_error;

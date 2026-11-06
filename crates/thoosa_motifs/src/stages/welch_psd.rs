@@ -1,9 +1,9 @@
-use thoosa_common::tch_error::tch_result;
 use crate::motifs_store::MotifsStore;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::ops::Range;
 use std::sync::Arc;
+use thoosa_common::tch_error::tch_result;
 
 use log::{debug, info, warn};
 use parking_lot::RwLock;
@@ -12,6 +12,7 @@ use thoosa_common::dims::{Dims, LocalSelect};
 use thoosa_common::runner::adjusters::splits::{SplitsAdjuster, SplitsAdjusterContextImpl};
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
 use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoRunCtxAdjuster, NoStageAdjuster, NoopRunCtxContext, NoopRunnableContext, OOMHandler, input_adjuster};
+use thoosa_common::runner::sync_stage::SyncStage;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
 use thoosa_cpu_data_derive::CpuData;
@@ -20,13 +21,12 @@ use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::resource::{Resource, ResourcesConfig};
 use thoosa_shared::traits::{Adjustable, AsyncStage, MaxParallelCtx, MonoMetrics, OutId, RunCtx, Stage, ThoSelector, WithId};
-use thoosa_common::runner::sync_stage::{SyncStage};
 use thoosa_shared::{ThoError, mono_key};
 
-use thoosa_common::dims::ChannelsData;
 use crate::stages::cross_loader::ResourcesConfigInput;
 use crate::stages::motif_stats::RANDOM_STATS_GROUP;
 use crate::stages::stage_ids::{WELCH_PSD, WELCH_PSD_PER_RESOURCE};
+use thoosa_common::dims::ChannelsData;
 use thoosa_shared::tracked_await::t;
 
 #[derive(Clone, Debug)]
@@ -72,7 +72,7 @@ impl From<Range<MonoMetrics<0, 2>>> for WelchChannelsSelector {
 impl LocalSelect<SynKey, WelchChannelsSelector> for ThoTensor<WelchInputChannels, SynKey> {
     type Output = ThoTensor<WelchInputChannels, SynKey>;
 
-    fn local_subview(id:&SynKey, t:&Tensor, selector: WelchChannelsSelector) -> Result<Self::Output, ThoError> {
+    fn local_subview(id: &SynKey, t: &Tensor, selector: WelchChannelsSelector) -> Result<Self::Output, ThoError> {
         let size: MonoMetrics<0, 2> = t.size().try_into()?;
         let ranges = MonoMetrics::<0, 2>::map_to_ranges(&selector.0.start, &selector.0.end);
         debug!("WelchChannelsSelector::subview: ranges={ranges:?} size={size:?}");
@@ -100,10 +100,7 @@ where
     RC: ResourcesConfig + Debug + Send + Sync + Clone,
 {
     pub fn new(resources: Option<ResourcesConfigInput<RC>>, nperseg: u32, noverlap: u32) -> Self {
-        let resources_key = resources
-            .as_ref()
-            .map(|v| format!("{:?}", v.resources_config()))
-            .unwrap_or_else(|| format!("not_in_group:{RANDOM_STATS_GROUP}"));
+        let resources_key = resources.as_ref().map(|v| format!("{:?}", v.resources_config())).unwrap_or_else(|| format!("not_in_group:{RANDOM_STATS_GROUP}"));
 
         Self {
             id: SynKey::new([
@@ -131,11 +128,7 @@ where
     }
 }
 
-impl<RC> Input for FrequenciesStatsInput<RC>
-where
-    RC: ResourcesConfig + Debug + Send + Sync + Clone,
-{
-}
+impl<RC> Input for FrequenciesStatsInput<RC> where RC: ResourcesConfig + Debug + Send + Sync + Clone {}
 
 impl<RC> WithId for FrequenciesStatsInput<RC>
 where
@@ -199,7 +192,7 @@ impl<C> SyncStage for WelchPsdPerResource<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
-    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="WelchPsdPerResource::do_run"))]
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "WelchPsdPerResource::do_run"))]
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         let t = input.local()?;
         let size = t.size();
@@ -298,12 +291,8 @@ where
     L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + Send + Sync + 'static,
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
-    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="WelchPSD::run"))]
-    async fn run(
-        self: Arc<Self>,
-        input: Arc<FrequenciesStatsInput<RC>>,
-        mut ctx: Self::Ctx,
-    ) -> Result<Self::Out, ThoError>
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "WelchPSD::run"))]
+    async fn run(self: Arc<Self>, input: Arc<FrequenciesStatsInput<RC>>, mut ctx: Self::Ctx) -> Result<Self::Out, ThoError>
     where
         for<'a> Self::In<'a>: Send + Sync,
     {
@@ -313,8 +302,7 @@ where
 
         validate_welch_params(nperseg, noverlap)?;
 
-        let sample_rate = thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(self.ws))
-        .sample_rate() as f64;
+        let sample_rate = thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(self.ws)).sample_rate() as f64;
 
         let resources = t!(self.load_resources_for_input(resources_config)).await?;
         if resources.is_empty() {
@@ -327,17 +315,10 @@ where
 
         for resource in resources.into_iter() {
             if resource.length() < nperseg as u32 {
-                return Err(ThoError::new(format!(
-                    "WelchPSD: resource_id={} length={} is shorter than nperseg={nperseg}",
-                    resource.id(), resource.length()
-                )));
+                return Err(ThoError::new(format!("WelchPSD: resource_id={} length={} is shorter than nperseg={nperseg}", resource.id(), resource.length())));
             }
 
-            let loaded = t!(Arc::clone(&self.loader)
-                .run_cached(
-                    Arc::new(resource.clone()),
-                    ctx.branch(false),
-                )).await?;
+            let loaded = t!(Arc::clone(&self.loader).run_cached(Arc::new(resource.clone()), ctx.branch(false),)).await?;
 
             let loaded = BorrowRef::borrow_ref(&loaded, 0).await?;
             // The async stage owns independent CPU storage, not an alias of a cache borrow.
@@ -351,29 +332,19 @@ where
 
             debug!("WelchPSD::run: resource_id={} welch_input_size={welch_input_size:?} nperseg={nperseg} noverlap={noverlap}", resource.id());
 
-            let resource_psd = t!(OOMHandler::<'_, '_, _, NoStageAdjuster, NoRunCtxAdjuster, WelchChannelsSelector>::new(
-                vec![Adjusters::Input(input_adjuster(SplitsAdjuster::<WelchChannelsSelector, MonoMetrics<0, 2>>::new([1, 0].into())))],
-                None,
-            )
-            .run(
-                &welch_stage,
-                Arc::clone(&welch_input),
-                ctx.branch(false),
-                Contexts::new(
-                    SplitsAdjusterContextImpl::new(
-                        welch_input_size,
-                        SingleDimTensorOutputBuilder::new(
-                            out_id,
-                            0,
-                            &[channels, welch_freq_bins(nperseg)],
-                            (Kind::Float, Device::Cpu),
-                            BuildAs::Append,
-                        )?,
+            let resource_psd = t!(
+                OOMHandler::<'_, '_, _, NoStageAdjuster, NoRunCtxAdjuster, WelchChannelsSelector>::new(vec![Adjusters::Input(input_adjuster(SplitsAdjuster::<WelchChannelsSelector, MonoMetrics<0, 2>>::new([1, 0].into())))], None,).run(
+                    &welch_stage,
+                    Arc::clone(&welch_input),
+                    ctx.branch(false),
+                    Contexts::new(
+                        SplitsAdjusterContextImpl::new(welch_input_size, SingleDimTensorOutputBuilder::new(out_id, 0, &[channels, welch_freq_bins(nperseg)], (Kind::Float, Device::Cpu), BuildAs::Append,)?,),
+                        NoopRunnableContext {},
+                        NoopRunCtxContext {},
                     ),
-                    NoopRunnableContext {},
-                    NoopRunCtxContext {},
-                ),
-            )).await?;
+                )
+            )
+            .await?;
 
             // The result is owned here, so transfer its storage into the accumulator.
             let resource_psd_t = resource_psd.into_local()?;
@@ -453,20 +424,17 @@ pub fn welch_psd_1d(x: &Tensor, fs: f64, nperseg: i64, noverlap: i64) -> Result<
     let segs = tch_result(segs.f_mul(&win))?;
 
     let x_fft = tch_result(segs.f_fft_rfft(Some(nperseg), 1, "forward"))?;
-    let periodograms = tch_result(tch_result(tch_result(x_fft
-        .f_abs())?
-        .f_pow_tensor_scalar(2))?
-        .f_div(&tch_result(win_power.f_mul_scalar(fs))?))?;
+    let periodograms = tch_result(tch_result(tch_result(x_fft.f_abs())?.f_pow_tensor_scalar(2))?.f_div(&tch_result(win_power.f_mul_scalar(fs))?))?;
 
     Ok(tch_result(periodograms.f_mean_dim(0, false, None))?)
 }
 
 #[cfg(test)]
 mod tests {
-    use thoosa_common::tch_error::tch_result;
     use super::welch_psd_1d;
     use tch::Kind::Float;
     use tch::Tensor;
+    use thoosa_common::tch_error::tch_result;
     use thoosa_shared::ThoError;
 
     #[test]

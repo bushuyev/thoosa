@@ -1,6 +1,6 @@
-use crate::tch_error::tch_result;
 use crate::parzen::npe;
 use crate::parzen::optimizer::Distribution;
+use crate::tch_error::tch_result;
 use log::debug;
 use tch::Tensor;
 use thoosa_shared::val::Val;
@@ -52,40 +52,19 @@ mod multi_variate_parzen_estimator_tests {
         let samples = [-1.0, 0.0, 1.0];
 
         let mvpe = MultiVariateParzenEstimator::new(vec![
-            NumericalParzenEstimator::new(
-                None,
-                -3.0f64,
-                3.0f64,
-                BandwidthFactor::default(),
-                true,
-                None,
-            )
-            .clc_distr(Tensor::from_slice(&samples), None).unwrap(),
-            NumericalParzenEstimator::new(
-                None,
-                -3.0f64,
-                3.0f64,
-                BandwidthFactor::default(),
-                true,
-                None,
-            )
-            .clc_distr(Tensor::from_slice(&samples), None).unwrap(),
-            NumericalParzenEstimator::new(
-                None,
-                -3.0f64,
-                3.0f64,
-                BandwidthFactor::default(),
-                true,
-                None,
-            )
-            .clc_distr(Tensor::from_slice(&samples), None).unwrap(),
-        ]).unwrap();
+            NumericalParzenEstimator::new(None, -3.0f64, 3.0f64, BandwidthFactor::default(), true, None).clc_distr(Tensor::from_slice(&samples), None).unwrap(),
+            NumericalParzenEstimator::new(None, -3.0f64, 3.0f64, BandwidthFactor::default(), true, None).clc_distr(Tensor::from_slice(&samples), None).unwrap(),
+            NumericalParzenEstimator::new(None, -3.0f64, 3.0f64, BandwidthFactor::default(), true, None).clc_distr(Tensor::from_slice(&samples), None).unwrap(),
+        ])
+        .unwrap();
 
-        let v = mvpe.log_pdf(&vec![
-            vec![Val::Real(0.0)], //x0
-            vec![Val::Real(0.1)], //x1
-            vec![Val::Real(0.2)], //x2
-        ]).unwrap();
+        let v = mvpe
+            .log_pdf(&vec![
+                vec![Val::Real(0.0)], //x0
+                vec![Val::Real(0.1)], //x1
+                vec![Val::Real(0.2)], //x2
+            ])
+            .unwrap();
 
         assert_eq!(-8017, (v.double_value(&[]) * 10000.0) as isize);
     }

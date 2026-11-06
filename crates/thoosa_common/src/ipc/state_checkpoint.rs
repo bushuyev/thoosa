@@ -1,8 +1,8 @@
-use thoosa_common::tch_error::tch_result;
 use super::*;
 use crate::cuda_utils::tensor_mem_size;
-use thoosa_shared::ipc_types::{TensorKey};
-use thoosa_common::ipc::tensor_info::{WorkerTensorInfoPayload};
+use thoosa_common::ipc::tensor_info::WorkerTensorInfoPayload;
+use thoosa_common::tch_error::tch_result;
+use thoosa_shared::ipc_types::TensorKey;
 
 /// An immutable CPU recovery point, retained independently of live/offloaded state.
 /// Metadata is encoded so every restoration gets its own owned copy.
@@ -17,12 +17,16 @@ impl CpuStateCheckpoint {
         Ok(Self { info: serde_json::to_vec(&info)?, tensors })
     }
 
-    pub(crate) fn info(&self) -> Result<StageStateInfo, ThoError> { Ok(serde_json::from_slice(&self.info)?) }
+    pub(crate) fn info(&self) -> Result<StageStateInfo, ThoError> {
+        Ok(serde_json::from_slice(&self.info)?)
+    }
 
     fn from_dump(mut dump: StageStateDump) -> Result<Self, ThoError> {
-        let tensors = dump.tensors.iter().map(|(key, tensor)| {
-            WorkerTensorInfoPayload::new(TensorKey::stage_state("", "", key), tensor.kind().into(), tensor.size(), tensor_mem_size(tensor.kind(), &tensor.size()))
-        }).collect();
+        let tensors = dump
+            .tensors
+            .iter()
+            .map(|(key, tensor)| WorkerTensorInfoPayload::new(TensorKey::stage_state("", "", key), tensor.kind().into(), tensor.size(), tensor_mem_size(tensor.kind(), &tensor.size())))
+            .collect();
         Self::new(StageStateInfo::new(tensors, dump.scalars.take()), dump.tensors)
     }
 
@@ -41,8 +45,13 @@ pub(crate) async fn checkpoint_operation<T: Send + 'static>(tho_device_idx: usiz
 async fn checkpoint_operation_on<T: Send + 'static>(gate: Option<Arc<thoosa_shared::CudaActivityGate>>, future: impl Future<Output = Result<T, ThoError>> + Send + 'static) -> Result<T, ThoError> {
     let activity = gate.map(|gate| thoosa_shared::CudaActivityScope::for_operation(&gate)).transpose()?;
     tokio::spawn(async move {
-        match activity { Some(activity) => activity.run(future).await, None => future.await }
-    }).await.context("checkpoint task failed")?
+        match activity {
+            Some(activity) => activity.run(future).await,
+            None => future.await,
+        }
+    })
+    .await
+    .context("checkpoint task failed")?
 }
 
 pub(crate) async fn copy_state_tensor(tensor: Tensor, device: usize) -> Result<Tensor, ThoError> {
@@ -70,10 +79,14 @@ where
             if let Some(state) = state.as_ref() {
                 // Snapshot CPU-offloaded state directly; saving must not allocate GPU memory.
                 let scalars = serde_json::from_slice(&serde_json::to_vec(&state.scalars)?)?;
-                let tensors = state.tensors.iter().map(|(key, tensor)| {
-                    let source = tensor.local()?;
-                    Ok((key.clone(), ThoTensor::new((), tch_result(source.f_to_device_(tch::Device::Cpu, source.kind(), false, true))?)?))
-                }).collect::<Result<_, ThoError>>()?;
+                let tensors = state
+                    .tensors
+                    .iter()
+                    .map(|(key, tensor)| {
+                        let source = tensor.local()?;
+                        Ok((key.clone(), ThoTensor::new((), tch_result(source.f_to_device_(tch::Device::Cpu, source.kind(), false, true))?)?))
+                    })
+                    .collect::<Result<_, ThoError>>()?;
                 return CpuStateCheckpoint::from_dump(StageStateDump::new(scalars, tensors));
             }
             // Training checkpoints belong to the owner-managed session, never a replacement endpoint.
@@ -84,7 +97,8 @@ where
             // commit=false releases export bookkeeping while preserving live GPU state.
             export.keep_live().await?;
             Ok(checkpoint)
-        }).await
+        })
+        .await
     }
 
     pub(crate) async fn schedule_cpu_restore(self: Arc<Self>, checkpoint: Arc<CpuStateCheckpoint>) -> Result<(), ThoError> {
@@ -99,6 +113,7 @@ where
             *state = Some(Box::new(dump));
             // Upload and worker pre_run reconstruction belong to the next OOM-managed invocation.
             Ok(())
-        }).await
+        })
+        .await
     }
 }

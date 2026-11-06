@@ -1,4 +1,3 @@
-use thoosa_common::tch_error::tch_result;
 use super::*;
 use crate::dims::AnyDims;
 use crate::ipc::cuda_wokrer::{CudaWorker, InitFn, WokerRunCtx};
@@ -9,18 +8,22 @@ use crate::ipc::wraps::{SyncStageIpcWrapper, WorkerWrapperWithState};
 use crate::nets::builder::SeqBuilder;
 use crate::nets::tho_varstore::{ModConfig, ThoOptimizers};
 use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
-use crate::runner::run_ctx::{RunCtxImpl};
+use crate::runner::run_ctx::RunCtxImpl;
 use crate::ws::{Workspace, mock_ws_simp};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use tch::{Device, Kind, Reduction, nn};
+use thoosa_common::tch_error::tch_result;
 use thoosa_shared::debug_id;
 
 const ENDPOINT: &str = "TrainStepStateTest";
 type TestStep<C> = TrainStep<TrainStepXFn<AnyDims>, AnyDims, AnyDims, C>;
 
 #[derive(Debug, Serialize, Deserialize)]
-struct Init { optimizer: u8, checkpoint: PathBuf }
+struct Init {
+    optimizer: u8,
+    checkpoint: PathBuf,
+}
 impl WorkerStageInput for Init {}
 #[typetag::serde(name = "TrainStepStateTestInit")]
 impl WorkerInput for Init {}
@@ -30,7 +33,9 @@ struct WireInput(TrainStepInput<AnyDims, AnyDims>);
 #[typetag::serde(name = "TrainStepStateTestInput")]
 impl WorkerInput for WireInput {}
 impl std::borrow::Borrow<TrainStepInput<AnyDims, AnyDims>> for WireInput {
-    fn borrow(&self) -> &TrainStepInput<AnyDims, AnyDims> { &self.0 }
+    fn borrow(&self) -> &TrainStepInput<AnyDims, AnyDims> {
+        &self.0
+    }
 }
 
 async fn local_step<C: RunCtx>(optimizer: u8, device: ThoDevice, checkpoint: PathBuf) -> Result<TestStep<C>, ThoError> {
@@ -40,48 +45,67 @@ async fn local_step<C: RunCtx>(optimizer: u8, device: ThoDevice, checkpoint: Pat
         1 => nn::AdamW::default().amsgrad(true).into(),
         _ => nn::Sgd { momentum: 0.9, dampening: 0., wd: 0.01, nesterov: true }.into(),
     };
-    let (step, ()) = TrainStep::new_local(device, move |(), device| async move {
-        let config = ModConfig::new(config, move |vs| {
-            let initialize = vs.variables().is_empty();
-            // A file lets the same injected model-construction failure run in
-            // the real worker process, after tensor import has completed.
-            if !initialize && restore_failures.exists() {
-                let remaining: usize = std::fs::read_to_string(&restore_failures)?.parse()?;
-                if remaining > 0 {
-                    std::fs::write(&restore_failures, (remaining - 1).to_string())?;
-                    return Err(ThoError::oom().into());
-                }
+    let (step, ()) = TrainStep::new_local(
+        device,
+        move |(), device| async move {
+            let config = ModConfig::new(
+                config,
+                move |vs| {
+                    let initialize = vs.variables().is_empty();
+                    // A file lets the same injected model-construction failure run in
+                    // the real worker process, after tensor import has completed.
+                    if !initialize && restore_failures.exists() {
+                        let remaining: usize = std::fs::read_to_string(&restore_failures)?.parse()?;
+                        if remaining > 0 {
+                            std::fs::write(&restore_failures, (remaining - 1).to_string())?;
+                            return Err(ThoError::oom().into());
+                        }
+                    }
+                    let mut builder = SeqBuilder::new(3, None)?;
+                    let module = builder.linear_s(1, "output")?.end_seq()?.build_tch_module(&vs.root())?;
+                    if initialize {
+                        // A registered non-trainable buffer exercises the same rollback path as BatchNorm statistics.
+                        let _ = vs.root().add("test_buffer", Tensor::f_zeros([1], (Kind::Float, vs.device()))?, false);
+                        tch::no_grad(|| -> anyhow::Result<()> {
+                            for mut tensor in vs.variables().into_values() {
+                                let _ = tensor.f_fill_(0.25)?;
+                            }
+                            Ok(())
+                        })?;
+                    }
+                    Ok(module)
+                },
+                0.01,
+            );
+            let mut module = ThoTrainModule::new_on_device(config, device)?;
+            // Restoration must preserve live group options, not just the initial config.
+            module.set_lr(0.017);
+            Ok((module, ()))
+        },
+        Arc::new(Box::new(|batch| batch) as TrainStepXFn<AnyDims>),
+        |predicted, expected| {
+            if expected.f_double_value(&[0, 0])? == -999.0 {
+                return Err(ThoError::oom().into());
             }
-            let mut builder = SeqBuilder::new(3, None)?;
-            let module = builder.linear_s(1, "output")?.end_seq()?.build_tch_module(&vs.root())?;
-            if initialize {
-                // A registered non-trainable buffer exercises the same rollback path as BatchNorm statistics.
-                let _ = vs.root().add("test_buffer", Tensor::f_zeros([1], (Kind::Float, vs.device()))?, false);
-                tch::no_grad(|| -> anyhow::Result<()> {
-                    for mut tensor in vs.variables().into_values() { let _ = tensor.f_fill_(0.25)?; }
-                    Ok(())
-                })?;
-            }
-            Ok(module)
-        }, 0.01);
-        let mut module = ThoTrainModule::new_on_device(config, device)?;
-        // Restoration must preserve live group options, not just the initial config.
-        module.set_lr(0.017);
-        Ok((module, ()))
-    }, Arc::new(Box::new(|batch| batch) as TrainStepXFn<AnyDims>), |predicted, expected| {
-        if expected.f_double_value(&[0, 0])? == -999.0 { return Err(ThoError::oom().into()); }
-        Ok(predicted.f_mse_loss(expected, Reduction::Mean)?)
-    }, (), checkpoint).await?;
+            Ok(predicted.f_mse_loss(expected, Reduction::Mean)?)
+        },
+        (),
+        checkpoint,
+    )
+    .await?;
     Ok(step)
 }
 
 fn endpoint_init<'a>(_id: Option<String>, init: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _tensors: &'a AllTensors, device: &'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
         let init: Box<dyn std::any::Any> = init;
-        let Ok(init) = init.downcast::<Init>() else { return Err(ThoError::new("invalid training state test initializer")); };
+        let Ok(init) = init.downcast::<Init>() else {
+            return Err(ThoError::new("invalid training state test initializer"));
+        };
         let step = local_step::<WokerRunCtx>(init.optimizer, *device, init.checkpoint).await?;
         Ok(Box::new(WorkerWrapperWithState::<JsonIpcCodec, _, _, _>::new_with_checkpoint_input::<WireInput>(Arc::new(step), PhantomData)) as Box<dyn SyncStageIpcWrapper>)
-    }.boxed()
+    }
+    .boxed()
 }
 
 async fn step(optimizer: u8, id: String, checkpoint: PathBuf) -> Result<Arc<DynSyncStageWithStateEnum<TestStep<RunCtxImpl>>>, ThoError> {
@@ -132,10 +156,12 @@ async fn prepared_batch_round_trips() -> Result<(), ThoError> {
 
     for prefetch in [true, false] {
         for train in [true, false] {
-            let source = futures_util::stream::iter(0..4).then(move |_| async move {
-                // Label/final preparation also returns device-resident batches.
-                batch_parts(input(train)?.copy_to_device(1).await?)
-            }).boxed();
+            let source = futures_util::stream::iter(0..4)
+                .then(move |_| async move {
+                    // Label/final preparation also returns device-resident batches.
+                    batch_parts(input(train)?.copy_to_device(1).await?)
+                })
+                .boxed();
             let mut actual = vec![];
             pipeline.run_batches(source, ctx.branch(false), train, 32, prefetch, |loss| actual.push(loss)).await?;
             assert_eq!(actual.len(), 4);
@@ -184,7 +210,8 @@ async fn prepared_batch_round_trips() -> Result<(), ThoError> {
                 preparing.notify_one();
                 std::future::pending().await
             }
-        })).boxed();
+        }))
+        .boxed();
     let mut run = Box::pin(pipeline.run_batches(source, ctx.branch(false), true, 32, true, |_| {}));
     tokio::select! {
         _ = preparing.notified() => {},
@@ -207,9 +234,7 @@ async fn test_prepared_batches_local() -> Result<(), ThoError> {
 
 #[test]
 fn test_prepared_batches_ipc() -> Result<(), ThoError> {
-    crate::ipc::tests::run_ipc_test(module_path!(), async {
-        tokio::time::timeout(std::time::Duration::from_secs(30), prepared_batch_round_trips()).await?
-    }, async |sock| {
+    crate::ipc::tests::run_ipc_test(module_path!(), async { tokio::time::timeout(std::time::Duration::from_secs(30), prepared_batch_round_trips()).await? }, async |sock| {
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)?));
         CudaWorker::run_worker(sock, &ws, HashMap::from([(ENDPOINT.into(), Box::new(endpoint_init) as InitFn)]), thoosa_common::tho_device::ThoDevice::from(1usize)).await
     })
@@ -217,56 +242,63 @@ fn test_prepared_batches_ipc() -> Result<(), ThoError> {
 
 #[test]
 fn test_prepared_batches_retry_after_worker_reset_ipc() -> Result<(), ThoError> {
-    crate::ipc::tests::run_ipc_test(module_path!(), async {
-        tokio::time::timeout(std::time::Duration::from_secs(60), async {
-            let gate = GlobalCtx::global().cuda_activity_gate(1).unwrap();
-            let generation = gate.device_generation();
-            let preparing = Arc::new(tokio::sync::Notify::new());
-            let attempts = std::sync::atomic::AtomicUsize::new(0);
-            let run = crate::stages::train_net::retry_training_after_cuda_reset(Some(Arc::clone(&gate)), || {
-                let attempt = attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                let preparing = Arc::clone(&preparing);
-                async move {
-                    let pipeline = step(0, format!("reset-pipeline-{attempt}"), PathBuf::from("/tmp/unused-reset-pipeline")).await?;
-                    let source = futures_util::stream::iter(0..3).then(move |index| {
-                        let preparing = Arc::clone(&preparing);
-                        async move {
-                            // Suspend the producer while run_batches owns its
-                            // first device-resident entry and an in-flight step.
-                            // Reset must discard both, then rebuild the pipeline.
-                            if attempt == 0 && index == 1 {
-                                preparing.notify_one();
-                                std::future::pending::<()>().await;
-                            }
-                            batch_parts(input(true)?.copy_to_device(1).await?)
-                        }
-                    }).boxed();
-                    let mut losses = vec![];
-                    pipeline.run_batches(source, RunCtxImpl::new(1, "reset batches"), true, 32, true, |loss| losses.push(loss)).await?;
-                    Ok(losses)
+    crate::ipc::tests::run_ipc_test(
+        module_path!(),
+        async {
+            tokio::time::timeout(std::time::Duration::from_secs(60), async {
+                let gate = GlobalCtx::global().cuda_activity_gate(1).unwrap();
+                let generation = gate.device_generation();
+                let preparing = Arc::new(tokio::sync::Notify::new());
+                let attempts = std::sync::atomic::AtomicUsize::new(0);
+                let run = crate::stages::train_net::retry_training_after_cuda_reset(Some(Arc::clone(&gate)), || {
+                    let attempt = attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    let preparing = Arc::clone(&preparing);
+                    async move {
+                        let pipeline = step(0, format!("reset-pipeline-{attempt}"), PathBuf::from("/tmp/unused-reset-pipeline")).await?;
+                        let source = futures_util::stream::iter(0..3)
+                            .then(move |index| {
+                                let preparing = Arc::clone(&preparing);
+                                async move {
+                                    // Suspend the producer while run_batches owns its
+                                    // first device-resident entry and an in-flight step.
+                                    // Reset must discard both, then rebuild the pipeline.
+                                    if attempt == 0 && index == 1 {
+                                        preparing.notify_one();
+                                        std::future::pending::<()>().await;
+                                    }
+                                    batch_parts(input(true)?.copy_to_device(1).await?)
+                                }
+                            })
+                            .boxed();
+                        let mut losses = vec![];
+                        pipeline.run_batches(source, RunCtxImpl::new(1, "reset batches"), true, 32, true, |loss| losses.push(loss)).await?;
+                        Ok(losses)
+                    }
+                });
+                let reset = async {
+                    preparing.notified().await;
+                    GlobalCtx::global().cuda_actor(1).restart().await
+                };
+                let (losses, reset) = tokio::join!(run, reset);
+                reset?;
+                let losses = losses?;
+                assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 2);
+                assert_eq!(gate.device_generation().0, generation.0 + 1);
+                let reference = step(0, "reset-reference".into(), PathBuf::from("/tmp/unused-reset-reference")).await?;
+                assert_eq!(losses.len(), 3);
+                for actual in losses {
+                    let expected = GlobalCtx::global().execution(1).run_stage(Arc::clone(&reference), input(true)?, 1, &RunCtxImpl::new(1, "reset reference")).await?.loss;
+                    assert!((actual - expected).abs() < 1e-6, "replacement trial changed batch order or optimizer updates");
                 }
-            });
-            let reset = async {
-                preparing.notified().await;
-                GlobalCtx::global().cuda_actor(1).restart().await
-            };
-            let (losses, reset) = tokio::join!(run, reset);
-            reset?;
-            let losses = losses?;
-            assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 2);
-            assert_eq!(gate.device_generation().0, generation.0 + 1);
-            let reference = step(0, "reset-reference".into(), PathBuf::from("/tmp/unused-reset-reference")).await?;
-            assert_eq!(losses.len(), 3);
-            for actual in losses {
-                let expected = GlobalCtx::global().execution(1).run_stage(Arc::clone(&reference), input(true)?, 1, &RunCtxImpl::new(1, "reset reference")).await?.loss;
-                assert!((actual - expected).abs() < 1e-6, "replacement trial changed batch order or optimizer updates");
-            }
-            Ok(())
-        }).await?
-    }, async |sock| {
-        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)?));
-        CudaWorker::run_worker(sock, &ws, HashMap::from([(ENDPOINT.into(), Box::new(endpoint_init) as InitFn)]), thoosa_common::tho_device::ThoDevice::from(1usize)).await
-    })
+                Ok(())
+            })
+            .await?
+        },
+        async |sock| {
+            let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)?));
+            CudaWorker::run_worker(sock, &ws, HashMap::from([(ENDPOINT.into(), Box::new(endpoint_init) as InitFn)]), thoosa_common::tho_device::ThoDevice::from(1usize)).await
+        },
+    )
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -292,28 +324,34 @@ async fn test_prepared_batches_overlap_and_bound() -> Result<(), ThoError> {
     let pipeline = Arc::new(DynSyncStageWithStateEnum::Local(Arc::new(local)));
     let completed = Arc::new(AtomicUsize::new(0));
     let loaded = Arc::new(AtomicUsize::new(0));
-    let source = futures_util::stream::iter(0..4).then({
-        let completed = completed.clone();
-        let loaded = loaded.clone();
-        let prepared = prepared.clone();
-        let started = started.clone();
-        move |index| {
+    let source = futures_util::stream::iter(0..4)
+        .then({
             let completed = completed.clone();
             let loaded = loaded.clone();
             let prepared = prepared.clone();
             let started = started.clone();
-            async move {
-                assert!(index <= completed.load(Ordering::SeqCst) + 1, "prepared more than one batch ahead");
-                // Require preparation to run during the blocked synchronous
-                // invocation, not merely before the runner starts that invocation.
-                if index == 1 { started.notified().await; }
-                let batch = batch_parts(input(true)?)?;
-                loaded.fetch_add(1, Ordering::SeqCst);
-                if index == 1 { prepared.notify_one(); }
-                Ok(batch)
+            move |index| {
+                let completed = completed.clone();
+                let loaded = loaded.clone();
+                let prepared = prepared.clone();
+                let started = started.clone();
+                async move {
+                    assert!(index <= completed.load(Ordering::SeqCst) + 1, "prepared more than one batch ahead");
+                    // Require preparation to run during the blocked synchronous
+                    // invocation, not merely before the runner starts that invocation.
+                    if index == 1 {
+                        started.notified().await;
+                    }
+                    let batch = batch_parts(input(true)?)?;
+                    loaded.fetch_add(1, Ordering::SeqCst);
+                    if index == 1 {
+                        prepared.notify_one();
+                    }
+                    Ok(batch)
+                }
             }
-        }
-    }).boxed();
+        })
+        .boxed();
     let observe = async {
         prepared.notified().await;
         assert_eq!(completed.load(Ordering::SeqCst), 0);
@@ -321,8 +359,14 @@ async fn test_prepared_batches_overlap_and_bound() -> Result<(), ThoError> {
         release_tx.send(()).expect("training receiver disappeared");
     };
     let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(15), async {
-        tokio::join!(pipeline.run_batches(source, RunCtxImpl::new(1, "overlap"), true, 32, true, |_| { completed.fetch_add(1, Ordering::SeqCst); }), observe)
-    }).await?;
+        tokio::join!(
+            pipeline.run_batches(source, RunCtxImpl::new(1, "overlap"), true, 32, true, |_| {
+                completed.fetch_add(1, Ordering::SeqCst);
+            }),
+            observe
+        )
+    })
+    .await?;
     result?;
     assert_eq!(completed.load(Ordering::SeqCst), 4);
     global.shutdown().await;
@@ -344,13 +388,17 @@ async fn round_trips() -> Result<(), ThoError> {
             let was_loaded = restored.has_gpu_data(1).await;
             let saved = restored.save_epoch_checkpoint(1).await?;
             assert_eq!(restored.has_gpu_data(1).await, was_loaded, "saving must neither purge nor reload training state");
-            for _ in 0..2 { GlobalCtx::global().execution(1).run_stage(restored.clone(), input(true)?, 1, &ctx).await?; }
+            for _ in 0..2 {
+                GlobalCtx::global().execution(1).run_stage(restored.clone(), input(true)?, 1, &ctx).await?;
+            }
             // Capture multiple later epochs while retaining the recovery point.
             // Staging-buffer reuse must not overwrite saved parameters/moments.
             let newer = restored.save_epoch_checkpoint(1).await?;
             let newest = restored.save_epoch_checkpoint(1).await?;
             assert_eq!(newer.tensors.len(), newest.tensors.len());
-            for (key, tensor) in &newer.tensors { assert!(tch_result(tensor.local()?.f_equal(newest.tensors[key].local()?.as_ref()))?); }
+            for (key, tensor) in &newer.tensors {
+                assert!(tch_result(tensor.local()?.f_equal(newest.tensors[key].local()?.as_ref()))?);
+            }
             let mut failed = input(true)?;
             failed.expected_y = Some(ThoTensor::new(debug_id!("failed epoch target"), tch_result(Tensor::f_full([2, 1], -999.0, (Kind::Float, Device::Cpu)))?)?);
             let cache = Arc::new(TmpCached::new("failed_epoch_batch").await);
@@ -466,9 +514,7 @@ async fn test_train_restore_oom_local() -> Result<(), ThoError> {
 
 #[test]
 fn test_train_restore_oom_ipc() -> Result<(), ThoError> {
-    crate::ipc::tests::run_ipc_test(module_path!(), async {
-        tokio::time::timeout(std::time::Duration::from_secs(90), restore_oom_round_trip()).await?
-    }, async |sock| {
+    crate::ipc::tests::run_ipc_test(module_path!(), async { tokio::time::timeout(std::time::Duration::from_secs(90), restore_oom_round_trip()).await? }, async |sock| {
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)?));
         CudaWorker::run_worker(sock, &ws, HashMap::from([(ENDPOINT.into(), Box::new(endpoint_init) as InitFn)]), 1usize.into()).await
     })
@@ -485,9 +531,7 @@ async fn test_train_state_local() -> Result<(), ThoError> {
 
 #[test]
 fn test_train_state_ipc() -> Result<(), ThoError> {
-    crate::ipc::tests::run_ipc_test(module_path!(), async {
-        tokio::time::timeout(std::time::Duration::from_secs(90), round_trips()).await?
-    }, async |sock| {
+    crate::ipc::tests::run_ipc_test(module_path!(), async { tokio::time::timeout(std::time::Duration::from_secs(90), round_trips()).await? }, async |sock| {
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)?));
         CudaWorker::run_worker(sock, &ws, HashMap::from([(ENDPOINT.into(), Box::new(endpoint_init) as InitFn)]), thoosa_common::tho_device::ThoDevice::from(1usize)).await
     })
@@ -516,7 +560,9 @@ async fn test_train_transaction_cpu() -> Result<(), ThoError> {
     use std::sync::atomic::{AtomicBool, Ordering};
     static FAIL_LAST_CHUNK: AtomicBool = AtomicBool::new(false);
     fn loss(predicted: &Tensor, expected: &Tensor) -> anyhow::Result<Tensor> {
-        if expected.f_double_value(&[0, 0])? == 1.0 && FAIL_LAST_CHUNK.swap(false, Ordering::SeqCst) { return Err(ThoError::oom().into()); }
+        if expected.f_double_value(&[0, 0])? == 1.0 && FAIL_LAST_CHUNK.swap(false, Ordering::SeqCst) {
+            return Err(ThoError::oom().into());
+        }
         Ok(predicted.f_mse_loss(expected, Reduction::Mean)?)
     }
     let ctx = RunCtxImpl::new(0, "training transaction CPU");
@@ -543,7 +589,9 @@ async fn test_train_transaction_cpu() -> Result<(), ThoError> {
             assert!(error.is_oom());
             assert!(!error.is_retryable_oom());
             state.reset_state(saved_info)?;
-            for (key, tensor) in saved_tensors { state.set_state_tensor(&key, tensor, 0)?; }
+            for (key, tensor) in saved_tensors {
+                state.set_state_tensor(&key, tensor, 0)?;
+            }
             state.prepare_state(0)?;
             let actual = split.clone().do_run_with_state(selected.as_ref(), &mut state, &ctx)?.loss;
             let mut full_state = MutexGuard::map(full.train_module.lock().await, |state| &mut state.module);
@@ -557,7 +605,6 @@ async fn test_train_transaction_cpu() -> Result<(), ThoError> {
             let actual = split.clone().do_run_with_state(&valid, &mut state, &ctx)?.loss;
             let expected = full.clone().do_run_with_state(&valid, &mut full_state, &ctx)?.loss;
             assert!((actual - expected).abs() < 1e-5, "optimizer={optimizer}, cycle={cycle}: update differs after retry");
-
         }
         let mut state = MutexGuard::map(split.train_module.lock().await, |state| &mut state.module);
         let valid = split.clone().do_run_with_state(&uneven_input(false)?, &mut state, &ctx)?.loss;

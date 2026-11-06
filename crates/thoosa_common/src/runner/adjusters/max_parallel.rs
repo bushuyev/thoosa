@@ -9,8 +9,7 @@ use std::ops::Deref;
 use thoosa_shared::traits::{MaxParallelCtx, RunCtx};
 // use tokio::io::{AsyncReadExt, AsyncWriteExt};
 // use crate::common::runnable::Runnable;
-use thoosa_shared::traits::{Adjustable};
-
+use thoosa_shared::traits::Adjustable;
 
 #[derive(Debug)]
 pub enum MaxParallelStep {
@@ -47,9 +46,7 @@ where
     C: Adjustable + RunCtx,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PermitsAdjuster")
-            .field("step", &self.step)
-            .finish()
+        f.debug_struct("PermitsAdjuster").field("step", &self.step).finish()
     }
 }
 
@@ -58,10 +55,7 @@ where
     C: Adjustable + RunCtx,
 {
     pub fn new(step: MaxParallel) -> Self {
-        Self {
-            step,
-            pd: Default::default(),
-        }
+        Self { step, pd: Default::default() }
     }
 }
 
@@ -78,9 +72,7 @@ pub struct MaxParallelAdjustContextImpl {
 
 impl MaxParallelAdjustContextImpl {
     pub fn new() -> Self {
-        Self {
-            max_other_parallel: MAX_PARALLEL,
-        }
+        Self { max_other_parallel: MAX_PARALLEL }
     }
 }
 
@@ -92,7 +84,6 @@ impl MaxParallelAdjustContext for MaxParallelAdjustContextImpl {
     fn max_other_parallel_mut(&mut self) -> &mut MaxParallel {
         &mut self.max_other_parallel
     }
-
 }
 
 impl RunCtxContext for MaxParallelAdjustContextImpl {}
@@ -105,12 +96,7 @@ where
 {
     type A = A;
 
-    async fn adjust(
-        &self,
-        mut adjustable: <Self as Adjuster<C>>::A,
-        adjust_context: &mut C,
-    ) -> Result<<Self as Adjuster<C>>::A, AdjusterError<<Self as Adjuster<C>>::A>> {
-
+    async fn adjust(&self, mut adjustable: <Self as Adjuster<C>>::A, adjust_context: &mut C) -> Result<<Self as Adjuster<C>>::A, AdjusterError<<Self as Adjuster<C>>::A>> {
         adjustable.set_max_other_parallel(adjust_context.max_other_parallel());
 
         debug!("PermitsAdjuster::adjust: adjust_context={adjust_context:?} adjustable={adjustable:?}");
@@ -119,7 +105,6 @@ where
     }
 
     fn degrade(&self, adjust_context: &mut C) -> bool {
-
         if adjust_context.max_other_parallel() > 0 {
             *adjust_context.max_other_parallel_mut() = adjust_context.max_other_parallel().saturating_sub(self.step);
             debug!("PermitsAdjuster::degrade: adjust_context={adjust_context:?} true");
@@ -130,7 +115,6 @@ where
 
             false
         }
-
     }
 }
 
@@ -144,10 +128,7 @@ pub struct MaxParallelAndDumpToCpuAdjustableContex {
 
 impl MaxParallelAndDumpToCpuAdjustableContex {
     pub fn new(max_parallel: MaxParallelAdjustContextImpl, cpu: DumpToCpuContextImpl) -> Self {
-        Self {
-            max_parallel,
-            dump_to_cpu: cpu,
-        }
+        Self { max_parallel, dump_to_cpu: cpu }
     }
 }
 
@@ -156,9 +137,9 @@ impl RunCtxContext for MaxParallelAndDumpToCpuAdjustableContex {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use thoosa_shared::traits::MaxParallelCtx;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use crate::runner::run_ctx::RunCtxImpl;
+    use thoosa_shared::traits::MaxParallelCtx;
 
     fn ctx(_name: &'static str, want: MaxParallel) -> MaxParallelAdjustContextImpl {
         let mut c = MaxParallelAdjustContextImpl::new();

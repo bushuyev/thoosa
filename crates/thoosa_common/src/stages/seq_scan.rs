@@ -1,8 +1,8 @@
 #![allow(non_snake_case, unused_variables, unused_assignments, non_camel_case_types)]
 
-use anyhow::Context as _;
 use crate::transforms::filters::InputFilterLengthAdjuster;
 use crate::transforms::filters::{InputFilter, InputFilterBuilder, InputFilterFields, InputFilterRangeOrValue};
+use anyhow::Context as _;
 use log::debug;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -43,10 +43,7 @@ pub struct SeqScanRunConfig {
 }
 
 impl SeqScanRunConfig {
-    pub fn from_properties_map_with_id(
-        id: RunConfigId,
-        properties: &HashMap<String, Val>,
-    ) -> Result<Self, thoosa_shared::ThoError> {
+    pub fn from_properties_map_with_id(id: RunConfigId, properties: &HashMap<String, Val>) -> Result<Self, thoosa_shared::ThoError> {
         let mut seq_scan_run_config = Self::from_properties_map(None, properties)?;
 
         debug!("SeqScanRunConfig::from_properties_map_with_id: seq_scan_run_config={seq_scan_run_config:?}");
@@ -65,11 +62,7 @@ impl SeqScanRunConfig {
     }
 
     pub fn input_len_adjuster(&self) -> Arc<dyn Fn(u32) -> u32 + Send + Sync> {
-        let adjusters = self
-            .freq_filter
-            .as_ref()
-            .map(|filters| filters.iter().map(|filter| filter.adjust_length()).collect::<Vec<_>>())
-            .unwrap_or_default();
+        let adjusters = self.freq_filter.as_ref().map(|filters| filters.iter().map(|filter| filter.adjust_length()).collect::<Vec<_>>()).unwrap_or_default();
 
         Arc::new(move |len: u32| adjusters.iter().fold(len, |acc, adjust| adjust(acc)))
     }

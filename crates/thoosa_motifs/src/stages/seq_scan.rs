@@ -1,9 +1,8 @@
-use thoosa_common::tch_error::tch_result;
-use anyhow::Context as _;
 use crate::motifs_store::MotifsStore;
 use crate::stages::cross_loader::ResourcesConfigInput;
 use crate::stages::find_motifs::{FilteredLoaderStage, LoaderStageChoice};
 use crate::stages::stft::SyncStftSelector;
+use anyhow::Context as _;
 use async_trait::async_trait;
 use log::{debug, info};
 use parking_lot::RwLock;
@@ -14,11 +13,12 @@ use tch::Device::Cpu;
 use tch::Tensor;
 use tch::kind::Kind;
 use thoosa_common::dims::ChannelsData;
-use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, SelectRef};
 use thoosa_common::resources::SavableResult;
+use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, SelectRef};
 use thoosa_common::stages::freq_filter::FreqFilter;
 use thoosa_common::stages::seq_scan::{MeanAbsSeqScanMetricConfig, MeanPowerSeqScanMetricConfig, SeqScanMetric, SeqScanRunConfig};
 use thoosa_common::stages::stages_seq::{PairStage, SingleOrPair};
+use thoosa_common::tch_error::tch_result;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_cpu_data_derive::CpuData;
 use thoosa_named_derive::Named;
@@ -42,19 +42,13 @@ impl SeqScanOutput {
 
 impl Output for SeqScanOutput {}
 
-
 #[async_trait]
 impl SavableResult for SeqScanOutput {
     type Store = dyn MotifsStore;
     type Workspace = dyn crate::motifs_ws::MotifsWorkspace;
     type R = u32;
 
-    async fn save(
-        &mut self,
-        _store: &Arc<dyn MotifsStore>,
-        _ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
-        _p: Self::P<'_>
-    ) -> anyhow::Result<u32> {
+    async fn save(&mut self, _store: &Arc<dyn MotifsStore>, _ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, _p: Self::P<'_>) -> anyhow::Result<u32> {
         Ok(0)
     }
 }
@@ -138,22 +132,11 @@ where
     L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + Send + Sync + 'static,
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
-    pub async fn new(
-        ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
-        store: &Arc<dyn MotifsStore>,
-        loader: Arc<L>,
-        run_configs: Vec<SeqScanRunConfig>,
-    ) -> Result<Self, ThoError> {
+    pub async fn new(ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, store: &Arc<dyn MotifsStore>, loader: Arc<L>, run_configs: Vec<SeqScanRunConfig>) -> Result<Self, ThoError> {
         Self::new_with_chunk_size(ws, store, loader, run_configs, DEFAULT_SEQ_SCAN_CHUNK_SIZE).await
     }
 
-    pub async fn new_with_chunk_size(
-        ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
-        store: &Arc<dyn MotifsStore>,
-        loader: Arc<L>,
-        run_configs: Vec<SeqScanRunConfig>,
-        chunk_size: usize,
-    ) -> Result<Self, ThoError> {
+    pub async fn new_with_chunk_size(ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, store: &Arc<dyn MotifsStore>, loader: Arc<L>, run_configs: Vec<SeqScanRunConfig>, chunk_size: usize) -> Result<Self, ThoError> {
         if chunk_size == 0 {
             return Err(ThoError::new("SeqScanStage::new_with_chunk_size: chunk_size must be greater than zero"));
         }
@@ -166,14 +149,14 @@ where
                 async move {
                     let configured_loader = config_to_stage(&loader, &run_config, &ws).await?;
 
-                    Ok::<_, ThoError>(SeqScanConfiguredStage {
-                        run_config: Arc::new(run_config),
-                        configured_loader,
-                    })
+                    Ok::<_, ThoError>(SeqScanConfiguredStage { run_config: Arc::new(run_config), configured_loader })
                 }
             })
-            .collect::<JoinSet<Result<_, _>>>().join_all().await//TODO try_join_all
-            .into_iter().collect::<Result<Vec<_>, _>>()?;
+            .collect::<JoinSet<Result<_, _>>>()
+            .join_all()
+            .await //TODO try_join_all
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()?;
 
         Ok(Self {
             store: Arc::clone(store),
@@ -192,7 +175,8 @@ where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     type Ctx = C;
-    type In<'a> = Arc<ResourcesConfigInput<RC>>
+    type In<'a>
+        = Arc<ResourcesConfigInput<RC>>
     where
         Self: 'a;
     type Out = Arc<SeqScanOutput>;
@@ -218,21 +202,11 @@ where
             let mut batch_len = 0i64;
 
             for resource in &resources {
-                let loaded = t!(Arc::clone(&configured_stage.configured_loader)
-                    .run_cached(
-                        Arc::new(resource.clone()),
-                        ctx.branch(false),
-                    )).await?;
+                let loaded = t!(Arc::clone(&configured_stage.configured_loader).run_cached(Arc::new(resource.clone()), ctx.branch(false),)).await?;
                 let resource_len = loaded.size().dim_1();
 
                 if resource_len > max_chunk_len {
-                    t!(flush_batch_to_buckets(
-                        &batch_resources,
-                        batch_tensors.clone(),
-                        &configured_stage.run_config,
-                        &mut buckets,
-                        ctx.branch(false),
-                    )).await?;
+                    t!(flush_batch_to_buckets(&batch_resources, batch_tensors.clone(), &configured_stage.run_config, &mut buckets, ctx.branch(false),)).await?;
                     batch_resources.clear();
                     batch_tensors.clear();
                     batch_len = 0;
@@ -252,25 +226,13 @@ where
                     continue;
                 }
 
-                t!(flush_batch_to_buckets(
-                    &batch_resources,
-                    batch_tensors.clone(),
-                    &configured_stage.run_config,
-                    &mut buckets,
-                    ctx.branch(false),
-                )).await?;
+                t!(flush_batch_to_buckets(&batch_resources, batch_tensors.clone(), &configured_stage.run_config, &mut buckets, ctx.branch(false),)).await?;
                 batch_resources.clear();
                 batch_tensors.clear();
                 batch_len = 0;
             }
 
-            t!(flush_batch_to_buckets(
-                &batch_resources,
-                batch_tensors,
-                &configured_stage.run_config,
-                &mut buckets,
-                ctx.branch(false),
-            )).await?;
+            t!(flush_batch_to_buckets(&batch_resources, batch_tensors, &configured_stage.run_config, &mut buckets, ctx.branch(false),)).await?;
 
             info!(
                 "SeqScanStage::run: run_config_id={:?} metric={:?} chunk_size={} channel_bucket_sizes={:?}",
@@ -285,13 +247,7 @@ where
     }
 }
 
-async fn flush_batch_to_buckets<C>(
-    batch_resources: &[Resource],
-    batch_tensors: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>,
-    run_config: &SeqScanRunConfig,
-    buckets: &mut SeqScanBucketsByChannel,
-    ctx: C,
-) -> Result<(), ThoError>
+async fn flush_batch_to_buckets<C>(batch_resources: &[Resource], batch_tensors: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>, run_config: &SeqScanRunConfig, buckets: &mut SeqScanBucketsByChannel, ctx: C) -> Result<(), ThoError>
 where
     C: RunCtx,
 {
@@ -310,32 +266,18 @@ where
     Ok(())
 }
 
-fn assign_resource_to_buckets(
-    resource: &Resource,
-    resource_t: &Tensor,
-    run_config: &SeqScanRunConfig,
-    buckets: &mut SeqScanBucketsByChannel,
-) -> Result<(), ThoError> {
+fn assign_resource_to_buckets(resource: &Resource, resource_t: &Tensor, run_config: &SeqScanRunConfig, buckets: &mut SeqScanBucketsByChannel) -> Result<(), ThoError> {
     assign_resource_to_buckets_chunked(resource, resource_t, run_config, i64::MAX, buckets)
 }
 
-fn assign_resource_to_buckets_chunked(
-    resource: &Resource,
-    resource_t: &Tensor,
-    run_config: &SeqScanRunConfig,
-    max_chunk_len: i64,
-    buckets: &mut SeqScanBucketsByChannel,
-) -> Result<(), ThoError> {
+fn assign_resource_to_buckets_chunked(resource: &Resource, resource_t: &Tensor, run_config: &SeqScanRunConfig, max_chunk_len: i64, buckets: &mut SeqScanBucketsByChannel) -> Result<(), ThoError> {
     let chunk_scores = score_resource_in_chunks(resource, resource_t, run_config, max_chunk_len)?;
 
     if chunk_scores.is_empty() {
         return Ok(());
     }
 
-    let channels_count = chunk_scores
-        .first()
-        .map(|(_, _, score_values)| score_values.len())
-        .unwrap_or(0);
+    let channels_count = chunk_scores.first().map(|(_, _, score_values)| score_values.len()).unwrap_or(0);
     ensure_channel_buckets(buckets, channels_count, run_config.buckets_count)?;
     let buckets_count = usize::try_from(run_config.buckets_count).with_context(|| format!("assign_resource_to_buckets_chunked: invalid buckets_count={}", run_config.buckets_count))?;
     let channel_ranges = (0..channels_count)
@@ -344,13 +286,9 @@ fn assign_resource_to_buckets_chunked(
             let mut max_score = f32::NEG_INFINITY;
 
             for (_, _, score_values) in &chunk_scores {
-                let channel_scores = score_values.get(channel_idx).ok_or_else(|| {
-                    ThoError::new(format!(
-                        "assign_resource_to_buckets_chunked: inconsistent channels_count for resource={} expected at least {} channels",
-                        resource.id(),
-                        channel_idx + 1
-                    ))
-                })?;
+                let channel_scores = score_values
+                    .get(channel_idx)
+                    .ok_or_else(|| ThoError::new(format!("assign_resource_to_buckets_chunked: inconsistent channels_count for resource={} expected at least {} channels", resource.id(), channel_idx + 1)))?;
 
                 for score in channel_scores {
                     min_score = min_score.min(*score);
@@ -364,12 +302,7 @@ fn assign_resource_to_buckets_chunked(
 
     for (first_slice_idx, first_slice_start, score_values) in chunk_scores {
         if score_values.len() != channels_count {
-            return Err(ThoError::new(format!(
-                "assign_resource_to_buckets_chunked: inconsistent channels_count for resource={} expected={} got={}",
-                resource.id(),
-                channels_count,
-                score_values.len()
-            )));
+            return Err(ThoError::new(format!("assign_resource_to_buckets_chunked: inconsistent channels_count for resource={} expected={} got={}", resource.id(), channels_count, score_values.len())));
         }
 
         for (channel_idx, channel_scores) in score_values.into_iter().enumerate() {
@@ -381,18 +314,15 @@ fn assign_resource_to_buckets_chunked(
                     .with_context(|| format!("assign_resource_to_buckets_chunked: local_slice_idx={local_slice_idx} does not fit into u32"))?
                     .saturating_mul(run_config.step);
 
-                buckets
-                    .get_mut(channel_idx)
-                    .ok_or_else(|| ThoError::new(format!("assign_resource_to_buckets_chunked: missing channel_idx={channel_idx}")))?    
-                    .push(
-                        bucket_idx,
-                        SeqScanBucketEntry {
-                            resource: resource.clone(),
-                            slice_idx: first_slice_idx + local_slice_idx,
-                            slice_start: first_slice_start.saturating_add(slice_start_offset),
-                            score,
-                        },
-                    )?;
+                buckets.get_mut(channel_idx).ok_or_else(|| ThoError::new(format!("assign_resource_to_buckets_chunked: missing channel_idx={channel_idx}")))?.push(
+                    bucket_idx,
+                    SeqScanBucketEntry {
+                        resource: resource.clone(),
+                        slice_idx: first_slice_idx + local_slice_idx,
+                        slice_start: first_slice_start.saturating_add(slice_start_offset),
+                        score,
+                    },
+                )?;
             }
         }
     }
@@ -400,12 +330,7 @@ fn assign_resource_to_buckets_chunked(
     Ok(())
 }
 
-fn score_resource_in_chunks(
-    resource: &Resource,
-    resource_t: &Tensor,
-    run_config: &SeqScanRunConfig,
-    max_chunk_len: i64,
-) -> Result<Vec<(usize, u32, SeqScanChannelScores)>, ThoError> {
+fn score_resource_in_chunks(resource: &Resource, resource_t: &Tensor, run_config: &SeqScanRunConfig, max_chunk_len: i64) -> Result<Vec<(usize, u32, SeqScanChannelScores)>, ThoError> {
     let size = resource_t.size();
     let resource_len = *size.get(1).ok_or_else(|| ThoError::new(format!("score_resource_in_chunks: expected [channels, seq], got size={size:?}")))?;
     let window = i64::from(run_config.window);
@@ -431,9 +356,7 @@ fn score_resource_in_chunks(
     let mut chunk_scores = Vec::new();
 
     while next_slice_start <= last_slice_start {
-        let max_start_in_chunk = next_slice_start
-            .saturating_add(effective_chunk_len.saturating_sub(window))
-            .min(last_slice_start);
+        let max_start_in_chunk = next_slice_start.saturating_add(effective_chunk_len.saturating_sub(window)).min(last_slice_start);
         let last_slice_start_in_chunk = next_slice_start + ((max_start_in_chunk - next_slice_start) / step) * step;
         let chunk_end = last_slice_start_in_chunk.saturating_add(window);
         let chunk_t = tch_result(resource_t.f_slice(1, next_slice_start, chunk_end, 1))?;
@@ -453,24 +376,14 @@ fn score_resource_in_chunks(
         );
 
         if channels_count == 0 || chunk_len == 0 {
-            return Err(ThoError::new(format!(
-                "score_resource_in_chunks: resource={} produced no channel scores for next_slice_start={next_slice_start} chunk_end={chunk_end}",
-                resource.id()
-            )));
+            return Err(ThoError::new(format!("score_resource_in_chunks: resource={} produced no channel scores for next_slice_start={next_slice_start} chunk_end={chunk_end}", resource.id())));
         }
 
         if score_values.iter().any(|channel_scores| channel_scores.len() != chunk_len) {
-            return Err(ThoError::new(format!(
-                "score_resource_in_chunks: inconsistent per-channel slice counts for resource={} next_slice_start={next_slice_start} chunk_end={chunk_end}",
-                resource.id()
-            )));
+            return Err(ThoError::new(format!("score_resource_in_chunks: inconsistent per-channel slice counts for resource={} next_slice_start={next_slice_start} chunk_end={chunk_end}", resource.id())));
         }
 
-        chunk_scores.push((
-            first_slice_idx,
-            u32::try_from(next_slice_start).with_context(|| format!("score_resource_in_chunks: next_slice_start={next_slice_start} does not fit into u32"))?,
-            score_values,
-        ));
+        chunk_scores.push((first_slice_idx, u32::try_from(next_slice_start).with_context(|| format!("score_resource_in_chunks: next_slice_start={next_slice_start} does not fit into u32"))?, score_values));
 
         first_slice_idx += chunk_len;
         next_slice_start = last_slice_start_in_chunk.saturating_add(step);
@@ -501,10 +414,8 @@ fn score_slices_to_vec(metric: &SeqScanMetric, slices: &Tensor) -> Result<SeqSca
     let scores = score_slices(metric, slices)?;
     let scores_cpu = tch_result(scores.f_to_device(Cpu))?;
     let size = scores_cpu.size();
-    let channels_count = usize::try_from(*size.first().ok_or_else(|| ThoError::new(format!("score_slices_to_vec: expected [channels, slices], got size={size:?}")))?)
-        .with_context(|| format!("score_slices_to_vec: invalid channels_count in size={size:?}"))?;
-    let slices_count = usize::try_from(*size.get(1).ok_or_else(|| ThoError::new(format!("score_slices_to_vec: expected [channels, slices], got size={size:?}")))?)
-        .with_context(|| format!("score_slices_to_vec: invalid slices_count in size={size:?}"))?;
+    let channels_count = usize::try_from(*size.first().ok_or_else(|| ThoError::new(format!("score_slices_to_vec: expected [channels, slices], got size={size:?}")))?).with_context(|| format!("score_slices_to_vec: invalid channels_count in size={size:?}"))?;
+    let slices_count = usize::try_from(*size.get(1).ok_or_else(|| ThoError::new(format!("score_slices_to_vec: expected [channels, slices], got size={size:?}")))?).with_context(|| format!("score_slices_to_vec: invalid slices_count in size={size:?}"))?;
     let mut per_channel_scores = Vec::with_capacity(channels_count);
 
     for channel_idx in 0..channels_count {
@@ -557,10 +468,7 @@ where
             let run_config_id = run_config.id.ok_or_else(|| ThoError::new("seq_scan::config_to_stage: freq_filter requires SeqScanRunConfig.id"))?;
 
             let configs = ws.read().ws_configs();
-            Arc::new(SingleOrPair::<L, FilteredLoaderStage<L, C>>::Pair(Arc::new(PairStage::new(
-                Arc::clone(loader),
-                FreqFilter::<C>::new(freq_filter, configs, run_config_id, 0).await?,
-            ))))
+            Arc::new(SingleOrPair::<L, FilteredLoaderStage<L, C>>::Pair(Arc::new(PairStage::new(Arc::clone(loader), FreqFilter::<C>::new(freq_filter, configs, run_config_id, 0).await?))))
         }
     };
 
@@ -576,10 +484,10 @@ mod tests {
     use parking_lot::RwLock;
     use std::sync::Arc;
     use tch::Tensor;
+    use thoosa_common::resources::Simple;
     use thoosa_common::runner::common::mock_run_ctx;
     use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
-    use thoosa_common::resources::Simple;
     use thoosa_common::stages::seq_scan::{MeanAbsSeqScanMetricConfig, MeanPowerSeqScanMetricConfig, SeqScanMetric, SeqScanRunConfig};
     use thoosa_common::transforms::filters::InputFilter;
     use thoosa_shared::ResourceType;
@@ -623,11 +531,7 @@ mod tests {
     #[test]
     fn test_assign_resource_to_buckets_separates_channels() -> Result<(), ThoError> {
         let resource = Resource::new(1, 1, "r0", 6);
-        let resource_t = Tensor::from_slice(&[
-            1.0f32, 1.0, 2.0, 2.0, 4.0, 4.0,
-            4.0, 4.0, 2.0, 2.0, 1.0, 1.0,
-        ])
-        .view([2, 6]);
+        let resource_t = Tensor::from_slice(&[1.0f32, 1.0, 2.0, 2.0, 4.0, 4.0, 4.0, 4.0, 2.0, 2.0, 1.0, 1.0]).view([2, 6]);
         let run_config = SeqScanRunConfig {
             id: Some(6),
             step: 2,
@@ -642,28 +546,12 @@ mod tests {
 
         assert_eq!(2, buckets.len());
         assert_eq!(
-            vec![
-                vec![(resource.id(), 0usize, 0u32, 1.0f32)],
-                vec![(resource.id(), 1usize, 2u32, 2.0f32)],
-                vec![(resource.id(), 2usize, 4u32, 4.0f32)],
-            ],
-            buckets[0]
-                .buckets
-                .iter()
-                .map(|bucket| bucket.iter().map(|entry| (entry.resource.id(), entry.slice_idx, entry.slice_start, entry.score)).collect::<Vec<_>>())
-                .collect::<Vec<_>>()
+            vec![vec![(resource.id(), 0usize, 0u32, 1.0f32)], vec![(resource.id(), 1usize, 2u32, 2.0f32)], vec![(resource.id(), 2usize, 4u32, 4.0f32)],],
+            buckets[0].buckets.iter().map(|bucket| bucket.iter().map(|entry| (entry.resource.id(), entry.slice_idx, entry.slice_start, entry.score)).collect::<Vec<_>>()).collect::<Vec<_>>()
         );
         assert_eq!(
-            vec![
-                vec![(resource.id(), 2usize, 4u32, 1.0f32)],
-                vec![(resource.id(), 1usize, 2u32, 2.0f32)],
-                vec![(resource.id(), 0usize, 0u32, 4.0f32)],
-            ],
-            buckets[1]
-                .buckets
-                .iter()
-                .map(|bucket| bucket.iter().map(|entry| (entry.resource.id(), entry.slice_idx, entry.slice_start, entry.score)).collect::<Vec<_>>())
-                .collect::<Vec<_>>()
+            vec![vec![(resource.id(), 2usize, 4u32, 1.0f32)], vec![(resource.id(), 1usize, 2u32, 2.0f32)], vec![(resource.id(), 0usize, 0u32, 4.0f32)],],
+            buckets[1].buckets.iter().map(|bucket| bucket.iter().map(|entry| (entry.resource.id(), entry.slice_idx, entry.slice_start, entry.score)).collect::<Vec<_>>()).collect::<Vec<_>>()
         );
 
         Ok(())
@@ -672,11 +560,7 @@ mod tests {
     #[test]
     fn test_assign_resource_to_buckets_chunked_matches_full_scan_per_channel() -> Result<(), ThoError> {
         let resource = Resource::new(1, 1, "r0", 10);
-        let resource_t = Tensor::from_slice(&[
-            1.0f32, 3.0, 2.0, 6.0, 4.0, 9.0, 5.0, 7.0, 8.0, 10.0,
-            10.0, 8.0, 7.0, 5.0, 9.0, 4.0, 6.0, 2.0, 3.0, 1.0,
-        ])
-        .view([2, 10]);
+        let resource_t = Tensor::from_slice(&[1.0f32, 3.0, 2.0, 6.0, 4.0, 9.0, 5.0, 7.0, 8.0, 10.0, 10.0, 8.0, 7.0, 5.0, 9.0, 4.0, 6.0, 2.0, 3.0, 1.0]).view([2, 10]);
         let run_config = SeqScanRunConfig {
             id: Some(7),
             step: 2,
@@ -693,23 +577,11 @@ mod tests {
 
         let full_scan_entries = full_scan_buckets
             .iter()
-            .map(|channel_buckets| {
-                channel_buckets
-                    .buckets
-                    .iter()
-                    .map(|bucket| bucket.iter().map(|entry| (entry.slice_idx, entry.slice_start, entry.score)).collect::<Vec<_>>())
-                    .collect::<Vec<_>>()
-            })
+            .map(|channel_buckets| channel_buckets.buckets.iter().map(|bucket| bucket.iter().map(|entry| (entry.slice_idx, entry.slice_start, entry.score)).collect::<Vec<_>>()).collect::<Vec<_>>())
             .collect::<Vec<_>>();
         let chunked_entries = chunked_buckets
             .iter()
-            .map(|channel_buckets| {
-                channel_buckets
-                    .buckets
-                    .iter()
-                    .map(|bucket| bucket.iter().map(|entry| (entry.slice_idx, entry.slice_start, entry.score)).collect::<Vec<_>>())
-                    .collect::<Vec<_>>()
-            })
+            .map(|channel_buckets| channel_buckets.buckets.iter().map(|bucket| bucket.iter().map(|entry| (entry.slice_idx, entry.slice_start, entry.score)).collect::<Vec<_>>()).collect::<Vec<_>>())
             .collect::<Vec<_>>();
 
         assert_eq!(full_scan_entries, chunked_entries);
@@ -724,57 +596,35 @@ mod tests {
 
         let resources = vec![Resource::new(1, 1, "r0", 6), Resource::new(2, 1, "r1", 6)];
         let resources_group = ResourceType::List(resources.iter().map(|resource| resource.file_stem().to_string()).collect());
-        let store =
-            MockMotifsStoreBuilder::new()
-                .with_list_resources_by_file_stems(
-                    resources.iter().map(|resource| resource.file_stem().to_string()).collect(),
-                    Ok(resources.clone()),
-                )
-                .build();
+        let store = MockMotifsStoreBuilder::new().with_list_resources_by_file_stems(resources.iter().map(|resource| resource.file_stem().to_string()).collect(), Ok(resources.clone())).build();
         let loader = Arc::new(
             mock_tensor_loader::build()
                 .with_out_id()
                 .with_run_cached([
-                    (
-                        resources[0].clone(),
-                        Tensor::from_slice(&[
-                            1.0f32, 1.0, 2.0, 2.0, 4.0, 4.0,
-                            4.0, 4.0, 2.0, 2.0, 1.0, 1.0,
-                        ])
-                        .view([2, 6]),
-                    ),
-                    (
-                        resources[1].clone(),
-                        Tensor::from_slice(&[
-                            0.0f32, 0.0, 1.0, 1.0, 3.0, 3.0,
-                            3.0, 3.0, 1.0, 1.0, 0.0, 0.0,
-                        ])
-                        .view([2, 6]),
-                    ),
+                    (resources[0].clone(), Tensor::from_slice(&[1.0f32, 1.0, 2.0, 2.0, 4.0, 4.0, 4.0, 4.0, 2.0, 2.0, 1.0, 1.0]).view([2, 6])),
+                    (resources[1].clone(), Tensor::from_slice(&[0.0f32, 0.0, 1.0, 1.0, 3.0, 3.0, 3.0, 3.0, 1.0, 1.0, 0.0, 0.0]).view([2, 6])),
                 ])
                 .finish(),
         );
-        let stage: Arc<SeqScanStage<Simple, _, _>> = Arc::new(SeqScanStage::new_with_chunk_size(
-            &Arc::new(RwLock::new(crate::motifs_ws::mock_motifs_ws_simp(None, 1, 100, 1000))),
-            &store,
-            loader,
-            vec![SeqScanRunConfig {
-                id: Some(10),
-                step: 2,
-                window: 2,
-                freq_filter: None::<Vec<InputFilter>>,
-                metric: SeqScanMetric::MeanPower(MeanPowerSeqScanMetricConfig { power: 2.0, center: false }),
-                buckets_count: 3,
-            }],
-            8,
-        ).await?);
-
-        let _out = stage
-            .run(
-                Arc::new(ResourcesConfigInput::new(Simple::new(resources_group)).check(&store).await?),
-                mock_run_ctx::default(0),
+        let stage: Arc<SeqScanStage<Simple, _, _>> = Arc::new(
+            SeqScanStage::new_with_chunk_size(
+                &Arc::new(RwLock::new(crate::motifs_ws::mock_motifs_ws_simp(None, 1, 100, 1000))),
+                &store,
+                loader,
+                vec![SeqScanRunConfig {
+                    id: Some(10),
+                    step: 2,
+                    window: 2,
+                    freq_filter: None::<Vec<InputFilter>>,
+                    metric: SeqScanMetric::MeanPower(MeanPowerSeqScanMetricConfig { power: 2.0, center: false }),
+                    buckets_count: 3,
+                }],
+                8,
             )
-            .await?;
+            .await?,
+        );
+
+        let _out = stage.run(Arc::new(ResourcesConfigInput::new(Simple::new(resources_group)).check(&store).await?), mock_run_ctx::default(0)).await?;
 
         Ok(())
     }

@@ -30,10 +30,7 @@ impl DistinctColorIter {
     pub fn new() -> Self {
         // Start at some non-primary hue, e.g. 30 degrees
         // Use the golden angle (~137.5 degrees) to spread hues
-        DistinctColorIter {
-            hue: 30.0,
-            increment: 137.50776405003785,
-        }
+        DistinctColorIter { hue: 30.0, increment: 137.50776405003785 }
     }
 }
 

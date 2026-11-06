@@ -1,10 +1,10 @@
-use thoosa_common::tch_error::tch_result;
-use std::fmt::Debug;
-use tch::{Kind, Tensor};
-use thoosa_shared::ThoError;
-use thoosa_shared::traits::Named;
 use crate::dims::Dims;
 use crate::tho_tensor::ThoTensor;
+use std::fmt::Debug;
+use tch::{Kind, Tensor};
+use thoosa_common::tch_error::tch_result;
+use thoosa_shared::ThoError;
+use thoosa_shared::traits::Named;
 
 pub mod data;
 pub mod metrics;
@@ -21,15 +21,9 @@ pub struct ThoTensorView<'a, D: Dims, Id: Named + Debug + Clone> {
 
 impl<'a, D: Dims, Id: Named + Debug + Clone> ThoTensorView<'a, D, Id> {
     pub fn select(self, dim: i64, index: i64) -> Result<Self, ThoError> {
-        Ok(Self {
-            t: tch_result(self.t.f_select(dim, index))?,
-            ..self
-        })
+        Ok(Self { t: tch_result(self.t.f_select(dim, index))?, ..self })
     }
     pub fn sum(self, k: Kind) -> Result<ThoTensor<D, Id>, ThoError> {
         ThoTensor::new(self._owner.id().clone(), tch_result(self.t.f_sum(k))?)
     }
 }
-
-
-

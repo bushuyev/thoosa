@@ -1,6 +1,6 @@
-use anyhow::Context as _;
 use crate::dims::{ChannelsMotifsData, LabelProbability, LabelsProbabilities, MotifProbability};
 use crate::train_nets::{FinalNetParams, LabelNetParams, MotifNetParams, final_net};
+use anyhow::Context as _;
 use log::{debug, info};
 use mockall::mock;
 use std::collections::{HashMap, HashSet};
@@ -11,7 +11,7 @@ use tch::nn;
 use tch::{Device, Tensor};
 use thoosa_common::dims::{Batch, Slice};
 use thoosa_common::nets::common_nets::ThoModuleWithStore;
-use thoosa_common::ws::{generation_weights, FsWorkspace, VarStoreOrPath, Workspace, WsConfigs, NET_PARAMS_FILE, NET_WEIGHTS_FILE, publish_net, resolve_net_base_path, net_files_from_base, nested_weights, discover_nets, published_generation};
+use thoosa_common::ws::{FsWorkspace, NET_PARAMS_FILE, NET_WEIGHTS_FILE, VarStoreOrPath, Workspace, WsConfigs, discover_nets, generation_weights, nested_weights, net_files_from_base, publish_net, published_generation, resolve_net_base_path};
 use thoosa_shared::resource::{Resource, ResourceStats};
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::traits::ToJsonFile;
@@ -63,21 +63,28 @@ pub fn parse_motif_path(net_id: &Path) -> anyhow::Result<(u32, u32)> {
     } else {
         net_id
     };
-    let channel = base_dir.parent().and_then(|p| p.file_name()).and_then(|s| s.to_str()).ok_or_else(|| anyhow::anyhow!("parse_motif_path: no channel in {net_id:?}"))?.parse::<u32>().with_context(|| format!("parse_motif_path: bad channel in {net_id:?}"))?;
+    let channel = base_dir
+        .parent()
+        .and_then(|p| p.file_name())
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| anyhow::anyhow!("parse_motif_path: no channel in {net_id:?}"))?
+        .parse::<u32>()
+        .with_context(|| format!("parse_motif_path: bad channel in {net_id:?}"))?;
     let motif_part = base_dir.file_name().and_then(|s| s.to_str()).ok_or_else(|| anyhow::anyhow!("parse_motif_path: no motif id in {net_id:?}"))?;
     let motif_id = motif_part.split('_').next().unwrap_or(motif_part).parse::<u32>().with_context(|| format!("parse_motif_path: bad motif id in {net_id:?}"))?;
     Ok((channel, motif_id))
 }
 
-
-
-
-
-
 impl MotifsWorkspace for FsWorkspace {
-    fn motifs_nets_path(&self) -> anyhow::Result<PathBuf> { self.model_type_path(MOTIFS_MODELS) }
-    fn labels_nets_path(&self) -> anyhow::Result<PathBuf> { self.model_type_path(LABELS_MODELS) }
-    fn final_nets_path(&self) -> anyhow::Result<PathBuf> { self.model_type_path(FINAL_MODELS) }
+    fn motifs_nets_path(&self) -> anyhow::Result<PathBuf> {
+        self.model_type_path(MOTIFS_MODELS)
+    }
+    fn labels_nets_path(&self) -> anyhow::Result<PathBuf> {
+        self.model_type_path(LABELS_MODELS)
+    }
+    fn final_nets_path(&self) -> anyhow::Result<PathBuf> {
+        self.model_type_path(FINAL_MODELS)
+    }
 
     fn save_final_net<'a>(&self, run_config_id: RunConfigId, vs_or_path: VarStoreOrPath<'a>, params: &FinalNetParams) -> anyhow::Result<PathBuf> {
         let final_models_path = self.final_nets_path()?;
@@ -108,10 +115,15 @@ impl MotifsWorkspace for FsWorkspace {
         let params = MotifNetParams::from_file(&params_path)?;
         let params_for_builder = params.clone();
         let module = load_net
-            .then(|| ThoModuleWithStore::load(
-                mono_key!(model_path.to_string_lossy().to_string(), "motif_model").into(),
-                move |path: &nn::Path| params_for_builder.motif_net(None)?.build_tch_module(path), model_path, *device, quantize
-            ))
+            .then(|| {
+                ThoModuleWithStore::load(
+                    mono_key!(model_path.to_string_lossy().to_string(), "motif_model").into(),
+                    move |path: &nn::Path| params_for_builder.motif_net(None)?.build_tch_module(path),
+                    model_path,
+                    *device,
+                    quantize,
+                )
+            })
             .transpose()?;
         Ok((params, module))
     }
@@ -120,11 +132,26 @@ impl MotifsWorkspace for FsWorkspace {
         let base_path = resolve_net_base_path(&self.labels_nets_path()?, net_path);
         let (model_path, params_path) = net_files_from_base(&base_path)?;
         // Keep path validation in release builds even though only debug keys retain the label.
-        let _label = if nested_weights(&model_path) { model_path.parent().and_then(|p| p.parent()).and_then(|p| p.file_name()).and_then(|s| s.to_str()) } else { model_path.parent().and_then(|p| p.file_name()).and_then(|s| s.to_str()) }.ok_or_else(|| anyhow::anyhow!("load_label_net: can't parse label from {base_path:?}"))?;
+        let _label = if nested_weights(&model_path) {
+            model_path.parent().and_then(|p| p.parent()).and_then(|p| p.file_name()).and_then(|s| s.to_str())
+        } else {
+            model_path.parent().and_then(|p| p.file_name()).and_then(|s| s.to_str())
+        }
+        .ok_or_else(|| anyhow::anyhow!("load_label_net: can't parse label from {base_path:?}"))?;
         let run_config_id = net_path_to_run_config_id(&model_path);
         let params = LabelNetParams::from_file(&params_path)?;
         let params_for_builder = params.clone();
-        let module = load_net.then(|| ThoModuleWithStore::load(mono_key!(run_config_id, format!("Label_model_{_label}_{run_config_id}")).into(), move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder)?.build_tch_module(path), model_path.clone(), *device, quantize)).transpose()?;
+        let module = load_net
+            .then(|| {
+                ThoModuleWithStore::load(
+                    mono_key!(run_config_id, format!("Label_model_{_label}_{run_config_id}")).into(),
+                    move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder)?.build_tch_module(path),
+                    model_path.clone(),
+                    *device,
+                    quantize,
+                )
+            })
+            .transpose()?;
         Ok((run_config_id, params, module))
     }
 
@@ -141,39 +168,65 @@ impl MotifsWorkspace for FsWorkspace {
 
     fn load_motif_nets(&self, channel: u32, motif_id: u32, device: &Device) -> anyhow::Result<Vec<(MotifNetParams, ThoModuleWithStore<Batch<Slice>, MotifProbability>)>> {
         debug!("load_motif_nets: channel={channel} motif_id={motif_id}");
-        self.motif_models(channel, motif_id)?.into_iter().map(|(model, config)| {
-            let params = MotifNetParams::from_file(&config)?;
-            let params_for_builder = params.clone();
-            // Quantized loading is available through the single-model loader instead.
-            let module = ThoModuleWithStore::load(mono_key!("MotifNet", "MotifNet") + &mono_key!(motif_id, "motif_id"), move |path: &nn::Path| params_for_builder.motif_net(None)?.build_tch_module(path), model, *device, false)?;
-            Ok((params, module))
-        }).collect()
+        self.motif_models(channel, motif_id)?
+            .into_iter()
+            .map(|(model, config)| {
+                let params = MotifNetParams::from_file(&config)?;
+                let params_for_builder = params.clone();
+                // Quantized loading is available through the single-model loader instead.
+                let module = ThoModuleWithStore::load(mono_key!("MotifNet", "MotifNet") + &mono_key!(motif_id, "motif_id"), move |path: &nn::Path| params_for_builder.motif_net(None)?.build_tch_module(path), model, *device, false)?;
+                Ok((params, module))
+            })
+            .collect()
     }
 
     fn load_label_nets<'a>(&self, train_label_nets_run_config_ids: Option<&'a [RunConfigId]>, device: &'a Device, quantize: bool, load_net: bool) -> anyhow::Result<HashMap<String, Vec<(RunConfigId, LabelNetParams, Option<ThoModuleWithStore<ChannelsMotifsData, Batch<LabelProbability>>>)>>> {
         let allowed = train_label_nets_run_config_ids.map(|ids| ids.iter().copied().collect::<HashSet<_>>());
-        self.label_models()?.into_iter().map(|(label, paths)| {
-            let models = paths.into_iter().filter_map(|(model_path, params_path)| {
-                let run_config_id = net_path_to_run_config_id(&model_path);
-                if allowed.as_ref().is_some_and(|ids| !ids.contains(&run_config_id)) { return None; }
-                Some((|| {
-                    let params = LabelNetParams::from_file(&params_path).with_context(|| format!("can't read label net params from {params_path:?}"))?;
-                    let params_for_builder = params.clone();
-                    let module = load_net.then(|| ThoModuleWithStore::load(mono_key!(run_config_id, format!("Label_model_{label}_{run_config_id}")).into(), move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder)?.build_tch_module(path), model_path, *device, quantize)).transpose()?;
-                    Ok((run_config_id, params, module))
-                })())
-            }).collect::<anyhow::Result<Vec<_>>>()?;
-            Ok((label, models))
-        }).collect()
+        self.label_models()?
+            .into_iter()
+            .map(|(label, paths)| {
+                let models = paths
+                    .into_iter()
+                    .filter_map(|(model_path, params_path)| {
+                        let run_config_id = net_path_to_run_config_id(&model_path);
+                        if allowed.as_ref().is_some_and(|ids| !ids.contains(&run_config_id)) {
+                            return None;
+                        }
+                        Some((|| {
+                            let params = LabelNetParams::from_file(&params_path).with_context(|| format!("can't read label net params from {params_path:?}"))?;
+                            let params_for_builder = params.clone();
+                            let module = load_net
+                                .then(|| {
+                                    ThoModuleWithStore::load(
+                                        mono_key!(run_config_id, format!("Label_model_{label}_{run_config_id}")).into(),
+                                        move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder)?.build_tch_module(path),
+                                        model_path,
+                                        *device,
+                                        quantize,
+                                    )
+                                })
+                                .transpose()?;
+                            Ok((run_config_id, params, module))
+                        })())
+                    })
+                    .collect::<anyhow::Result<Vec<_>>>()?;
+                Ok((label, models))
+            })
+            .collect()
     }
 
     fn motif_models(&self, channel: u32, motif_id: u32) -> anyhow::Result<Vec<(PathBuf, PathBuf)>> {
         let motif_prefix = format!("{motif_id}_");
-        Ok(discover_nets(&self.motifs_nets_path()?.join(channel.to_string()))?.into_iter().filter(|(path, _)| {
-            if nested_weights(path) {
-                path.parent().and_then(|p| p.file_name()).and_then(|s| s.to_str()).is_some_and(|s| s.starts_with(&motif_prefix))
-            } else { path.file_stem().and_then(|s| s.to_str()).is_some_and(|s| s.starts_with(&motif_prefix)) }
-        }).collect())
+        Ok(discover_nets(&self.motifs_nets_path()?.join(channel.to_string()))?
+            .into_iter()
+            .filter(|(path, _)| {
+                if nested_weights(path) {
+                    path.parent().and_then(|p| p.file_name()).and_then(|s| s.to_str()).is_some_and(|s| s.starts_with(&motif_prefix))
+                } else {
+                    path.file_stem().and_then(|s| s.to_str()).is_some_and(|s| s.starts_with(&motif_prefix))
+                }
+            })
+            .collect())
     }
 
     fn save_label_net<'a>(&self, label_node_run_config_id: u32, label: &dyn Display, vs_or_path: VarStoreOrPath<'a>, params: &LabelNetParams) -> anyhow::Result<PathBuf> {
@@ -204,9 +257,13 @@ impl MotifsWorkspace for FsWorkspace {
     fn final_model(&self, id: RunConfigId) -> anyhow::Result<(PathBuf, PathBuf)> {
         let final_models_path = self.final_nets_path()?;
         let base_path = final_models_path.join(format!("{id}"));
-        if let Some(pair) = published_generation(&base_path)? { return Ok(pair); }
+        if let Some(pair) = published_generation(&base_path)? {
+            return Ok(pair);
+        }
         let nested = (base_path.join(NET_WEIGHTS_FILE), base_path.join(NET_PARAMS_FILE));
-        if nested.0.exists() || nested.1.exists() { return Ok(nested); }
+        if nested.0.exists() || nested.1.exists() {
+            return Ok(nested);
+        }
         Ok((final_models_path.join(format!("{id}.safetensors")), final_models_path.join(format!("{id}.json"))))
     }
 }
@@ -280,7 +337,7 @@ pub fn mock_motifs_ws_base(path: Option<&PathBuf>, channels: u32, sample_rate: u
     ws.expect_channels().return_const(channels);
     ws.expect_max_input().return_const(max_input);
     ws.expect_ws_configs().return_const(WsConfigs::new(channels, max_input, sample_rate));
-    ws.expect_import_tensor().returning(|_, _, _|Ok(ResourceStats::new(vec![20, 100])));
+    ws.expect_import_tensor().returning(|_, _, _| Ok(ResourceStats::new(vec![20, 100])));
     ws
 }
 
@@ -295,7 +352,9 @@ pub struct MotifsWsMockBuilder {
 
 impl MotifsWsMockBuilder {
     pub fn new(path: Option<&PathBuf>, channels: u32, sample_rate: u32, max_input: u32) -> Self {
-        Self { mock: mock_motifs_ws_base(path, channels, sample_rate, max_input) }
+        Self {
+            mock: mock_motifs_ws_base(path, channels, sample_rate, max_input),
+        }
     }
 
     #[deprecated]
@@ -309,7 +368,11 @@ impl MotifsWsMockBuilder {
     }
 
     pub fn with_load_motif_net(self, nets: Vec<(PathBuf, Box<dyn Fn() -> MotifNetParams + Sync + Send + 'static>, Box<dyn Fn() -> ThoModuleWithStore<Batch<Slice>, MotifProbability> + Sync + Send + 'static>)>) -> Self {
-        self.with_try_load_motif_net(nets.into_iter().map(|(path, params, module)| (path, params, Box::new(move || Ok(module())) as Box<dyn Fn() -> anyhow::Result<ThoModuleWithStore<Batch<Slice>, MotifProbability>> + Send + Sync>)).collect())
+        self.with_try_load_motif_net(
+            nets.into_iter()
+                .map(|(path, params, module)| (path, params, Box::new(move || Ok(module())) as Box<dyn Fn() -> anyhow::Result<ThoModuleWithStore<Batch<Slice>, MotifProbability>> + Send + Sync>))
+                .collect(),
+        )
     }
 
     // Tensor-backed fixtures can fail to acquire local storage; pass that failure
@@ -332,7 +395,15 @@ impl MotifsWsMockBuilder {
         self
     }
 
-    pub fn with_load_label_net(mut self, nets: Vec<(PathBuf, RunConfigId, Box<dyn Fn() -> LabelNetParams + Sync + Send + 'static>, Box<dyn Fn() -> ThoModuleWithStore<ChannelsMotifsData, Batch<LabelProbability>> + Sync + Send + 'static>)>) -> Self {
+    pub fn with_load_label_net(
+        mut self,
+        nets: Vec<(
+            PathBuf,
+            RunConfigId,
+            Box<dyn Fn() -> LabelNetParams + Sync + Send + 'static>,
+            Box<dyn Fn() -> ThoModuleWithStore<ChannelsMotifsData, Batch<LabelProbability>> + Sync + Send + 'static>,
+        )>,
+    ) -> Self {
         // Individual inference stages load exact checkpoints, so mocks preserve path-sensitive lookup.
         let nets = std::sync::Arc::new(nets);
         self.mock.expect_load_label_net().returning(move |net_path, _device, _quantize, _load_net| {
@@ -342,7 +413,9 @@ impl MotifsWsMockBuilder {
         self
     }
 
-    pub fn build(self) -> Box<dyn MotifsWorkspace> { Box::new(self.mock) }
+    pub fn build(self) -> Box<dyn MotifsWorkspace> {
+        Box::new(self.mock)
+    }
 }
 
 #[cfg(test)]
@@ -370,11 +443,23 @@ mod tests {
         let ws = test_workspace(1)?;
         let root = ws.final_nets_path()?;
         let base = root.join("1");
-        assert!(publish_net(&base, "new", |path| { fs::write(path, b"partial")?; anyhow::bail!("injected failure") }).is_err());
+        assert!(
+            publish_net(&base, "new", |path| {
+                fs::write(path, b"partial")?;
+                anyhow::bail!("injected failure")
+            })
+            .is_err()
+        );
         assert!(discover_nets(&root)?.is_empty());
         publish_net(&base, "old", |path| Ok(fs::write(path, b"old")?))?;
         let old = net_files_from_base(&base)?;
-        assert!(publish_net(&base, "new", |path| { fs::write(path, b"partial")?; anyhow::bail!("injected failure") }).is_err());
+        assert!(
+            publish_net(&base, "new", |path| {
+                fs::write(path, b"partial")?;
+                anyhow::bail!("injected failure")
+            })
+            .is_err()
+        );
         assert_eq!(net_files_from_base(&base)?, old);
         publish_net(&base, "new", |path| Ok(fs::write(path, b"new")?))?;
         let new = net_files_from_base(&base)?;
@@ -452,7 +537,8 @@ mod tests {
         let _: Box<dyn ThoModule<AnyDims, AnyDims>> = conv_motif_node(match &params.net_type {
             MotifNetTypeParams::ConvNetParams(params) => params,
             _ => unreachable!(),
-        })?.build_tch_module(&vs.root())?;
+        })?
+        .build_tch_module(&vs.root())?;
         vs.freeze();
         let net_id = ws.save_motif_net(&0, &0, &0, (&vs).into(), &params)?;
         let (loaded_params, Some(loaded_module)) = ws.load_motif_net(&net_id, &Cpu, false, true)? else { panic!("motif module was not loaded") };
@@ -467,10 +553,14 @@ mod tests {
         let params = MotifNetParams::new_cosine(1234, 5.0, 0.0, InitMode::Mean(InitDummy {}));
         let mut vs = VarStore::new(Cpu);
         let motif = Arc::new(ThoTensor::new(((0u32), "motif_id").into(), Tensor::rand([123, 1234], FLOAT_CPU))?);
-        let net: Box<dyn ThoModule<AnyDims, AnyDims>> = cosine_motif_node(match &params.net_type {
-            MotifNetTypeParams::CosineNetParams(params) => params,
-            _ => unreachable!(),
-        }, Some(motif))?.build_tch_module(&vs.root())?;
+        let net: Box<dyn ThoModule<AnyDims, AnyDims>> = cosine_motif_node(
+            match &params.net_type {
+                MotifNetTypeParams::CosineNetParams(params) => params,
+                _ => unreachable!(),
+            },
+            Some(motif),
+        )?
+        .build_tch_module(&vs.root())?;
         let _ = net.tho_forward(&Tensor::rand([789, 1234], FLOAT_CPU).into(), None, false)?;
         vs.freeze();
         let net_id = ws.save_motif_net(&0, &0, &0, (&vs).into(), &params)?;
@@ -488,7 +578,9 @@ mod tests {
         let _: Box<dyn ThoModule<AnyDims, AnyDims>> = LabelNetParams::label_net(&params)?.build_tch_module(&vs.root())?;
         vs.freeze();
         let net_id = ws.save_label_net(7, &"label_0", (&vs).into(), &params)?;
-        let (run_config_id, loaded_params, Some(loaded_module)) = ws.load_label_net(&net_id, &Cpu, false, true)? else { panic!("label module was not loaded") };
+        let (run_config_id, loaded_params, Some(loaded_module)) = ws.load_label_net(&net_id, &Cpu, false, true)? else {
+            panic!("label module was not loaded")
+        };
         assert_eq!(run_config_id, 7);
         assert_eq!(format!("{params:?}"), format!("{loaded_params:?}"));
         assert_eq!(vs.variables(), loaded_module.var_store().variables());

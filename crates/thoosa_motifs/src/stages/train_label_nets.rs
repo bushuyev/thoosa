@@ -1,9 +1,9 @@
 use crate::motifs_store::MotifsStore;
 use async_trait::async_trait;
 use futures::FutureExt;
+use futures_util::StreamExt;
 use futures_util::future::{BoxFuture, try_join_all};
 use futures_util::stream::BoxStream;
-use futures_util::StreamExt;
 use log::{debug, info, warn};
 use parking_lot::RwLock;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -32,15 +32,13 @@ use thoosa_shared::resource::{Resource, ResourcesConfig, build_resource_maps};
 use thoosa_shared::traits::MaxParallelCtx;
 use thoosa_shared::traits::{Adjustable, AsyncStage, Data, OutId, RunCtx, Stage, WithId};
 
-use mockall_double::double;
-#[double]
-use thoosa_common::runner::global_ctx::GlobalCtx;
 use crate::dims::{LabelProbability, MotifProbability};
 use crate::stages::apply_motif_nets::ApplyMotifNets;
 use crate::stages::cross_loader::ResourcesConfigInput;
 use crate::stages::stage_ids::RAW_TENSOR_LOADER;
 use crate::train_nets::{LabelNetParams, LabelNetTypeArgs, LabelNetTypeArgsBuilder, LabelNetTypeArgsFields, LabelNetTypeArgsRangeOrValue, LabelNetTypeParams, LinNetArgs, TrainLabelNetRunConfigResultParams};
 use clap::Args;
+use mockall_double::double;
 use rand::rng;
 use thoosa_common::dims::{Batch, Dims, ThoBatch};
 use thoosa_common::instance_cache::InstanceCache;
@@ -51,6 +49,8 @@ use thoosa_common::nets::tho_varstore::{ModConfig, ThoTrainModule};
 use thoosa_common::resources::{Labeled, NetResources, SavableResult};
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
+#[double]
+use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::stages::stages_seq::PairStage;
 use thoosa_common::stages::train_net::{TrainNet, TrainNetInput, TrainStepFactory};
 use thoosa_common::stages::train_step::{TrainStep, TrainStepInput, TrainStepXFn};
@@ -87,7 +87,6 @@ pub struct SyncLabelBatchInput<'a> {
 impl Data for SyncLabelBatchInput<'_> {
     type Metrics = i64;
 
-
     fn size(&self) -> Self::Metrics {
         (self.x_1.len() + self.x_0.len()) as i64
     }
@@ -122,14 +121,25 @@ struct SyncLabelBatchInputWrapper {
 
 impl SyncLabelBatchInputWrapper {
     fn new(x_1: Vec<Arc<DevicesWrap<AppliedMotifOutput>>>, x_0: Vec<Arc<DevicesWrap<AppliedMotifOutput>>>, num_nets: i64, label: String) -> Self {
-        Self { id: SynKey::new([mono_key!(label.clone(), "SyncLabelBatch")]), x_1, x_0, num_nets, label }
+        Self {
+            id: SynKey::new([mono_key!(label.clone(), "SyncLabelBatch")]),
+            x_1,
+            x_0,
+            num_nets,
+            label,
+        }
     }
 }
 
 impl BorrowRef for SyncLabelBatchInputWrapper {
-    fn protect(&self, device: usize) -> thoosa_common::runner::residency::ResidencyLease { thoosa_common::runner::residency::ResidencyLease::combine(self.x_1.iter().chain(&self.x_0).map(|value| value.protect(device))) }
+    fn protect(&self, device: usize) -> thoosa_common::runner::residency::ResidencyLease {
+        thoosa_common::runner::residency::ResidencyLease::combine(self.x_1.iter().chain(&self.x_0).map(|value| value.protect(device)))
+    }
 
-    type Out<'a> = SyncLabelBatchInput<'a> where Self: 'a;
+    type Out<'a>
+        = SyncLabelBatchInput<'a>
+    where
+        Self: 'a;
 
     fn borrow_ref<'a>(&'a self, to_device_idx: usize) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
     where
@@ -138,7 +148,13 @@ impl BorrowRef for SyncLabelBatchInputWrapper {
         async move {
             let x_1 = try_join_all(self.x_1.iter().map(|value| BorrowRef::borrow_ref(value, to_device_idx))).await?;
             let x_0 = try_join_all(self.x_0.iter().map(|value| BorrowRef::borrow_ref(value, to_device_idx))).await?;
-            Ok(SyncLabelBatchInput { id: self.id.clone(), x_1, x_0, num_nets: self.num_nets, label: self.label.clone() })
+            Ok(SyncLabelBatchInput {
+                id: self.id.clone(),
+                x_1,
+                x_0,
+                num_nets: self.num_nets,
+                label: self.label.clone(),
+            })
         }
     }
 }
@@ -153,11 +169,7 @@ pub struct SyncLabelBatchOutput {
 
 impl SyncLabelBatchOutput {
     fn into_parts(self) -> (ThoBatch<MotifProbability>, Option<BatchLengths>, ThoBatch<LabelProbability>) {
-        (
-            self.x.with_id(thoosa_shared::debug_id!("sync_label_batch_x")),
-            Some(BatchLengths::new(self.lengths)),
-            self.y.with_id(thoosa_shared::debug_id!("sync_label_batch_y")),
-        )
+        (self.x.with_id(thoosa_shared::debug_id!("sync_label_batch_x")), Some(BatchLengths::new(self.lengths)), self.y.with_id(thoosa_shared::debug_id!("sync_label_batch_y")))
     }
 }
 
@@ -237,7 +249,13 @@ impl<'de> Deserialize<'de> for SyncLabelBatchInput<'static> {
         }
         let x_1 = input.x_1.into_iter().zip(input.x_1_lengths).map(|(tensor, lengths)| ThoDataRef::Owned(DataWithExtra::new(tensor, lengths))).collect();
         let x_0 = input.x_0.into_iter().zip(input.x_0_lengths).map(|(tensor, lengths)| ThoDataRef::Owned(DataWithExtra::new(tensor, lengths))).collect();
-        Ok(Self { id: input.id, x_1, x_0, num_nets: input.num_nets, label: input.label })
+        Ok(Self {
+            id: input.id,
+            x_1,
+            x_0,
+            num_nets: input.num_nets,
+            label: input.label,
+        })
     }
 }
 
@@ -250,82 +268,86 @@ impl WorkerStageInput for SyncLabelBatchInput<'_> {
         // Convert every borrowed cached value into an owned worker-reference payload.
         let x_1 = self.x_1.iter().map(|value| Ok(ThoDataRef::Owned(clone_value(value.as_ref())?))).collect::<Result<Vec<_>, ThoError>>()?;
         let x_0 = self.x_0.iter().map(|value| Ok(ThoDataRef::Owned(clone_value(value.as_ref())?))).collect::<Result<Vec<_>, ThoError>>()?;
-        Ok(Box::new(SyncLabelBatchInput { id: self.id.clone(), x_1, x_0, num_nets: self.num_nets, label: self.label.clone() }))
+        Ok(Box::new(SyncLabelBatchInput {
+            id: self.id.clone(),
+            x_1,
+            x_0,
+            num_nets: self.num_nets,
+            label: self.label.clone(),
+        }))
     }
 
     fn ref_to_tensor(&self, all_cuda_tensors: &AllTensors, remove: bool) -> Result<Self, ThoError> {
         let materialize = |value: &AppliedMotifOutput| -> Result<AppliedMotifOutput, ThoError> { Ok(DataWithExtra::new(WorkerStageInput::ref_to_tensor(value.data(), all_cuda_tensors, remove)?, value.extra().clone())) };
         let x_1 = self.x_1.iter().map(|value| Ok(ThoDataRef::Owned(materialize(value.as_ref())?))).collect::<Result<Vec<_>, ThoError>>()?;
         let x_0 = self.x_0.iter().map(|value| Ok(ThoDataRef::Owned(materialize(value.as_ref())?))).collect::<Result<Vec<_>, ThoError>>()?;
-        Ok(Self { id: self.id.clone(), x_1, x_0, num_nets: self.num_nets, label: self.label.clone() })
+        Ok(Self {
+            id: self.id.clone(),
+            x_1,
+            x_0,
+            num_nets: self.num_nets,
+            label: self.label.clone(),
+        })
     }
-
 }
 
 #[derive(Debug)]
 pub struct SyncLabelBatch<C>
 where
-    C: RunCtx + 'static
+    C: RunCtx + 'static,
 {
-    pd:PhantomData<C>
+    pd: PhantomData<C>,
 }
 
 static SYNC_LABEL_BATCH_INSTANCES: InstanceCache = InstanceCache::new();
 
-impl <C> SyncLabelBatch<C>
+impl<C> SyncLabelBatch<C>
 where
-    C: RunCtx + 'static
+    C: RunCtx + 'static,
 {
-    pub async fn new(tho_device_idx:usize) -> Result<Arc<DynSyncStageEnum<SyncLabelBatch<C>>>, ThoError> {
-        SYNC_LABEL_BATCH_INSTANCES.get_or_try_insert_recreatable_with::<C, _, _, _, _>(tho_device_idx, GlobalCtx::global().cuda_activity_gate(tho_device_idx), GlobalCtx::global().is_ipc(), 0, move || async move {
-            if GlobalCtx::global().is_ipc() {
-
-                Ok(Arc::new(DynSyncStageEnum::Proxy {
-                    stage: Arc::new(ProxyStage::proxy_recreatable(SYNC_LABEL_BATCH_ENDPOINT, Some(0.to_string()), tho_device_idx, Box::new(())).await?),
-                    init: (),
-                }))
-            } else {
-                Ok(Arc::new(DynSyncStageEnum::Local(Arc::new(Self::new_local().await?))))
-            }
-        }).await
-
-
+    pub async fn new(tho_device_idx: usize) -> Result<Arc<DynSyncStageEnum<SyncLabelBatch<C>>>, ThoError> {
+        SYNC_LABEL_BATCH_INSTANCES
+            .get_or_try_insert_recreatable_with::<C, _, _, _, _>(tho_device_idx, GlobalCtx::global().cuda_activity_gate(tho_device_idx), GlobalCtx::global().is_ipc(), 0, move || async move {
+                if GlobalCtx::global().is_ipc() {
+                    Ok(Arc::new(DynSyncStageEnum::Proxy {
+                        stage: Arc::new(ProxyStage::proxy_recreatable(SYNC_LABEL_BATCH_ENDPOINT, Some(0.to_string()), tho_device_idx, Box::new(())).await?),
+                        init: (),
+                    }))
+                } else {
+                    Ok(Arc::new(DynSyncStageEnum::Local(Arc::new(Self::new_local().await?))))
+                }
+            })
+            .await
     }
 
-    pub async fn new_local() -> Result<Self, ThoError>{
-        Ok(Self {
-            pd: PhantomData,
-        })
-
+    pub async fn new_local() -> Result<Self, ThoError> {
+        Ok(Self { pd: PhantomData })
     }
 }
 
-impl <C> Adjustable for SyncLabelBatch<C>
-where
-    C: RunCtx + 'static
-{}
+impl<C> Adjustable for SyncLabelBatch<C> where C: RunCtx + 'static {}
 
-impl <C> OutId for SyncLabelBatch<C>
+impl<C> OutId for SyncLabelBatch<C>
 where
-    C: RunCtx + 'static
+    C: RunCtx + 'static,
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
         input_id.clone()
     }
 }
 
-impl <C> Stage for SyncLabelBatch<C>
+impl<C> Stage for SyncLabelBatch<C>
 where
-    C: RunCtx + 'static
+    C: RunCtx + 'static,
 {
     type Ctx = C;
     type In<'a> = SyncLabelBatchInput<'a>;
     type Out = SyncLabelBatchOutput;
 }
 
-impl <C> SyncStage for SyncLabelBatch<C>
+impl<C> SyncStage for SyncLabelBatch<C>
 where
-    C: RunCtx + 'static
+    C: RunCtx + 'static,
 {
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         debug!("SyncLabelBatch::do_run: input={input:?}");
@@ -334,10 +356,14 @@ where
 
         if x_1.is_empty() || x_0.is_empty() {
             // An absent class is a data incompatibility, distinct from failure to load its resources.
-            return Err(ThoError::Data { kind: thoosa_shared::DataErrorKind::EmptyTrainingClass, msg: format!("SyncLabelBatch: empty positive or negative resources for {}", input.label) });
+            return Err(ThoError::Data {
+                kind: thoosa_shared::DataErrorKind::EmptyTrainingClass,
+                msg: format!("SyncLabelBatch: empty positive or negative resources for {}", input.label),
+            });
         }
 
-        let max_input = x_1.iter()
+        let max_input = x_1
+            .iter()
             .chain(x_0.iter())
             .map(|value| value.data().size().get(1).copied().ok_or_else(|| ThoError::new(format!("SyncLabelBatch: invalid motif output shape for {}", input.label))))
             .collect::<Result<Vec<_>, _>>()?
@@ -370,22 +396,22 @@ where
 }
 
 #[typetag::serde]
-impl WorkerOutput for SyncLabelBatchOutput{}
+impl WorkerOutput for SyncLabelBatchOutput {}
 
-
-pub fn sync_label_batch_endpoint_init<'a>(_stage_id:Option<String>, _init: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, _all_cuda_tensors: &'a AllTensors, _tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn sync_label_batch_endpoint_init<'a>(_stage_id: Option<String>, _init: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, _all_cuda_tensors: &'a AllTensors, _tho_device: &'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
         // WorkerStageInput reconstructs owned tensor-plus-length values for the borrowed stage API.
         Ok(Box::new(WorkerWrapper::<JsonIpcCodec, _, _, _>::new(Arc::new(SyncLabelBatch::<WokerRunCtx>::new_local().await?), PhantomData)) as Box<dyn SyncStageIpcWrapper>)
-    }.boxed()
+    }
+    .boxed()
 }
 
 #[derive(Debug)]
 pub struct TrainLabelNets<L, LM, C>
 where
-    L: for <'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=C> + Cached + OutId + 'static,
-    LM: for <'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>, Ctx=C> + Cached + OutId + 'static,
-    C: RunCtx + Adjustable + 'static
+    L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + 'static,
+    LM: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>, Ctx = C> + Cached + OutId + 'static,
+    C: RunCtx + Adjustable + 'static,
 {
     train_motif_nets_run_config_ids: Vec<RunConfigId>,
     motif_nets_ids: Vec<RunConfigId>,
@@ -394,12 +420,11 @@ where
     applied_motif_loader: Arc<LM>,
     #[expect(dead_code, reason = "Retains the shared owner for the lifetime of this stage or input.")]
     ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
-    num_nets:u32,
+    num_nets: u32,
     store: Arc<dyn MotifsStore>,
-    opt_config:Arc<OptConfig>,
+    opt_config: Arc<OptConfig>,
     labels: Option<Vec<String>>,
-    sync_label_batch:Arc<DynSyncStageEnum<SyncLabelBatch<C>>>
-
+    sync_label_batch: Arc<DynSyncStageEnum<SyncLabelBatch<C>>>,
 }
 
 pub trait AppliedMotifNetsStage<C>: for<'i> AsyncStage<In<'i> = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Out = Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>, Ctx = C> + Cached + OutId + 'static
@@ -423,7 +448,6 @@ where
     }
 }
 
-
 pub async fn new_train_label_nets<L, AMN, C>(
     train_motif_net_run_config_ids: Vec<RunConfigId>,
     loader: Arc<L>,
@@ -431,12 +455,12 @@ pub async fn new_train_label_nets<L, AMN, C>(
     run_configs: thoosa_shared::run_configs::TrainingRunConfigs<TrainLabelNetRunConfigFields>,
     ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
     store: &Arc<dyn MotifsStore>,
-    opt_config:Arc<OptConfig>,
+    opt_config: Arc<OptConfig>,
     labels: Option<Vec<String>>,
     ctx: C,
 ) -> Result<TrainLabelNets<L, PairStage<L, AMN, C>, C>, ThoError>
 where
-    L: for <'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=C> + Cached + OutId + 'static,
+    L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + 'static,
     AMN: AppliedMotifNetsStage<C>,
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
@@ -448,55 +472,30 @@ where
     }
     let motif_nets_ids = apply_motif_nets.motif_nets_ids();
 
+    let applied_motif_loader = Arc::new(PairStage::new(loader, apply_motif_nets));
 
-    let applied_motif_loader = Arc::new(PairStage::new(
-        loader,
-        apply_motif_nets
-    ));
-
-    t!(TrainLabelNets::new(
-        train_motif_net_run_config_ids,
-        motif_nets_ids,
-        applied_motif_loader,
-        num_nets,
-        run_configs,
-        ws,
-        store,
-        opt_config,
-        labels,
-        ctx
-    )).await
+    t!(TrainLabelNets::new(train_motif_net_run_config_ids, motif_nets_ids, applied_motif_loader, num_nets, run_configs, ws, store, opt_config, labels, ctx)).await
 }
 
-impl <L, LM, C> TrainLabelNets<L, LM, C>
+impl<L, LM, C> TrainLabelNets<L, LM, C>
 where
-    L: for <'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=C> + Cached + OutId + 'static,
-    LM: for <'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>, Ctx=C> + Cached + OutId + 'static,
-    C: RunCtx + Adjustable + 'static
+    L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + 'static,
+    LM: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>, Ctx = C> + Cached + OutId + 'static,
+    C: RunCtx + Adjustable + 'static,
 {
-
     pub async fn new(
         train_motif_nets_run_config_ids: Vec<RunConfigId>,
         motif_nets_ids: Vec<u32>,
         applied_motif_loader: Arc<LM>,
-        num_nets:u32,
+        num_nets: u32,
         run_configs: thoosa_shared::run_configs::TrainingRunConfigs<TrainLabelNetRunConfigFields>,
         ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
         store: &Arc<dyn MotifsStore>,
-        opt_config:Arc<OptConfig>,
+        opt_config: Arc<OptConfig>,
         labels: Option<Vec<String>>,
-        ctx:C
-    ) -> Result<Self, ThoError>
-    {
-        let labels = labels
-            .map(|labels| {
-                labels
-                    .into_iter()
-                    .map(|label| label.trim().to_ascii_lowercase())
-                    .filter(|label| !label.is_empty())
-                    .collect::<Vec<_>>()
-            })
-            .filter(|labels| !labels.is_empty());
+        ctx: C,
+    ) -> Result<Self, ThoError> {
+        let labels = labels.map(|labels| labels.into_iter().map(|label| label.trim().to_ascii_lowercase()).filter(|label| !label.is_empty()).collect::<Vec<_>>()).filter(|labels| !labels.is_empty());
 
         Ok(Self {
             train_motif_nets_run_config_ids,
@@ -504,30 +503,26 @@ where
             run_configs: Arc::new(run_configs),
             pd: PhantomData,
             applied_motif_loader,
-            ws:Arc::clone(&ws),
+            ws: Arc::clone(&ws),
             num_nets,
             store: Arc::clone(store),
             opt_config,
             labels,
 
-            sync_label_batch:  SyncLabelBatch::<C>::new(ctx.tho_device_idx()).await?,
+            sync_label_batch: SyncLabelBatch::<C>::new(ctx.tho_device_idx()).await?,
         })
     }
-
 }
 
 #[derive(Debug, CpuData)]
 #[cpu_data(shallow)]
 pub struct TrainLabelNetsOutput {
     train_motif_nets_run_config_ids: Vec<RunConfigId>,
-    motif_nets_ids:Vec<u32>,
-    results: Vec<TrainLabelNetRunConfigResult>
+    motif_nets_ids: Vec<u32>,
+    results: Vec<TrainLabelNetRunConfigResult>,
 }
 
-impl Output for TrainLabelNetsOutput {
-
-}
-
+impl Output for TrainLabelNetsOutput {}
 
 #[async_trait]
 impl SavableResult for TrainLabelNetsOutput {
@@ -536,16 +531,19 @@ impl SavableResult for TrainLabelNetsOutput {
     type R = Vec<u32>;
 
     async fn save(&mut self, store: &Arc<dyn MotifsStore>, ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, _p: Self::P<'_>) -> anyhow::Result<Vec<u32>> {
-
         let mut run_config_ids = Vec::with_capacity(self.results.len());
 
         for result in &mut self.results {
-
             run_config_ids.push(
-                t!(result.save(store, ws, TrainLabelNetRunConfigResultParams {
-                    train_motif_nets_run_config_ids:&self.train_motif_nets_run_config_ids,
-                    motif_nets_ids:&self.motif_nets_ids
-                })).await?
+                t!(result.save(
+                    store,
+                    ws,
+                    TrainLabelNetRunConfigResultParams {
+                        train_motif_nets_run_config_ids: &self.train_motif_nets_run_config_ids,
+                        motif_nets_ids: &self.motif_nets_ids
+                    }
+                ))
+                .await?,
             );
         }
 
@@ -554,20 +552,20 @@ impl SavableResult for TrainLabelNetsOutput {
 }
 
 impl TrainLabelNetsOutput {
-    pub fn new(train_motif_nets_run_config_ids: Vec<RunConfigId>, motif_nets_ids:Vec<u32>, results: Vec<TrainLabelNetRunConfigResult>) -> Self {
+    pub fn new(train_motif_nets_run_config_ids: Vec<RunConfigId>, motif_nets_ids: Vec<u32>, results: Vec<TrainLabelNetRunConfigResult>) -> Self {
         Self {
             train_motif_nets_run_config_ids,
             motif_nets_ids,
-            results
+            results,
         }
     }
 }
 
-impl <L, LM, C> Stage for TrainLabelNets<L, LM, C>
+impl<L, LM, C> Stage for TrainLabelNets<L, LM, C>
 where
-    L: for <'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=C> + Cached + OutId + 'static,
-    LM: for <'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>, Ctx=C> + Cached + OutId + 'static,
-    C: RunCtx + Adjustable + 'static
+    L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + 'static,
+    LM: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>, Ctx = C> + Cached + OutId + 'static,
+    C: RunCtx + Adjustable + 'static,
 {
     type Ctx = C;
     type In<'a> = Arc<ResourcesConfigInput<NetResources<Labeled>>>;
@@ -577,13 +575,12 @@ where
 impl<L, LM, C> AsyncStage for TrainLabelNets<L, LM, C>
 where
     L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + 'static,
-    LM: for <'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>, Ctx=C> + Cached + OutId + 'static,
-    C: RunCtx + MaxParallelCtx + Adjustable + 'static
+    LM: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>, Ctx = C> + Cached + OutId + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
-    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TrainLabelNets::run"))]
-    fn run(self: Arc<Self>, input: Self::In<'static>, mut ctx: Self::Ctx) -> impl Future<Output=Result<Self::Out, ThoError>> + Send {
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "TrainLabelNets::run"))]
+    fn run(self: Arc<Self>, input: Self::In<'static>, mut ctx: Self::Ctx) -> impl Future<Output = Result<Self::Out, ThoError>> + Send {
         let train_label_nets_run_configs = Arc::clone(&self.run_configs);
-
 
         debug!("TrainLabelNets::run: num_nets={}", self.num_nets);
 
@@ -592,13 +589,16 @@ where
             let resources_config = input.resources_config().clone();
             let (train_labels_resource_keys, valid_label_resource_keys) = t!(resources_config.to_resources(&self.store)).await?;
 
-            let train_labels_resource_keys =  train_labels_resource_keys.into_iter().filter(|(label, resources)|{
-                let is_empty = resources.is_empty();
-                if is_empty {
-                    warn!("no resources for {label} in train resources");
-                }
-                !is_empty
-            }).collect::<Vec<_>>();
+            let train_labels_resource_keys = train_labels_resource_keys
+                .into_iter()
+                .filter(|(label, resources)| {
+                    let is_empty = resources.is_empty();
+                    if is_empty {
+                        warn!("no resources for {label} in train resources");
+                    }
+                    !is_empty
+                })
+                .collect::<Vec<_>>();
 
             if train_labels_resource_keys.is_empty() {
                 warn!("No resources in resources_config={resources_config:?}");
@@ -606,152 +606,119 @@ where
             }
 
             //TODO util validate_resources function
-            let valid_label_resource_keys =  valid_label_resource_keys.into_iter().filter(|(label, resources)|{
-                let is_empty = resources.is_empty();
-                if is_empty {
-                    warn!("no resources for {label} in valid resources");
-                }
-                !is_empty
-            }).collect::<Vec<_>>();
+            let valid_label_resource_keys = valid_label_resource_keys
+                .into_iter()
+                .filter(|(label, resources)| {
+                    let is_empty = resources.is_empty();
+                    if is_empty {
+                        warn!("no resources for {label} in valid resources");
+                    }
+                    !is_empty
+                })
+                .collect::<Vec<_>>();
 
             if valid_label_resource_keys.is_empty() {
                 warn!("No resources in resources_config={resources_config:?}");
                 return Err(ThoError::new(format!("No resources in resources_config={resources_config:?}")));
             }
 
-
             let (labels_train_and_valid_sets, labels_others_train_valid_resources) = build_resource_maps(train_labels_resource_keys, valid_label_resource_keys);
             debug!("TrainLabelNets::run: labels_others_train_valid_resources={labels_others_train_valid_resources:?}");
             debug!("TrainLabelNets::run: labels_train_and_valid_sets={labels_train_and_valid_sets:?}");
 
-            let labels_train_and_valid_sets_len = self.labels.as_ref().map(|filtered_labels|filtered_labels.len()).unwrap_or(labels_train_and_valid_sets.len());
+            let labels_train_and_valid_sets_len = self.labels.as_ref().map(|filtered_labels| filtered_labels.len()).unwrap_or(labels_train_and_valid_sets.len());
             let labels_filter = self.labels.clone();
-            let futures = labels_train_and_valid_sets.into_iter()
-            .filter(|(label, _)|{
-                labels_filter
-                    .as_ref()
-                    .map(|labels| labels.iter().any(|filter_label| filter_label.eq_ignore_ascii_case(label)))
-                    .unwrap_or(true)
-            })
-            .map(|label_tain_and_valid_sets|{
-                let (label, resources_1) = label_tain_and_valid_sets;
-                let ctx_for_task = ctx.branch(true);
+            let futures = labels_train_and_valid_sets
+                .into_iter()
+                .filter(|(label, _)| labels_filter.as_ref().map(|labels| labels.iter().any(|filter_label| filter_label.eq_ignore_ascii_case(label))).unwrap_or(true))
+                .map(|label_tain_and_valid_sets| {
+                    let (label, resources_1) = label_tain_and_valid_sets;
+                    let ctx_for_task = ctx.branch(true);
 
-                let opt_config = Arc::clone(&self.opt_config);
-                let train_label_nets_run_configs = Arc::clone(&train_label_nets_run_configs);
-                let applied_motif_loader = Arc::clone(&self.applied_motif_loader);
+                    let opt_config = Arc::clone(&self.opt_config);
+                    let train_label_nets_run_configs = Arc::clone(&train_label_nets_run_configs);
+                    let applied_motif_loader = Arc::clone(&self.applied_motif_loader);
 
-                debug!("TrainLabelNets::run: label={label} train_motif_nets_run_config_ids={:?} train_label_nets_run_configs={train_label_nets_run_configs:?}", self.train_motif_nets_run_config_ids);
-                let _motif_nets_ids = self.motif_nets_ids.clone();
+                    debug!("TrainLabelNets::run: label={label} train_motif_nets_run_config_ids={:?} train_label_nets_run_configs={train_label_nets_run_configs:?}", self.train_motif_nets_run_config_ids);
+                    let _motif_nets_ids = self.motif_nets_ids.clone();
 
-                let labels_others_train_valid_resources = Arc::clone(&labels_others_train_valid_resources);
-                let num_nets = self.num_nets;
-                let sync_label_batch = Arc::clone(&self.sync_label_batch);
-                async move {
-                    debug!("TrainLabelNets::run: label={label} resources={resources_1:?}");
+                    let labels_others_train_valid_resources = Arc::clone(&labels_others_train_valid_resources);
+                    let num_nets = self.num_nets;
+                    let sync_label_batch = Arc::clone(&self.sync_label_batch);
+                    async move {
+                        debug!("TrainLabelNets::run: label={label} resources={resources_1:?}");
 
-                    let resources_0 = labels_others_train_valid_resources.get(&label).expect(&format!("no resources not belonging to {label}"));
-                    info!("TrainLabelNets::run: label={label} resources_x={resources_0:?}");
+                        let resources_0 = labels_others_train_valid_resources.get(&label).expect(&format!("no resources not belonging to {label}"));
+                        info!("TrainLabelNets::run: label={label} resources_x={resources_0:?}");
 
-                    let resources_1_train = Arc::new(resources_1.0.clone());
-                    let resources_1_valid = Arc::new(resources_1.1.clone());
-                    let resources_0_train = Arc::new(resources_0.0.clone());
-                    let resources_0_valid = Arc::new(resources_0.1.clone());
-                    let label = label.clone();
-                    let label_for_batch = label.clone();
+                        let resources_1_train = Arc::new(resources_1.0.clone());
+                        let resources_1_valid = Arc::new(resources_1.1.clone());
+                        let resources_0_train = Arc::new(resources_0.0.clone());
+                        let resources_0_valid = Arc::new(resources_0.1.clone());
+                        let label = label.clone();
+                        let label_for_batch = label.clone();
 
+                        debug!("TrainLabelNets::run: label={label} resources_1_train={resources_1_train:?}");
+                        debug!("TrainLabelNets::run: label={label} resources_1_valid={resources_1_valid:?}");
+                        debug!("TrainLabelNets::run: label={label} resources_0_train={resources_0_train:?}");
+                        debug!("TrainLabelNets::run: label={label} resources_0_valid={resources_0_valid:?}");
 
-                    debug!("TrainLabelNets::run: label={label} resources_1_train={resources_1_train:?}");
-                    debug!("TrainLabelNets::run: label={label} resources_1_valid={resources_1_valid:?}");
-                    debug!("TrainLabelNets::run: label={label} resources_0_train={resources_0_train:?}");
-                    debug!("TrainLabelNets::run: label={label} resources_0_valid={resources_0_valid:?}");
+                        let train_net = Arc::new(TrainNet::new(
+                            move |_ctx_for_batch: C, rc: &TrainLabelNetRunConfig| {
+                                let applied_motif_loader = Arc::clone(&applied_motif_loader);
 
-                    let train_net = Arc::new(TrainNet::new(
-                        move |_ctx_for_batch:C,rc:&TrainLabelNetRunConfig| {
+                                let label = label_for_batch.clone();
+                                let sync_label_batch = Arc::clone(&sync_label_batch);
+                                ready(Ok(ResourcesBatch::new(
+                                    Arc::clone(&applied_motif_loader),
+                                    rc.common_training_args.batch_size,
+                                    Arc::clone(&resources_1_train),
+                                    Arc::clone(&resources_1_valid),
+                                    Arc::clone(&resources_0_train),
+                                    Arc::clone(&resources_0_valid),
+                                    Arc::new(
+                                        move |x_1_wrapped: Vec<Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>>, x_0_wrapped: Vec<Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>>, mut ctx: C| {
+                                            let label = label.clone();
+                                            let sync_label_batch = Arc::clone(&sync_label_batch);
 
-                            let applied_motif_loader = Arc::clone(&applied_motif_loader);
+                                            async move {
+                                                //TODO
 
-                            let label = label_for_batch.clone();
-                            let sync_label_batch = Arc::clone(&sync_label_batch);
-                            ready(Ok(ResourcesBatch::new(
-                                   Arc::clone(&applied_motif_loader),
-                                   rc.common_training_args.batch_size,
-                                   Arc::clone(&resources_1_train),
-                                   Arc::clone(&resources_1_valid),
-                                   Arc::clone(&resources_0_train),
-                                   Arc::clone(&resources_0_valid),
-                                   Arc::new(move |x_1_wrapped: Vec<Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>>, x_0_wrapped: Vec<Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>>, mut ctx: C| {
-                                       let label = label.clone();
-                                       let sync_label_batch = Arc::clone(&sync_label_batch);
+                                                let input = Arc::new(SyncLabelBatchInputWrapper::new(x_1_wrapped, x_0_wrapped, num_nets as i64, label));
+                                                let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> =
+                                                    OOMHandler::new(vec![Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(*MaxParallelStep::FAST))), Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("sync_label_batch")))], None);
+                                                let output = t!(oom_handler.run(
+                                                    &sync_label_batch,
+                                                    input,
+                                                    ctx.branch(false),
+                                                    WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new(),),),
+                                                ))
+                                                .await?;
+                                                Ok(output.into_parts())
+                                            }
+                                            .boxed()
+                                        },
+                                    ),
+                                )))
+                                .boxed()
+                            },
+                            Arc::new(TrainLabelStepFactory::new(num_nets)),
+                            opt_config,
+                            train_label_nets_run_configs,
+                            |rc: &TrainLabelNetRunConfig| rc.common_training_args.epochs,
+                            1, //TODO params
+                            format!("label_{label}"),
+                        ));
 
-                                       async move {
-                                           //TODO
+                        let result = t!(train_net.run(Arc::new(TrainNetInput::new()), ctx_for_task)).await?;
 
+                        info!("TrainLabelNets::run, done: label={label} min_loss={:?}", result.min_loss);
 
+                        Ok::<_, ThoError>(TrainLabelNetRunConfigResult::new(label, result.min_loss, result.node_params, result.run_config, result.var_store_path))
+                    }
+                });
 
-
-                                           let input = Arc::new(SyncLabelBatchInputWrapper::new(x_1_wrapped, x_0_wrapped, num_nets as i64, label));
-                                           let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(vec![
-                                               Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(*MaxParallelStep::FAST))),
-                                               Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("sync_label_batch"))),
-                                           ], None);
-                                           let output = t!(oom_handler.run(
-                                               &sync_label_batch,
-                                               input,
-                                               ctx.branch(false),
-                                               WithRunCtxContext::new(
-                                                   MaxParallelAndDumpToCpuAdjustableContex::new(
-                                                       MaxParallelAdjustContextImpl::new(),
-                                                       DumpToCpuContextImpl::new(),
-                                                   ),
-                                               ),
-                                           )).await?;
-                                           Ok(output.into_parts())
-                                       }.boxed()
-                                   })
-                               ))).boxed()
-
-
-                       },
-                        Arc::new(TrainLabelStepFactory::new(num_nets)),
-                        opt_config,
-                        train_label_nets_run_configs,
-                        |rc:&TrainLabelNetRunConfig|{
-                            rc.common_training_args.epochs
-                        },
-                        1,//TODO params
-                        format!("label_{label}")
-                    ));
-
-                    let result = t!(train_net.run(
-                        Arc::new(TrainNetInput::new()),
-                        ctx_for_task
-                    )).await?;
-
-
-                    info!("TrainLabelNets::run, done: label={label} min_loss={:?}", result.min_loss);
-
-                    Ok::<_, ThoError>(
-                        TrainLabelNetRunConfigResult::new(
-                            label,
-                            result.min_loss,
-                            result.node_params,
-                            result.run_config,
-                            result.var_store_path,
-                        )
-                    )
-
-                }
-
-            });
-
-            let results = t!(collect_futures_with_progress(
-                futures,
-                labels_train_and_valid_sets_len,
-                FuturesOrdering::Unordered,
-                thoosa_shared::CollectionErrorPolicy::SkipAll,
-                "train labels",
-            )).await?;
+            let results = t!(collect_futures_with_progress(futures, labels_train_and_valid_sets_len, FuturesOrdering::Unordered, thoosa_shared::CollectionErrorPolicy::SkipAll, "train labels",)).await?;
 
             Ok(Arc::new(TrainLabelNetsOutput::new(self.train_motif_nets_run_config_ids.clone(), self.motif_nets_ids.clone(), results)))
         }
@@ -759,69 +726,56 @@ where
 }
 
 #[allow(type_alias_bounds)]
-type BuildBatchFn<LD: Data + CopyToDevice + WithId + Send + Sync + 'static, X:Dims+ 'static, Y:Dims+ 'static, C> = Arc<dyn Fn(
-    Vec<Arc<DevicesWrap<LD>>>,
-    Vec<Arc<DevicesWrap<LD>>>, C
-
-) -> BoxFuture<'static, Result<(ThoBatch<X>, Option<BatchLengths>, ThoBatch<Y>), ThoError>> + Send + Sync>;
+type BuildBatchFn<LD: Data + CopyToDevice + WithId + Send + Sync + 'static, X: Dims + 'static, Y: Dims + 'static, C> = Arc<dyn Fn(Vec<Arc<DevicesWrap<LD>>>, Vec<Arc<DevicesWrap<LD>>>, C) -> BoxFuture<'static, Result<(ThoBatch<X>, Option<BatchLengths>, ThoBatch<Y>), ThoError>> + Send + Sync>;
 
 // #[derive(Debug)]
 struct ResourcesBatch<L, C, LD, X, Y>
 where
-    L: for<'i> Cached<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<LD>>, Ctx=C> + AsyncStage + OutId + 'static,
-    C:RunCtx+'static,
+    L: for<'i> Cached<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<LD>>, Ctx = C> + AsyncStage + OutId + 'static,
+    C: RunCtx + 'static,
     LD: Data + CopyToDevice + WithId + Send + Sync + 'static,
-    X:Dims+ 'static,
-    Y:Dims+ 'static,
+    X: Dims + 'static,
+    Y: Dims + 'static,
 {
-
     half_batch_size: u32,
-    resources_1_train:Arc<Vec<Resource>>,
-    resources_1_valid:Arc<Vec<Resource>>,
-    resources_0_train:Arc<Vec<Resource>>,
-    resources_0_valid:Arc<Vec<Resource>>,
+    resources_1_train: Arc<Vec<Resource>>,
+    resources_1_valid: Arc<Vec<Resource>>,
+    resources_0_train: Arc<Vec<Resource>>,
+    resources_0_valid: Arc<Vec<Resource>>,
     loader: Arc<L>,
     build_batch_fn: BuildBatchFn<LD, X, Y, C>,
 }
 
-impl <L, C, LD, X, Y> Debug for  ResourcesBatch<L, C, LD, X, Y>
+impl<L, C, LD, X, Y> Debug for ResourcesBatch<L, C, LD, X, Y>
 where
-    L: for<'i> Cached<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<LD>>, Ctx=C> + AsyncStage + OutId + 'static,
-    C:RunCtx+'static,
+    L: for<'i> Cached<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<LD>>, Ctx = C> + AsyncStage + OutId + 'static,
+    C: RunCtx + 'static,
     LD: Data + CopyToDevice + WithId + Send + Sync + 'static,
-    X:Dims+ 'static,
-    Y:Dims+ 'static,
+    X: Dims + 'static,
+    Y: Dims + 'static,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ResourcesBatch").finish()//TODO
+        f.debug_struct("ResourcesBatch").finish() //TODO
     }
 }
 
-impl <L, C, LD, X, Y> ResourcesBatch<L, C, LD, X, Y>
+impl<L, C, LD, X, Y> ResourcesBatch<L, C, LD, X, Y>
 where
-    L: for<'i> Cached<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<LD>>, Ctx=C> + AsyncStage + OutId + 'static,
-    C:RunCtx+'static,
+    L: for<'i> Cached<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<LD>>, Ctx = C> + AsyncStage + OutId + 'static,
+    C: RunCtx + 'static,
     LD: Data + CopyToDevice + WithId + Send + Sync + 'static,
-    X:Dims+ 'static,
-    Y:Dims+ 'static,
+    X: Dims + 'static,
+    Y: Dims + 'static,
 {
-    pub fn new(
-        loader: Arc<L>,
-        batch_size: u32,
-        resources_1_train:Arc<Vec<Resource>>,
-        resources_1_valid:Arc<Vec<Resource>>,
-        resources_0_train:Arc<Vec<Resource>>,
-        resources_0_valid:Arc<Vec<Resource>>,
-        build_batch_fn:BuildBatchFn<LD, X, Y, C>,
-    ) -> Self {
+    pub fn new(loader: Arc<L>, batch_size: u32, resources_1_train: Arc<Vec<Resource>>, resources_1_valid: Arc<Vec<Resource>>, resources_0_train: Arc<Vec<Resource>>, resources_0_valid: Arc<Vec<Resource>>, build_batch_fn: BuildBatchFn<LD, X, Y, C>) -> Self {
         debug!("ResourcesBatch::new: batch_size={batch_size:?}");
         debug!("ResourcesBatch::new: resources_1_train={resources_1_train:?}");
         debug!("ResourcesBatch::new: resources_1_valid={resources_1_valid:?}");
         debug!("ResourcesBatch::new: resources_0_train={resources_0_train:?}");
         debug!("ResourcesBatch::new: resources_0_valid={resources_0_valid:?}");
 
-        assert_eq!(resources_1_train.len(), resources_0_train.len());//train
-        assert_eq!(resources_1_valid.len(), resources_0_valid.len());//valid
+        assert_eq!(resources_1_train.len(), resources_0_train.len()); //train
+        assert_eq!(resources_1_valid.len(), resources_0_valid.len()); //valid
 
         //TODO replacement?
         let half_batch_size = (batch_size / 2).max(1);
@@ -843,46 +797,30 @@ where
     }
 }
 
-impl <L,C, LD, X, Y> AsyncDataBatch<X, Y, C> for ResourcesBatch<L, C, LD, X, Y>
+impl<L, C, LD, X, Y> AsyncDataBatch<X, Y, C> for ResourcesBatch<L, C, LD, X, Y>
 where
-    L: for<'i> Cached<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<LD>>, Ctx=C> + AsyncStage + OutId + 'static,
-    C:RunCtx+'static,
+    L: for<'i> Cached<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<LD>>, Ctx = C> + AsyncStage + OutId + 'static,
+    C: RunCtx + 'static,
     LD: Data + CopyToDevice + WithId + Send + Sync + 'static,
-    X:Dims+ 'static,
-    Y:Dims+ 'static,
+    X: Dims + 'static,
+    Y: Dims + 'static,
 {
     fn train_batch_stream<'a>(&'a self, ctx: C) -> BoxStream<'a, Result<(ThoBatch<X>, Option<BatchLengths>, ThoBatch<Y>), ThoError>> {
         let batches = shuffle_and_chunk_with_rng(self.resources_1_train.len(), self.half_batch_size, &mut rng());
 
         debug!("ResourcesBatch::train_batch_stream: batches={batches:?}");
-        assert!(!batches.is_empty(), "train_batch_stream: batch is empty, self.resources_1_train={:?} self.resources_0_train={:?}",self.resources_1_train,  self.resources_0_train);
+        assert!(!batches.is_empty(), "train_batch_stream: batch is empty, self.resources_1_train={:?} self.resources_0_train={:?}", self.resources_1_train, self.resources_0_train);
 
-        Self::build_batch_stream(
-            Arc::clone(&self.build_batch_fn),
-            batches,
-            Arc::clone(&self.loader),
-            ctx,
-            Arc::clone(&self.resources_1_train),
-            Arc::clone(&self.resources_0_train),
-            "train"
-        )
+        Self::build_batch_stream(Arc::clone(&self.build_batch_fn), batches, Arc::clone(&self.loader), ctx, Arc::clone(&self.resources_1_train), Arc::clone(&self.resources_0_train), "train")
     }
 
     fn valid_batch_stream<'a>(&'a self, ctx: C) -> BoxStream<'a, Result<(ThoBatch<X>, Option<BatchLengths>, ThoBatch<Y>), ThoError>> {
         let batches = shuffle_and_chunk_with_rng(self.resources_1_valid.len(), self.half_batch_size, &mut rng());
 
         debug!("ResourcesBatch::valid_batch_stream: batches={batches:?}");
-        assert!(!batches.is_empty(), "valid_batch_stream: batch is empty, self.resources_1_train={:?} self.resources_0_train={:?}",self.resources_1_train,  self.resources_0_train);
+        assert!(!batches.is_empty(), "valid_batch_stream: batch is empty, self.resources_1_train={:?} self.resources_0_train={:?}", self.resources_1_train, self.resources_0_train);
 
-        Self::build_batch_stream(
-            Arc::clone(&self.build_batch_fn),
-            batches,
-            Arc::clone(&self.loader),
-            ctx,
-            Arc::clone(&self.resources_1_valid),
-            Arc::clone(&self.resources_0_valid),
-            "valid"
-        )
+        Self::build_batch_stream(Arc::clone(&self.build_batch_fn), batches, Arc::clone(&self.loader), ctx, Arc::clone(&self.resources_1_valid), Arc::clone(&self.resources_0_valid), "valid")
     }
 
     fn num_batches(&self) -> usize {
@@ -893,18 +831,24 @@ where
 impl<L, C, LD, X, Y> ResourcesBatch<L, C, LD, X, Y>
 where
     C: 'static + RunCtx,
-    L: 'static + AsyncStage + OutId + for<'i> Cached<In<'i>=Arc<Resource>, Out=Arc<DevicesWrap<LD>>, Ctx=C>+ 'static,
+    L: 'static + AsyncStage + OutId + for<'i> Cached<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<LD>>, Ctx = C> + 'static,
     LD: Data + CopyToDevice + WithId + Send + Sync + 'static,
-    X:Dims+ 'static,
-    Y:Dims+ 'static,
+    X: Dims + 'static,
+    Y: Dims + 'static,
 {
-
-    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ResourcesBatch::build_batch_stream"))]
-    fn build_batch_stream(build_batch_fn: BuildBatchFn<LD, X, Y, C>, resource_indexes_for_batches: Vec<Box<[usize]>>, loader: Arc<L>, mut ctx: C, x_1: Arc<Vec<Resource>>, x_0: Arc<Vec<Resource>>, descr: &'static str) -> BoxStream<'static, Result<(ThoBatch<X>, Option<BatchLengths>, ThoBatch<Y>), ThoError>> {
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "ResourcesBatch::build_batch_stream"))]
+    fn build_batch_stream(
+        build_batch_fn: BuildBatchFn<LD, X, Y, C>,
+        resource_indexes_for_batches: Vec<Box<[usize]>>,
+        loader: Arc<L>,
+        mut ctx: C,
+        x_1: Arc<Vec<Resource>>,
+        x_0: Arc<Vec<Resource>>,
+        descr: &'static str,
+    ) -> BoxStream<'static, Result<(ThoBatch<X>, Option<BatchLengths>, ThoBatch<Y>), ThoError>> {
         debug!("ResourcesBatch::build_batch_stream: resource_indexes_for_batches={resource_indexes_for_batches:?}");
 
-
-        let futures = futures::stream::iter(resource_indexes_for_batches.into_iter().enumerate()).then(move |(i, batch_keys)|   {
+        let futures = futures::stream::iter(resource_indexes_for_batches.into_iter().enumerate()).then(move |(i, batch_keys)| {
             let build_batch_fn = Arc::clone(&build_batch_fn);
             let loader = Arc::clone(&loader);
             let x_1 = Arc::clone(&x_1);
@@ -927,10 +871,7 @@ where
                     async move {
                         debug!("ResourcesBatch::build_batch_stream: descr={descr} batch_i={i} in future 1");
 
-                        try_join!(
-                            Arc::clone(&loader).run_cached(Arc::new(x_1[index].clone()), ctx_x1),
-                            Arc::clone(&loader).run_cached(Arc::new(x_0[index].clone()), ctx_x0)
-                        )
+                        try_join!(Arc::clone(&loader).run_cached(Arc::new(x_1[index].clone()), ctx_x1), Arc::clone(&loader).run_cached(Arc::new(x_0[index].clone()), ctx_x0))
                     }
                 });
 
@@ -938,13 +879,8 @@ where
 
                 debug!("ResourcesBatch::build_batch_stream: descr={descr} futures.len={}", futures.len());
 
-                let (x_1_wrapped, x_0_wrapped) = t!(collect_futures_with_progress(
-                    futures,
-                    batch_len,
-                    FuturesOrdering::Ordered,
-                    thoosa_shared::CollectionErrorPolicy::Propagate,
-                    "ResourcesBatch::build_batch_stream",
-                )).await?
+                let (x_1_wrapped, x_0_wrapped) = t!(collect_futures_with_progress(futures, batch_len, FuturesOrdering::Ordered, thoosa_shared::CollectionErrorPolicy::Propagate, "ResourcesBatch::build_batch_stream",))
+                    .await?
                     .into_iter()
                     .collect::<Result<Vec<_>, ThoError>>()?
                     .into_iter()
@@ -967,7 +903,6 @@ where
         // TrainNet polls one batch ahead and owns its temporary cache and drain.
         futures.boxed()
     }
-
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -982,15 +917,16 @@ type SyncTrainLabelStep<C> = TrainStep<TrainStepXFn<MotifProbability>, MotifProb
 
 fn train_label_step_params(run_config: &TrainLabelNetRunConfig, num_nets: u32) -> LabelNetParams {
     match &run_config.net {
-        LabelNetTypeArgs::ConvNet(ConvNetArgs { num_conv_layers, hidden_conv_channels, num_head_layers, num_head_features, kernel, joint }) => {
-            LabelNetParams::new(num_nets, LabelNetTypeParams::ConvNetParams(ConvNetParams::new(*num_conv_layers, *hidden_conv_channels, *kernel, *num_head_layers, *num_head_features, joint.into())))
-        }
-        LabelNetTypeArgs::LinNet(LinNetArgs { num_layers, features }) => {
-            LabelNetParams::new(num_nets, LabelNetTypeParams::LinNetParams(LinLenNetParams::new(*features, *num_layers)))
-        }
-        LabelNetTypeArgs::SelfAttentionNet(SelfAttentionNetArgs { head_size, n_heads, ff_mult, dropout }) => {
-            LabelNetParams::new(num_nets, LabelNetTypeParams::SelfAttentionNetParams(SelfAttentionNetParams::new(*head_size, *n_heads, *ff_mult, *dropout)))
-        }
+        LabelNetTypeArgs::ConvNet(ConvNetArgs {
+            num_conv_layers,
+            hidden_conv_channels,
+            num_head_layers,
+            num_head_features,
+            kernel,
+            joint,
+        }) => LabelNetParams::new(num_nets, LabelNetTypeParams::ConvNetParams(ConvNetParams::new(*num_conv_layers, *hidden_conv_channels, *kernel, *num_head_layers, *num_head_features, joint.into()))),
+        LabelNetTypeArgs::LinNet(LinNetArgs { num_layers, features }) => LabelNetParams::new(num_nets, LabelNetTypeParams::LinNetParams(LinLenNetParams::new(*features, *num_layers))),
+        LabelNetTypeArgs::SelfAttentionNet(SelfAttentionNetArgs { head_size, n_heads, ff_mult, dropout }) => LabelNetParams::new(num_nets, LabelNetTypeParams::SelfAttentionNetParams(SelfAttentionNetParams::new(*head_size, *n_heads, *ff_mult, *dropout))),
     }
 }
 
@@ -998,12 +934,10 @@ fn train_label_loss(pred_y: &Tensor, target: &Tensor) -> anyhow::Result<Tensor> 
     Ok(pred_y.f_binary_cross_entropy_with_logits::<Tensor>(target, None, None, Reduction::Mean)?)
 }
 
-impl WorkerStageInput for TrainLabelStepIpcInit {
-}
+impl WorkerStageInput for TrainLabelStepIpcInit {}
 
 #[typetag::serde(name = "TrainLabelStepIpcInit")]
 impl WorkerInput for TrainLabelStepIpcInit {}
-
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -1018,8 +952,7 @@ impl std::borrow::Borrow<TrainStepInput<MotifProbability, LabelProbability>> for
     }
 }
 
-
-fn train_label_step_endpoint_init<'a>(_stage_id:Option<String>, init: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, _all_cuda_tensors: &'a AllTensors, _tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+fn train_label_step_endpoint_init<'a>(_stage_id: Option<String>, init: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, _all_cuda_tensors: &'a AllTensors, _tho_device: &'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
         let Ok(init) = (init as Box<dyn std::any::Any>).downcast::<TrainLabelStepIpcInit>() else {
             return Err(ThoError::new("TrainLabelStep endpoint received invalid initializer"));
@@ -1042,10 +975,12 @@ fn train_label_step_endpoint_init<'a>(_stage_id:Option<String>, init: Box<dyn Wo
             train_label_loss,
             init.training_config,
             init.vs_path,
-        ).await?;
+        )
+        .await?;
         // Shared stateful dispatch keeps the module, optimizer, and VarStore in the worker.
         Ok(Box::new(WorkerWrapperWithState::<JsonIpcCodec, _, _, _>::new_with_checkpoint_input::<TrainLabelStepInput>(Arc::new(train_step), PhantomData)) as Box<dyn SyncStageIpcWrapper>)
-    }.boxed()
+    }
+    .boxed()
 }
 
 #[derive(Debug)]
@@ -1067,21 +1002,26 @@ where
     async fn new_step(&self, run_config: TrainLabelNetRunConfig, ctx: C, vs_path: PathBuf) -> Result<(DynSyncStageWithStateEnum<SyncTrainLabelStep<C>>, LabelNetParams), ThoError> {
         let node_params = train_label_step_params(&run_config, self.num_nets);
         if GlobalCtx::global().is_ipc() {
-
-
-            let init = TrainLabelStepIpcInit { params: node_params.clone(), training_config: run_config.common_training_args.clone(), tho_device_idx: ctx.tho_device_idx(), vs_path };
+            let init = TrainLabelStepIpcInit {
+                params: node_params.clone(),
+                training_config: run_config.common_training_args.clone(),
+                tho_device_idx: ctx.tho_device_idx(),
+                vs_path,
+            };
             let input_cloner = Arc::new(|input: &TrainStepInput<MotifProbability, LabelProbability>| -> Result<Box<dyn WorkerInput>, ThoError> { Ok(Box::new(TrainLabelStepInput(input.clone_refs_for_worker()?))) });
-            Ok((DynSyncStageWithStateEnum::Proxy {
-                stage: Arc::new(ProxyStage::proxy_with_input_cloner(TRAIN_LABEL_STEP_ENDPOINT, Some(SyncTrainLabelStep::<C>::next_id().to_string()), ctx.tho_device_idx(), Box::new(init), input_cloner).await?),
-                init: (),
-            }, node_params))
+            Ok((
+                DynSyncStageWithStateEnum::Proxy {
+                    stage: Arc::new(ProxyStage::proxy_with_input_cloner(TRAIN_LABEL_STEP_ENDPOINT, Some(SyncTrainLabelStep::<C>::next_id().to_string()), ctx.tho_device_idx(), Box::new(init), input_cloner).await?),
+                    init: (),
+                },
+                node_params,
+            ))
         } else {
             let params_for_module = node_params.clone();
 
             let (train_step, _) = TrainStep::new_local(
                 ctx.tho_device_idx().into(),
                 move |run_config, device| async move {
-
                     let config = ModConfig::new(
                         run_config.common_training_args.tho_optimizer(),
                         move |var_store| params_for_module.label_net()?.build_tch_module::<Batch<MotifProbability>, Batch<LabelProbability>>(&var_store.root()),
@@ -1093,17 +1033,15 @@ where
                 train_label_loss,
                 run_config,
                 vs_path,
-            ).await?;
+            )
+            .await?;
             Ok((DynSyncStageWithStateEnum::Local(Arc::new(train_step)), node_params))
         }
     }
 }
 
 pub fn train_label_step_endpoint_inits() -> HashMap<String, MotifsInitFn> {
-    HashMap::from([(
-        TRAIN_LABEL_STEP_ENDPOINT.to_string(),
-        Box::new(train_label_step_endpoint_init) as MotifsInitFn,
-    )])
+    HashMap::from([(TRAIN_LABEL_STEP_ENDPOINT.to_string(), Box::new(train_label_step_endpoint_init) as MotifsInitFn)])
 }
 
 #[cfg(test)]
@@ -1164,14 +1102,11 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-    async fn heavy_test_train_label_net_3x3() -> Result<(), ThoError>
-    {
-
+    async fn heavy_test_train_label_net_3x3() -> Result<(), ThoError> {
         let mut rand = rng();
 
-
         thoosa_shared::test_utils::maybe_init_perf_tracing_stdout("info");
-        let test_dir = Path::new("/tmp/test_train_motif_nets");//.join(cdt_for_dir());
+        let test_dir = Path::new("/tmp/test_train_motif_nets"); //.join(cdt_for_dir());
         fs::create_dir_all(test_dir).await?;
 
         log::set_max_level(Debug);
@@ -1214,123 +1149,99 @@ mod tests {
                 .build(),
         ));
 
-        let resources_a = (0..10).map(|i|Resource::new(i, 1, format!("resource_a_{i}"), rand.random_range(700..1000))).collect::<Vec<_>>();
-        let resources_b = (10..20).map(|i|Resource::new(i, 1, format!("resource_b_{i}"), rand.random_range(700..1000))).collect::<Vec<_>>();
-        let resources_c = (20..30).map(|i|Resource::new(i, 1, format!("resource_c_{i}"), rand.random_range(700..1000))).collect::<Vec<_>>();
-        let resources_x = (30..40).map(|i|Resource::new(i, 1, format!("resource_x_{i}"), rand.random_range(700..1000))).collect::<Vec<_>>();
+        let resources_a = (0..10).map(|i| Resource::new(i, 1, format!("resource_a_{i}"), rand.random_range(700..1000))).collect::<Vec<_>>();
+        let resources_b = (10..20).map(|i| Resource::new(i, 1, format!("resource_b_{i}"), rand.random_range(700..1000))).collect::<Vec<_>>();
+        let resources_c = (20..30).map(|i| Resource::new(i, 1, format!("resource_c_{i}"), rand.random_range(700..1000))).collect::<Vec<_>>();
+        let resources_x = (30..40).map(|i| Resource::new(i, 1, format!("resource_x_{i}"), rand.random_range(700..1000))).collect::<Vec<_>>();
 
         let (resources_map, _motif_intervals) = resources_a.iter().zip(resources_b.iter().zip(resources_c.iter().zip(resources_x.iter()))).try_fold((HashMap::new(), vec![]), |mut a, (r_a, (r_b, (r_c, r_x)))| {
-
-            let (t, intervals) = resource_tensor(r_a.length() as usize, &[
-                            vec![(3, motif_width, TestSignalKind::Pulse)],
-                            vec![(1, motif_width, TestSignalKind::Sin)],
-                            vec![]
-                        ], 100, 10.0,
-                                                 true,
-                                                 true)?;
+            let (t, intervals) = resource_tensor(r_a.length() as usize, &[vec![(3, motif_width, TestSignalKind::Pulse)], vec![(1, motif_width, TestSignalKind::Sin)], vec![]], 100, 10.0, true, true)?;
 
             a.0.insert(r_a.clone(), t);
 
-            a.1.extend(intervals[0][0].iter().map(|interval|TensorIdSliceIdx(r_a.id(), interval.start as u32)));
+            a.1.extend(intervals[0][0].iter().map(|interval| TensorIdSliceIdx(r_a.id(), interval.start as u32)));
 
-
-            let (t, intervals) = resource_tensor(r_b.length() as usize, &[
-                            vec![(3, motif_width, TestSignalKind::Triangle)],
-                            vec![(1, motif_width, TestSignalKind::Sin)],
-                            vec![]
-                        ], 100, 10.0,
-                                                 true,
-                                                 true)?;
+            let (t, intervals) = resource_tensor(r_b.length() as usize, &[vec![(3, motif_width, TestSignalKind::Triangle)], vec![(1, motif_width, TestSignalKind::Sin)], vec![]], 100, 10.0, true, true)?;
 
             a.0.insert(r_b.clone(), t);
 
-            a.1.extend(intervals[0][0].iter().map(|interval|TensorIdSliceIdx(r_b.id(), interval.start as u32)));
+            a.1.extend(intervals[0][0].iter().map(|interval| TensorIdSliceIdx(r_b.id(), interval.start as u32)));
 
-
-            let (t, intervals) = resource_tensor(r_c.length() as usize, &[
-                            vec![(3, motif_width, TestSignalKind::Sin)],
-                            vec![(1, motif_width, TestSignalKind::Sin)],
-                            vec![]
-                        ], 100, 10.0,
-                                                 true,
-                                                 true)?;
+            let (t, intervals) = resource_tensor(r_c.length() as usize, &[vec![(3, motif_width, TestSignalKind::Sin)], vec![(1, motif_width, TestSignalKind::Sin)], vec![]], 100, 10.0, true, true)?;
 
             a.0.insert(r_b.clone(), t);
 
-            a.1.extend(intervals[0][0].iter().map(|interval|TensorIdSliceIdx(r_c.id(), interval.start as u32)));
+            a.1.extend(intervals[0][0].iter().map(|interval| TensorIdSliceIdx(r_c.id(), interval.start as u32)));
 
-
-            let (t, _intervals) = resource_tensor(r_x.length() as usize, &[
-                            vec![],
-                            vec![],
-                            vec![]
-                        ], 100, 10.0,
-                                                 true,
-                                                 true)?;
+            let (t, _intervals) = resource_tensor(r_x.length() as usize, &[vec![], vec![], vec![]], 100, 10.0, true, true)?;
 
             a.0.insert(r_c.clone(), t);
-
 
             Ok::<_, ThoError>(a)
         })?;
 
-
-        let loader = Arc::new(
-            mock_tensor_loader::build()
-                .with_out_id()
-                .with_run_cached(resources_map)
-                .finish(),
-        );
+        let loader = Arc::new(mock_tensor_loader::build().with_out_id().with_run_cached(resources_map).finish());
 
         let store = MockMotifsStoreBuilder::new()
-            .with_list_selected_motifs([
-                (vec![select_motifs_run_config_id], Ok(
-                    HashMap::from([(
-                        select_motifs_run_config_id,
-                        vec![
-                            vec![(motif_0_0_id, 1.0f64), (motif_0_1_id, 1.0f64)], //channel 0
-                            vec![(motif_1_0_id, 1.0f64)], //channel 1
-                            vec![] //channel 2
-                        ]
-                    )])
-                ))
-            ])
+            .with_list_selected_motifs([(
+                vec![select_motifs_run_config_id],
+                Ok(HashMap::from([(
+                    select_motifs_run_config_id,
+                    vec![
+                        vec![(motif_0_0_id, 1.0f64), (motif_0_1_id, 1.0f64)], //channel 0
+                        vec![(motif_1_0_id, 1.0f64)],                         //channel 1
+                        vec![],                                               //channel 2
+                    ],
+                )])),
+            )])
             .with_list_group_labeled_resources_sets([
-                (train_group, Ok(vec![
-                    ("Label_A".to_string(), "train_resource_set_for_label_a".to_string()),
-                    ("Label_B".to_string(), "train_resource_set_for_label_b".to_string()),
-                    ("Label_C".to_string(), "train_resource_set_for_label_c".to_string())
-                ])),
-                (valid_group, Ok(vec![
-                    ("Label_A".to_string(), "valid_resource_set_for_label_a".to_string()),
-                    ("Label_B".to_string(), "valid_resource_set_for_label_b".to_string()),
-                    ("Label_C".to_string(), "valid_resource_set_for_label_c".to_string())
-                ]))
-
+                (
+                    train_group,
+                    Ok(vec![
+                        ("Label_A".to_string(), "train_resource_set_for_label_a".to_string()),
+                        ("Label_B".to_string(), "train_resource_set_for_label_b".to_string()),
+                        ("Label_C".to_string(), "train_resource_set_for_label_c".to_string()),
+                    ]),
+                ),
+                (
+                    valid_group,
+                    Ok(vec![
+                        ("Label_A".to_string(), "valid_resource_set_for_label_a".to_string()),
+                        ("Label_B".to_string(), "valid_resource_set_for_label_b".to_string()),
+                        ("Label_C".to_string(), "valid_resource_set_for_label_c".to_string()),
+                    ]),
+                ),
             ])
             .with_list_resource_set_resources_by_descr([
                 ("train_resource_set_for_label_a", Ok(resources_a.clone())),
                 ("train_resource_set_for_label_b", Ok(resources_b.clone())),
                 ("train_resource_set_for_label_c", Ok(resources_c.clone())),
-
                 //same resources, should be ok for test
                 ("valid_resource_set_for_label_a", Ok(resources_a.clone())),
                 ("valid_resource_set_for_label_b", Ok(resources_b.clone())),
                 ("valid_resource_set_for_label_c", Ok(resources_c.clone())),
-
             ])
-            .with_list_resource_random_not_labeled([
-                (train_group, Ok(resources_x.clone())),
-                (valid_group, Ok(resources_x.clone())),
-            ])
-            .with_list_trained_nets([
-                (vec![select_motifs_run_config_id], Some(0.3), Some(3), Ok(vec![
-                    TrainedNet { id: 0, run_config_id: select_motifs_run_config_id, net_path: PathBuf::new(), loss: 0.1f32 },
-                    TrainedNet { id: 0, run_config_id: select_motifs_run_config_id, net_path: PathBuf::new(), loss: 0.2f32 },
-                ])),
-            ])
+            .with_list_resource_random_not_labeled([(train_group, Ok(resources_x.clone())), (valid_group, Ok(resources_x.clone()))])
+            .with_list_trained_nets([(
+                vec![select_motifs_run_config_id],
+                Some(0.3),
+                Some(3),
+                Ok(vec![
+                    TrainedNet {
+                        id: 0,
+                        run_config_id: select_motifs_run_config_id,
+                        net_path: PathBuf::new(),
+                        loss: 0.1f32,
+                    },
+                    TrainedNet {
+                        id: 0,
+                        run_config_id: select_motifs_run_config_id,
+                        net_path: PathBuf::new(),
+                        loss: 0.2f32,
+                    },
+                ]),
+            )])
             .build();
-
 
         let run_configs = thoosa_shared::run_configs::OptRunConfigs::new(
             thoosa_shared::run_configs::GridRunConfigs::new(
@@ -1338,48 +1249,34 @@ mod tests {
                     NamedVal::new(TrainLabelNetRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Epochs), Val::Int(100)),
                     NamedVal::new(TrainLabelNetRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::BatchSize), Val::Int(8)),
                     // NamedVal::new(TrainLabelNetRunConfigFields::Net(LabelNetTypeArgsFields::FixedNumSlices(FixedNumSlicesNetArgsFields::NumLayers)), Val::Int(3)),
-                    NamedVal::new(TrainLabelNetRunConfigFields::Net(LabelNetTypeArgsFields::LinNet(LinNetArgsFields::Features)), Val::Int(1000)),//TODO used as num features in any_len_label_node
+                    NamedVal::new(TrainLabelNetRunConfigFields::Net(LabelNetTypeArgsFields::LinNet(LinNetArgsFields::Features)), Val::Int(1000)), //TODO used as num features in any_len_label_node
                 ]),
                 vec![
                     // NamedRange::new(TrainLabelNetRunConfigFields::NumLayers, Val::Int(0)..Val::Int(10), (Val::Int(10), 0))
                 ],
             ),
             vec![
-                Hyperparameter::UniformFloat{name: TrainLabelNetRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), lower: 0.0001, upper: 0.001},
-                Hyperparameter::UniformInt{name: TrainLabelNetRunConfigFields::Net(LabelNetTypeArgsFields::LinNet(LinNetArgsFields::NumLayers)), lower: 1, upper: 10}
+                Hyperparameter::UniformFloat {
+                    name: TrainLabelNetRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr),
+                    lower: 0.0001,
+                    upper: 0.001,
+                },
+                Hyperparameter::UniformInt {
+                    name: TrainLabelNetRunConfigFields::Net(LabelNetTypeArgsFields::LinNet(LinNetArgsFields::NumLayers)),
+                    lower: 1,
+                    upper: 10,
+                },
             ],
         );
 
         // let ctx = MockRunCtx::purge_gpu_caches_context();
         // ctx.expect().with(always()).times(1..).returning( |_| Box::pin(async { Ok(()) }));
 
-        let apply_motif_nets = Arc::new(ApplyMotifNets::new(
-            &ws,
-            &store,
-            vec![select_motifs_run_config_id],
-            mock_run_ctx::default(1),
-            Some(0.3),
-            Some(3),
-            10,
-            None,
-            false,
-        ).await?);
+        let apply_motif_nets = Arc::new(ApplyMotifNets::new(&ws, &store, vec![select_motifs_run_config_id], mock_run_ctx::default(1), Some(0.3), Some(3), 10, None, false).await?);
 
-        let train_label_nets = Arc::new(new_train_label_nets(
-            vec![select_motifs_run_config_id],
-            loader,
-            apply_motif_nets,
-            run_configs,
-            &ws,
-            &store,
-            Arc::new(OptConfig::new(30, 10)),
-            None,
-            mock_run_ctx::default(1),
-        ).await?);
-
+        let train_label_nets = Arc::new(new_train_label_nets(vec![select_motifs_run_config_id], loader, apply_motif_nets, run_configs, &ws, &store, Arc::new(OptConfig::new(30, 10)), None, mock_run_ctx::default(1)).await?);
 
         let input = Arc::new(ResourcesConfigInput::new(NetResources::new(Labeled::new(train_group.to_string()), Labeled::new("valid_group".to_string()))));
-
 
         let _run_ctx = mock_run_ctx::default(1);
 
@@ -1387,7 +1284,6 @@ mod tests {
 
         debug!("test_train_label_net_3x3: PERF={PERF:?}");
         debug!("test_train_label_net_3x3: PERF=\n{}", format_perf_map(&PERF));
-
 
         if log_enabled!(Level::Debug) {
             for r in &out.results {
@@ -1401,7 +1297,6 @@ mod tests {
         assert!(out.results[1].loss < 0.5);
         assert!(out.results[2].loss < 0.5);
 
-
         debug!("test_train_label_net_3x3: out={out:?}");
 
         Ok(())
@@ -1412,45 +1307,25 @@ mod tests {
         GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
-        let resources_1_train = Arc::new(vec![
-            Resource::new(0, 1, "aaa_1_tr", 10),
-            Resource::new(1, 1, "bbb_1_tr", 10),
-            Resource::new(2, 1, "ccc_1_tr", 10)
-        ]);
-        let resources_1_valid = Arc::new(vec![
-            Resource::new(3, 1, "aaa_1_vl", 10),
-            Resource::new(4, 1, "bbb_1_vl", 10),
-            Resource::new(5, 1, "ccc_1_vl", 10),
-        ]);
+        let resources_1_train = Arc::new(vec![Resource::new(0, 1, "aaa_1_tr", 10), Resource::new(1, 1, "bbb_1_tr", 10), Resource::new(2, 1, "ccc_1_tr", 10)]);
+        let resources_1_valid = Arc::new(vec![Resource::new(3, 1, "aaa_1_vl", 10), Resource::new(4, 1, "bbb_1_vl", 10), Resource::new(5, 1, "ccc_1_vl", 10)]);
 
-
-        let resources_0_train = Arc::new(vec![
-            Resource::new(6, 1, "aaa_0_tr", 10),
-            Resource::new(7, 1, "bbb_0_tr", 10),
-            Resource::new(8, 1, "ccc_0_tr", 10)
-        ]);
-        let resources_0_valid = Arc::new(vec![
-            Resource::new(9,  1, "aaa_0_vl", 10),
-            Resource::new(10, 1, "bbb_0_vl", 10),
-            Resource::new(11, 1, "ccc_0_vl", 10),
-        ]);
+        let resources_0_train = Arc::new(vec![Resource::new(6, 1, "aaa_0_tr", 10), Resource::new(7, 1, "bbb_0_tr", 10), Resource::new(8, 1, "ccc_0_tr", 10)]);
+        let resources_0_valid = Arc::new(vec![Resource::new(9, 1, "aaa_0_vl", 10), Resource::new(10, 1, "bbb_0_vl", 10), Resource::new(11, 1, "ccc_0_vl", 10)]);
 
         let loader = Arc::new(
             mock_tensor_loader::build()
                 .with_out_id()
                 .with_run_cached(HashMap::<Resource, Tensor>::from_iter(
-                    resources_1_train.iter().chain(resources_1_valid.iter()).chain(resources_0_train.iter()).chain(resources_0_valid.iter()).map(|r|{
-                        if r.file_stem().contains("_1_") {
-                             (r.clone(), Tensor::ones(&[1, 10], FLOAT_CPU))
-                        } else {
-                             (r.clone(), Tensor::zeros(&[1, 10], FLOAT_CPU))
-                        }
-
-                    })
+                    resources_1_train
+                        .iter()
+                        .chain(resources_1_valid.iter())
+                        .chain(resources_0_train.iter())
+                        .chain(resources_0_valid.iter())
+                        .map(|r| if r.file_stem().contains("_1_") { (r.clone(), Tensor::ones(&[1, 10], FLOAT_CPU)) } else { (r.clone(), Tensor::zeros(&[1, 10], FLOAT_CPU)) }),
                 ))
                 .finish(),
         );
-
 
         let resource_batch: ResourcesBatch<_, _, ThoTensor<ChannelsData, SynKey>, ChannelsData, LabelProbability> = ResourcesBatch::new(
             loader,
@@ -1459,7 +1334,7 @@ mod tests {
             resources_1_valid,
             resources_0_train,
             resources_0_valid,
-            Arc::new(|x_1_wrapped:Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>, x_0_wrapped:Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>, ctx: MockRunCtx|{
+            Arc::new(|x_1_wrapped: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>, x_0_wrapped: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>, ctx: MockRunCtx| {
                 async move {
                     let x_1 = try_join_all(x_1_wrapped.iter().map(|x| x.select_ref(ctx.tho_device_idx(), None::<SyncStftSelector>))).await?;
                     let x_0 = try_join_all(x_0_wrapped.iter().map(|x| x.select_ref(ctx.tho_device_idx(), None::<SyncStftSelector>))).await?;
@@ -1470,21 +1345,20 @@ mod tests {
 
                         let (x, _lengths, y) = mix_x_binary_with_labels(&x_1, None, &x_0, None)?;
 
-                         Ok((x.into(), None, y.into()))
+                        Ok((x.into(), None, y.into()))
                     }
-                }.boxed()
+                }
+                .boxed()
             }),
         );
 
         let mut batch = resource_batch.train_batch_stream(mock_run_ctx::default(0));
-        let (_batch_x, _lengths,  _batch_y) = batch.next().await.expect("no batch").expect("batch failed");
+        let (_batch_x, _lengths, _batch_y) = batch.next().await.expect("no batch").expect("batch failed");
         assert!(batch.next().await.is_none()); //should be only one
 
         let mut batch = resource_batch.valid_batch_stream(mock_run_ctx::default(0));
         let (_batch_x, _lengths, _batch_y) = batch.next().await.expect("no batch").expect("batch failed");
         assert!(batch.next().await.is_none()); //should be only one
-
-
 
         Ok(())
     }
@@ -1494,36 +1368,25 @@ mod tests {
         GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
-        let resources_1_train = Arc::new(vec![
-            Resource::new(0, 1, "aaa_1_tr", 10),
-        ]);
-        let resources_1_valid = Arc::new(vec![
-            Resource::new(3, 1, "aaa_1_vl", 10),
-        ]);
+        let resources_1_train = Arc::new(vec![Resource::new(0, 1, "aaa_1_tr", 10)]);
+        let resources_1_valid = Arc::new(vec![Resource::new(3, 1, "aaa_1_vl", 10)]);
 
-        let resources_0_train = Arc::new(vec![
-            Resource::new(7, 1, "bbb_0_tr", 10),
-        ]);
-        let resources_0_valid = Arc::new(vec![
-            Resource::new(10, 1, "bbb_0_vl", 10),
-        ]);
+        let resources_0_train = Arc::new(vec![Resource::new(7, 1, "bbb_0_tr", 10)]);
+        let resources_0_valid = Arc::new(vec![Resource::new(10, 1, "bbb_0_vl", 10)]);
 
         let loader = Arc::new(
             mock_tensor_loader::build()
                 .with_out_id()
                 .with_run_cached(HashMap::<Resource, Tensor>::from_iter(
-                    resources_1_train.iter().chain(resources_1_valid.iter()).chain(resources_0_train.iter()).chain(resources_0_valid.iter()).map(|r|{
-                        if r.file_stem().contains("_1_") {
-                            (r.clone(), Tensor::ones(&[1, 10], FLOAT_CPU))
-                        } else {
-                            (r.clone(), Tensor::zeros(&[1, 10], FLOAT_CPU))
-                        }
-
-                    })
+                    resources_1_train
+                        .iter()
+                        .chain(resources_1_valid.iter())
+                        .chain(resources_0_train.iter())
+                        .chain(resources_0_valid.iter())
+                        .map(|r| if r.file_stem().contains("_1_") { (r.clone(), Tensor::ones(&[1, 10], FLOAT_CPU)) } else { (r.clone(), Tensor::zeros(&[1, 10], FLOAT_CPU)) }),
                 ))
                 .finish(),
         );
-
 
         let resource_batch: ResourcesBatch<_, _, ThoTensor<ChannelsData, SynKey>, ChannelsData, LabelProbability> = ResourcesBatch::new(
             loader,
@@ -1532,7 +1395,7 @@ mod tests {
             resources_1_valid,
             resources_0_train,
             resources_0_valid,
-            Arc::new(|x_1_wrapped:Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>, x_0_wrapped:Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>, ctx: MockRunCtx|{
+            Arc::new(|x_1_wrapped: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>, x_0_wrapped: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>, ctx: MockRunCtx| {
                 async move {
                     let x_1 = try_join_all(x_1_wrapped.iter().map(|x| x.select_ref(ctx.tho_device_idx(), None::<SyncStftSelector>))).await?;
                     let x_0 = try_join_all(x_0_wrapped.iter().map(|x| x.select_ref(ctx.tho_device_idx(), None::<SyncStftSelector>))).await?;
@@ -1543,32 +1406,27 @@ mod tests {
 
                         let (x, _lengths, y) = mix_x_binary_with_labels(&x_1, None, &x_0, None)?;
 
-                         Ok((x.into(), None, y.into()))
+                        Ok((x.into(), None, y.into()))
                     }
-                }.boxed()
+                }
+                .boxed()
             }),
         );
 
         let mut batch = resource_batch.train_batch_stream(mock_run_ctx::default(0));
-        let (_batch_x, _lengths,  _batch_y) = batch.next().await.expect("no batch").expect("batch failed");
+        let (_batch_x, _lengths, _batch_y) = batch.next().await.expect("no batch").expect("batch failed");
         assert!(batch.next().await.is_none()); //should be only one
 
         let mut batch = resource_batch.valid_batch_stream(mock_run_ctx::default(0));
         let (_batch_x, _lengths, _batch_y) = batch.next().await.expect("no batch").expect("batch failed");
         assert!(batch.next().await.is_none()); //should be only one
 
-
-
         Ok(())
     }
 
-
     #[tokio::test]
     async fn test_save_train_label_net_result_persists_trained_net_and_loss() -> Result<(), ThoError> {
-        let store: Arc<dyn MotifsStore> = Arc::new(SqlStore::in_mem_(vec![
-            thoosa_store::create_tables,
-            create_motif_tables
-        ]).await?);
+        let store: Arc<dyn MotifsStore> = Arc::new(SqlStore::in_mem_(vec![thoosa_store::create_tables, create_motif_tables]).await?);
         store.bind_run(store.save_run("test".into()).await?)?;
 
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
@@ -1588,20 +1446,33 @@ mod tests {
         );
 
         let train_motif_nets_run_config_id_vec = vec![train_motif_nets_run_config_id];
-        let motif_nets_ids= vec![];
-        let train_label_nets_run_config_id = SavableResult::save(&mut result, &store, &ws, TrainLabelNetRunConfigResultParams{
-            train_motif_nets_run_config_ids: &train_motif_nets_run_config_id_vec,
-            motif_nets_ids: &motif_nets_ids,
-        }).await?;
+        let motif_nets_ids = vec![];
+        let train_label_nets_run_config_id = SavableResult::save(
+            &mut result,
+            &store,
+            &ws,
+            TrainLabelNetRunConfigResultParams {
+                train_motif_nets_run_config_ids: &train_motif_nets_run_config_id_vec,
+                motif_nets_ids: &motif_nets_ids,
+            },
+        )
+        .await?;
         let _run_config_values = store.list_run_config_values(train_label_nets_run_config_id).await?;
         let trained_nets = store.list_trained_nets(TrainedNetsBy::RunConfigIds(vec![train_label_nets_run_config_id]), None, None).await?;
 
         assert_eq!(vec![train_label_nets_run_config_id], store.list_output_run_config_ids(train_motif_nets_run_config_id).await?);
-        assert_eq!(vec![TrainedNet { id: 1, run_config_id: train_label_nets_run_config_id, net_path: PathBuf::from(format!("alpha/{train_label_nets_run_config_id}")), loss: 0.125 }], trained_nets);
+        assert_eq!(
+            vec![TrainedNet {
+                id: 1,
+                run_config_id: train_label_nets_run_config_id,
+                net_path: PathBuf::from(format!("alpha/{train_label_nets_run_config_id}")),
+                loss: 0.125
+            }],
+            trained_nets
+        );
 
         Ok(())
     }
-
 }
 
 #[derive(Debug)]
@@ -1613,17 +1484,11 @@ pub struct TrainLabelNetRunConfigResult {
     label_node_params: LabelNetParams,
     train_label_nets_run_config: TrainLabelNetRunConfig,
     var_store_path: TmpFile,
-    motif_nets_ids:Vec<u32>
+    motif_nets_ids: Vec<u32>,
 }
 
 impl TrainLabelNetRunConfigResult {
-    pub fn new(
-        label: String,
-        loss: f32,
-        label_node_params: LabelNetParams,
-        train_label_nets_run_config: TrainLabelNetRunConfig,
-        var_store_path: TmpFile,
-    ) -> Self {
+    pub fn new(label: String, loss: f32, label_node_params: LabelNetParams, train_label_nets_run_config: TrainLabelNetRunConfig, var_store_path: TmpFile) -> Self {
         Self {
             train_label_nets_run_config_id: None,
             label,
@@ -1644,27 +1509,16 @@ impl SavableResult for TrainLabelNetRunConfigResult {
 
     type R = u32;
 
-    async fn save(
-        &mut self,
-        store: &Arc<dyn MotifsStore>,
-        ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
-        p: Self::P<'_>
-    ) -> anyhow::Result<u32> {
-
+    async fn save(&mut self, store: &Arc<dyn MotifsStore>, ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, p: Self::P<'_>) -> anyhow::Result<u32> {
         let run_config_id = t!(store.save_run_config(
             Some(p.train_motif_nets_run_config_ids), //it's used as input for TrainLabelNetsOutput
             &TrainLabelNetRunConfig::type_name(),
             "Label",
             self.train_label_nets_run_config.to_properties_iter(None).collect(),
-        )).await?;
+        ))
+        .await?;
 
-        let path = panic_to_err!(ws.read()
-            .save_label_net(
-                run_config_id,
-                &self.label,
-                (&self.var_store_path).into(),
-                &self.label_node_params,
-            ))?;
+        let path = panic_to_err!(ws.read().save_label_net(run_config_id, &self.label, (&self.var_store_path).into(), &self.label_node_params,))?;
 
         debug!("TrainLabelNetRunConfigResult::save: self.motif_nets_ids={:?}", self.motif_nets_ids);
 
@@ -1706,10 +1560,7 @@ pub struct TrainLabelNetsArgs {
 
 impl TrainLabelNetsArgs {
     pub fn resource_config(&self) -> NetResources<Labeled> {
-        NetResources::new(
-            Labeled::new(self.train_resource_group.clone()),
-            Labeled::new(self.valid_resource_group.clone()),
-        )
+        NetResources::new(Labeled::new(self.train_resource_group.clone()), Labeled::new(self.valid_resource_group.clone()))
     }
 
     fn parse_labels_csv(raw: &str) -> Vec<String> {
@@ -1755,17 +1606,7 @@ impl AsRef<CommonTrainingRunConfig> for TrainLabelNetRunConfig {
 }
 
 impl TrainLabelNetRunConfig {
-    pub fn new(
-        id: Option<RunConfigId>,
-        common_training_args: CommonTrainingRunConfig,
-        net: LabelNetTypeArgs,
-        validation_step: u32,
-    ) -> Self {
-        Self {
-            id,
-            common_training_args,
-            net,
-            validation_step,
-        }
+    pub fn new(id: Option<RunConfigId>, common_training_args: CommonTrainingRunConfig, net: LabelNetTypeArgs, validation_step: u32) -> Self {
+        Self { id, common_training_args, net, validation_step }
     }
 }

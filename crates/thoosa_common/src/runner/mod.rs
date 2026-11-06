@@ -1,18 +1,18 @@
+pub mod adjusters;
+pub mod cache_areas;
+pub mod common;
+mod cuda_recovery;
 /// OOM Handler code documentation
 pub mod global_ctx;
 pub mod oom_handler;
 pub mod purge;
-pub mod statistics;
-pub mod tmp_cache;
-pub mod test_utils;
-pub mod test;
-pub mod common;
-pub mod adjusters;
 mod purger;
 pub mod run_ctx;
-pub mod cache_areas;
+pub mod statistics;
 mod syn_stage_runner;
-mod cuda_recovery;
+pub mod test;
+pub mod test_utils;
+pub mod tmp_cache;
 
 pub mod sync_stage;
 

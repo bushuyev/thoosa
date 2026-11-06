@@ -19,7 +19,7 @@ use thoosa_shared::traits::{AsyncStage, RunCtx, Stage};
 use thoosa_shared::{FuturesOrdering, ThoError, collect_futures_with_progress, recurse_files};
 
 use crate::utils::parse_run_config_ids_vec;
-use crate::ws::{discover_nets, Workspace};
+use crate::ws::{Workspace, discover_nets};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum ConvertPrecisionTarget {
@@ -229,27 +229,17 @@ where
         }
 
         let target_precision = self.args.target_precision();
-        let futures = entries.into_iter().map(move |entry| {
-            async move {
-                Ok::<_, ThoError>(t!(tokio::task::spawn_blocking(move || {
-                    tracing::info_span!(
-                        "convert_precision::convert_entry",
-                        kind = "spawn_blocking",
-                        file = file!(),
-                        line = line!(),
-                        task = format!("convert net entry to {target_precision:?}"),
-                    ).in_scope(|| convert_entry(entry, target_precision))
-                })).await.context("join convert precision worker")??)
-            }
+        let futures = entries.into_iter().map(move |entry| async move {
+            Ok::<_, ThoError>(
+                t!(tokio::task::spawn_blocking(move || {
+                    tracing::info_span!("convert_precision::convert_entry", kind = "spawn_blocking", file = file!(), line = line!(), task = format!("convert net entry to {target_precision:?}"),).in_scope(|| convert_entry(entry, target_precision))
+                }))
+                .await
+                .context("join convert precision worker")??,
+            )
         });
 
-        let converted = t!(collect_futures_with_progress(
-            futures,
-            entries_len,
-            FuturesOrdering::Unordered,
-            thoosa_shared::CollectionErrorPolicy::Propagate,
-            "ConvertPrecisionStage::run",
-        )).await?;
+        let converted = t!(collect_futures_with_progress(futures, entries_len, FuturesOrdering::Unordered, thoosa_shared::CollectionErrorPolicy::Propagate, "ConvertPrecisionStage::run",)).await?;
 
         if converted.len() != entries_len {
             return Err(ThoError::new(format!("ConvertPrecisionStage::run: converted {} of {entries_len} nets", converted.len())));
@@ -370,11 +360,7 @@ where
 
         debug!("entries_for_type: vec={vec:?}");
 
-        entries.extend(
-            vec
-                .into_iter()
-                .filter_map(|weights_path| net_entry_from_base(*concrete_type, &weights_path.parent().unwrap())),
-        );
+        entries.extend(vec.into_iter().filter_map(|weights_path| net_entry_from_base(*concrete_type, &weights_path.parent().unwrap())));
     }
     entries.dedup_entries()
 }
@@ -395,18 +381,13 @@ where
     Ok(net_entry_from_base(net_type, candidate))
 }
 
-fn net_entry_from_base<N>(net_type: N, base_path: &Path) -> Option<NetEntry<N>>{
+fn net_entry_from_base<N>(net_type: N, base_path: &Path) -> Option<NetEntry<N>> {
     debug!("net_entry_from_base: base_path={base_path:?}");
 
     let nets = discover_nets(base_path).ok()?;
     debug!("net_entry_from_base: nets={nets:?}");
 
-    if nets.is_empty() {
-        None
-    } else {
-        Some(NetEntry { net_type, weights_path: nets[0].0.clone() })
-    }
-
+    if nets.is_empty() { None } else { Some(NetEntry { net_type, weights_path: nets[0].0.clone() }) }
 }
 
 fn convert_entry<N>(entry: NetEntry<N>, target_precision: ConvertPrecisionTarget) -> anyhow::Result<ConvertedNet<N>>
@@ -427,7 +408,12 @@ where
     }
 
     replace_var_store(&vs, &entry.weights_path)?;
-    Ok(ConvertedNet { net_type: entry.net_type, weights_path: entry.weights_path, float_vars, total_vars })
+    Ok(ConvertedNet {
+        net_type: entry.net_type,
+        weights_path: entry.weights_path,
+        float_vars,
+        total_vars,
+    })
 }
 
 fn load_var_store(weights_path: &Path) -> anyhow::Result<VarStore> {

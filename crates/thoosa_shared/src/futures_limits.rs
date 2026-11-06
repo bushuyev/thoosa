@@ -1,8 +1,7 @@
-use std::collections::{HashMap, VecDeque};
-use std::sync::{Arc, LazyLock};
-use log::info;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, VecDeque};
+use std::sync::{Arc, LazyLock};
 use tokio::sync::watch;
 use tracing::debug;
 
@@ -31,10 +30,7 @@ impl DynamicFutureLimit {
     fn new(limit: usize) -> Self {
         assert!(limit > 0, "buffer limit must be greater than zero");
         let (sender, receiver) = watch::channel(limit);
-        Self {
-            sender,
-            receiver: Arc::new(receiver),
-        }
+        Self { sender, receiver: Arc::new(receiver) }
     }
 
     pub fn receiver(&self) -> Arc<watch::Receiver<usize>> {
@@ -67,7 +63,6 @@ struct FuturesLimitsState {
     feedback_window_ooms: usize,
     consecutive_ok: usize,
     increase_blocked_for: usize,
-
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -197,7 +192,9 @@ impl SyncExecutionWaiter {
     pub fn end_turn(&mut self) {
         // Do not reserve capacity for a device with no locally runnable work,
         // especially while recovery has closed its admission gate.
-        if !self.requested { self.cancel(); }
+        if !self.requested {
+            self.cancel();
+        }
     }
 
     pub fn cancel(&mut self) {
@@ -211,7 +208,9 @@ impl SyncExecutionWaiter {
 }
 
 impl Drop for SyncExecutionWaiter {
-    fn drop(&mut self) { self.cancel(); }
+    fn drop(&mut self) {
+        self.cancel();
+    }
 }
 
 /// Coordinates asynchronous iterator fan-out with the shared synchronous executor limit.
@@ -247,7 +246,6 @@ impl Drop for FuturesLimitRegistration<'_> {
 }
 
 impl FuturesLimits {
-
     pub fn new() -> Self {
         let initial_limit = std::thread::available_parallelism().map(usize::from).unwrap_or(MIN_SYNC_PARALLELISM);
         let max_limit = initial_limit.saturating_mul(MAX_SYNC_PARALLELISM_MULTIPLIER).max(initial_limit);
@@ -271,9 +269,7 @@ impl FuturesLimits {
         let mut state = self.state.lock();
         let forced_limit = state.forced_future_limits.get(descr).copied();
         let receiver = {
-
             let entry = state.futures_limits.entry(descr.to_owned()).or_insert_with(|| FutureLimitEntry {
-
                 limit: DynamicFutureLimit::new(1),
                 registrations: 0,
                 weight: Self::future_limit_weight(descr),
@@ -288,11 +284,7 @@ impl FuturesLimits {
         self.rebalance_future_limits(&state);
         debug!(descr, active_registrations = state.active_registrations, max_parallel_jobs = self.sync_execution_limiter.limit(), "registered future collector");
 
-        FuturesLimitRegistration {
-            owner: self,
-            descr: descr.to_owned(),
-            receiver,
-        }
+        FuturesLimitRegistration { owner: self, descr: descr.to_owned(), receiver }
     }
 
     pub fn forget(&self, descr: &str) {
@@ -370,7 +362,11 @@ impl FuturesLimits {
         let mut state = self.sync_execution_limiter.state.lock();
         let id = state.next_waiter;
         state.next_waiter = id.checked_add(1).expect("sync execution waiter identity overflow");
-        SyncExecutionWaiter { limiter: Arc::clone(&self.sync_execution_limiter), id, requested: false }
+        SyncExecutionWaiter {
+            limiter: Arc::clone(&self.sync_execution_limiter),
+            id,
+            requested: false,
+        }
     }
 
     fn push_feedback(state: &mut FuturesLimitsState, oom: bool) {
@@ -384,9 +380,7 @@ impl FuturesLimits {
     fn decrease_if_oom_rate_high(&self, state: &mut FuturesLimitsState) -> bool {
         debug!("FuturesLimits::decrease_if_oom_rate_high: 0. state={state:?}");
 
-        if state.feedback_window.len() < OOM_RATE_MIN_EXECUTIONS
-            || state.feedback_window_ooms.saturating_mul(OOM_RATE_DENOMINATOR) < state.feedback_window.len()
-        {
+        if state.feedback_window.len() < OOM_RATE_MIN_EXECUTIONS || state.feedback_window_ooms.saturating_mul(OOM_RATE_DENOMINATOR) < state.feedback_window.len() {
             return false;
         }
 
@@ -422,12 +416,16 @@ impl FuturesLimits {
     }
 
     fn future_limits_snapshot(state: &FuturesLimitsState) -> Vec<FutureLimitProgressEntry> {
-        let entries = state.futures_limits.iter().map(|(descr, entry)| FutureLimitProgressEntry {
-            descr: descr.clone(),
-            limit: entry.limit.current(),
-            registrations: entry.registrations,
-            weight: entry.weight,
-        }).collect::<Vec<_>>();
+        let entries = state
+            .futures_limits
+            .iter()
+            .map(|(descr, entry)| FutureLimitProgressEntry {
+                descr: descr.clone(),
+                limit: entry.limit.current(),
+                registrations: entry.registrations,
+                weight: entry.weight,
+            })
+            .collect::<Vec<_>>();
 
         // entries.sort_by(|a, b| a.descr.cmp(&b.descr));
         entries
@@ -462,8 +460,7 @@ pub fn futures_limits() -> &'static Arc<FuturesLimits> {
 
 #[cfg(test)]
 mod tests {
-    use log::debug;
-    use super::{FuturesLimits, COPY_D2H, OOM_RATE_MIN_EXECUTIONS, SUCCESSFUL_EXECUTIONS_PER_INCREASE};
+    use super::{COPY_D2H, FuturesLimits, OOM_RATE_MIN_EXECUTIONS, SUCCESSFUL_EXECUTIONS_PER_INCREASE};
 
     #[test]
     fn test_active_collectors_share_sync_limit() {
@@ -538,10 +535,8 @@ mod tests {
         let collector_0 = limits.register("collector_0");
         let collector_1 = limits.register("collector_1");
 
-
         let limit_00 = *collector_0.receiver().borrow();
         let limit_01 = *collector_1.receiver().borrow();
-
 
         for _ in 0..SUCCESSFUL_EXECUTIONS_PER_INCREASE * 2 {
             limits.on_ok();
@@ -606,9 +601,7 @@ mod tests {
         let initial_limit = limits.max_parallel_jobs();
         let mut capacity_rx = limits.sync_capacity();
         capacity_rx.borrow_and_update();
-        let permits = (0..initial_limit)
-            .map(|_| limits.try_acquire_sync_execution().expect("initial shared capacity"))
-            .collect::<Vec<_>>();
+        let permits = (0..initial_limit).map(|_| limits.try_acquire_sync_execution().expect("initial shared capacity")).collect::<Vec<_>>();
         assert!(limits.try_acquire_sync_execution().is_none());
 
         drop(permits);

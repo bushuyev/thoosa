@@ -1,11 +1,9 @@
-use thoosa_common::runner::execution::StageExecution;
-use thoosa_common::tch_error::tch_result;
 use crate as thoosa_common;
 use crate::dims::{Dims, LocalSelect};
 use crate::ipc::cuda_wokrer::{AllTensors, WorkerStageInput};
 use crate::ipc::proxy::{DynSyncStageEnum, ProxyStage};
-use crate::ipc::serialization::json::{JsonIpcCodec};
-use crate::ipc::worker_msg::{WorkerInput};
+use crate::ipc::serialization::json::JsonIpcCodec;
+use crate::ipc::worker_msg::WorkerInput;
 use crate::ipc::wraps::SyncStageIpcWrapper;
 use crate::ipc::wraps::WorkerWrapper;
 use crate::runner::common::cachable::DevicesWrap;
@@ -25,14 +23,16 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::sync::Arc;
 use tch::{IndexOp, Kind, Tensor};
+use thoosa_common::runner::execution::StageExecution;
+use thoosa_common::runner::sync_stage::SyncStage;
+use thoosa_common::tch_error::tch_result;
 use thoosa_cpu_data_derive::CpuData;
 use thoosa_named_derive::Named;
 use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::comp_id::SynKey;
-use thoosa_shared::traits::{Adjustable, AsyncStage, MonoMetrics, OutId, RunCtx, DebugId, Stage, ThoSelector, WithId};
-use thoosa_common::runner::sync_stage::{SyncStage};
-use thoosa_shared::{ThoError, mono_key};
 use thoosa_shared::ipc_types::WorkerOutput;
+use thoosa_shared::traits::{Adjustable, AsyncStage, DebugId, MonoMetrics, OutId, RunCtx, Stage, ThoSelector, WithId};
+use thoosa_shared::{ThoError, mono_key};
 //////////////////LOADER
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Named)]
 pub struct LoaderInputId(&'static str);
@@ -62,7 +62,7 @@ pub struct LoaderInput {
     id: LoaderInputId,
 }
 
-impl Input for LoaderInput {  }
+impl Input for LoaderInput {}
 
 impl WithId for LoaderInput {
     type ID = LoaderInputId;
@@ -74,19 +74,15 @@ impl WithId for LoaderInput {
 
 impl From<&'static str> for LoaderInput {
     fn from(value: &'static str) -> Self {
-        LoaderInput {
-            id: LoaderInputId(value),
-        }
+        LoaderInput { id: LoaderInputId(value) }
     }
 }
-
 
 #[derive(Debug, Clone)]
 pub struct LoadedTensor;
 
 impl Dims for LoadedTensor {
     type Metrics = MonoMetrics<1, 2>;
-
 }
 
 impl LoadedTensor {}
@@ -94,8 +90,8 @@ impl LoadedTensor {}
 impl LocalSelect<SynKey, LoadedRange> for ThoTensor<LoadedTensor, SynKey> {
     type Output = ThoTensor<LoadedTensor, SynKey>;
 
-    fn local_subview(id:&SynKey, t:&Tensor, selector: LoadedRange) -> Result<Self::Output, ThoError> {
-        let ranges = MonoMetrics::<1,2>::map_to_ranges(&selector.range.start, &selector.range.end);
+    fn local_subview(id: &SynKey, t: &Tensor, selector: LoadedRange) -> Result<Self::Output, ThoError> {
+        let ranges = MonoMetrics::<1, 2>::map_to_ranges(&selector.range.start, &selector.range.end);
 
         let sub_tensor = tch_result(t.f_i((ranges[0].clone(), ranges[1].clone())))?;
 
@@ -107,10 +103,9 @@ impl LocalSelect<SynKey, LoadedRange> for ThoTensor<LoadedTensor, SynKey> {
     }
 }
 
-
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub(crate) struct  LoadedRange {
-    range:std::ops::Range<MonoMetrics<1, 2>>
+pub(crate) struct LoadedRange {
+    range: std::ops::Range<MonoMetrics<1, 2>>,
 }
 
 impl Adjustable for LoadedRange {}
@@ -141,37 +136,25 @@ impl WorkerStageInput for LoaderInput {
     fn ref_to_tensor(&self, _all_cuda_tensors: &AllTensors, _remove: bool) -> Result<Self, ThoError> {
         Ok(self.clone())
     }
-
 }
 
 #[typetag::serde]
 impl WorkerInput for LoaderInput {}
 
 impl LoadedTensor {
-    pub(crate) fn clc_hadamard(
-        id: SynKey,
-        loaded: &ThoTensor<LoadedTensor, SynKey>,
-        k: &ThoTensor<MulK, DebugId>,
-    ) -> Result<ThoTensor<ClcStageOutput, SynKey>, ThoError> {
-
+    pub(crate) fn clc_hadamard(id: SynKey, loaded: &ThoTensor<LoadedTensor, SynKey>, k: &ThoTensor<MulK, DebugId>) -> Result<ThoTensor<ClcStageOutput, SynKey>, ThoError> {
         debug!("LoadedTensor::clc_hadamard: loaded={loaded:?} k={k:?}");
-        ThoTensor::new( id,loaded.local()?.multiply(&*k.local()?))
-
+        ThoTensor::new(id, loaded.local()?.multiply(&*k.local()?))
     }
 
-    pub(crate) fn clc_sum(
-        id: SynKey,
-        loaded: &ThoTensor<LoadedTensor, SynKey>,
-        k: &ThoTensor<MulK, DebugId>,
-    ) -> Result<ThoTensor<ClcStageOutput, SynKey>, ThoError> {
-        debug!("LoadedTensor::clc_sum: loaded={:?} k.t={:?}",loaded,k);
+    pub(crate) fn clc_sum(id: SynKey, loaded: &ThoTensor<LoadedTensor, SynKey>, k: &ThoTensor<MulK, DebugId>) -> Result<ThoTensor<ClcStageOutput, SynKey>, ThoError> {
+        debug!("LoadedTensor::clc_sum: loaded={:?} k.t={:?}", loaded, k);
 
         let multed = loaded.local()?.f_multiply(&*k.local()?);
 
         debug!("LoadedTensor::clc_sum: multed={multed:?}");
 
-        let sum = tch_result(multed)?
-            .f_sum_dim_intlist(1, false, loaded.kind());
+        let sum = tch_result(multed)?.f_sum_dim_intlist(1, false, loaded.kind());
 
         debug!("LoadedTensor::clc_sum: sum={sum:?}");
 
@@ -179,32 +162,26 @@ impl LoadedTensor {
 
         debug!("LoadedTensor::clc_sum: device={:?}", tensor.device());
 
-        ThoTensor::new(
-            id,
-            tensor
-        )
+        ThoTensor::new(id, tensor)
     }
 }
 
 #[derive(Debug, Cached, Named)]
 #[cache_name = "LoadedTensorId"]
 pub struct TestTensorLoader {
-    sync_loader: Arc<LoaderDynSyncStage>
+    sync_loader: Arc<LoaderDynSyncStage>,
 }
 
 impl TestTensorLoader {
     pub async fn new(size: MonoMetrics<1, 2>, kind: Kind, tho_device_idx: usize) -> Self {
         Self {
-            sync_loader: Arc::new(SyncTestTensorLoader::new(size, kind, tho_device_idx).await)
+            sync_loader: Arc::new(SyncTestTensorLoader::new(size, kind, tho_device_idx).await),
         }
     }
 }
 
 impl OutId for TestTensorLoader {
-    fn out_id(
-        &self,
-        input_id: &<Self::In<'static> as WithId>::ID,
-    ) -> <Self::Out as WithId>::ID {
+    fn out_id(&self, input_id: &<Self::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
         debug!("TestTensorLoader::out_id: input_id={input_id:?}");
         SynKey::new([mono_key!(input_id.0, "resource key")])
     }
@@ -216,7 +193,6 @@ impl Stage for TestTensorLoader {
     type Ctx = RunCtxImpl;
 }
 
-
 impl AsyncStage for TestTensorLoader {
     // type RunInput = Arc<Self::In<'static>>;
     // type RunOutput = Arc<DevicesWrap<Self::Out>>;
@@ -224,11 +200,7 @@ impl AsyncStage for TestTensorLoader {
     // fn run_input_id(input: &Self::In<'static>) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
     //     WithId::id(input)
     // }
-    async fn run(
-        self: Arc<Self>,
-        input: Self::In<'static>,
-        ctx: Self::Ctx,
-    ) -> Result<Self::Out, ThoError> {
+    async fn run(self: Arc<Self>, input: Self::In<'static>, ctx: Self::Ctx) -> Result<Self::Out, ThoError> {
         let sync_loader = Arc::clone(&self.sync_loader);
 
         // This async test loader can target a worker even when it bypasses OOMHandler.
@@ -236,16 +208,11 @@ impl AsyncStage for TestTensorLoader {
         let r = sync_loader.execute(async { Ok(&input) }, &execution.execution_context(), &ctx).await?;
 
         Ok(Arc::new(DevicesWrap::wrap(r)))
-
     }
-
 }
 
 impl OutId for SyncTestTensorLoader {
-    fn out_id(
-        &self,
-        input_id: &<Self::In<'static> as WithId>::ID,
-    ) -> <Self::Out as WithId>::ID {
+    fn out_id(&self, input_id: &<Self::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
         debug!("SyncTestTensorLoader::out_id: input_id={input_id:?}");
         SynKey::new([mono_key!(input_id.0, "resource key")])
     }
@@ -311,16 +278,7 @@ impl SyncStage for SyncTestTensorLoader {
 
         let device_idx = ctx.tho_device_idx();
 
-
-        let tensor = ThoTensor::new(
-            self.out_id(WithId::id(input)),
-            lin_for_size(
-                k,
-                (&self.size).into(),
-                self.kind,
-                &ThoDevice::from(device_idx),
-            )?,
-        )?;
+        let tensor = ThoTensor::new(self.out_id(WithId::id(input)), lin_for_size(k, (&self.size).into(), self.kind, &ThoDevice::from(device_idx))?)?;
 
         Ok(tensor)
     }
@@ -333,7 +291,7 @@ impl WorkerOutput for ThoTensor<LoadedTensor, SynKey> {}
 #[typetag::serde(name = "ThoTensor_LoadedTensor_Input")]
 impl WorkerInput for ThoTensor<LoadedTensor, SynKey> {}
 
-pub(crate) fn sync_test_tensor_loader_endpoint_init<'a>(_stage_id:Option<String>, init: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &'a AllTensors, _tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub(crate) fn sync_test_tensor_loader_endpoint_init<'a>(_stage_id: Option<String>, init: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &'a AllTensors, _tho_device: &'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     use futures_util::FutureExt;
     let init: Box<dyn std::any::Any> = init;
     let init = init.downcast::<SyncTestTensorLoaderInit>().expect("SyncTestTensorLoader endpoint received an unexpected initializer type");
@@ -341,7 +299,8 @@ pub(crate) fn sync_test_tensor_loader_endpoint_init<'a>(_stage_id:Option<String>
         let stage = SyncTestTensorLoader::init(*init)?;
         // WorkerWrapper owns decoding and output tensor-reference registration.
         Ok(Box::new(WorkerWrapper::<JsonIpcCodec, _, _, _>::new(Arc::new(stage), std::marker::PhantomData)) as Box<dyn SyncStageIpcWrapper>)
-    }.boxed()
+    }
+    .boxed()
 }
 
 type LoaderDynSyncStage = DynSyncStageEnum<SyncTestTensorLoader>;

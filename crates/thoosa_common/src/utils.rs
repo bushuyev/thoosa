@@ -139,17 +139,8 @@ fn parse_debug_plots_mode(mode: &str, prefixes: &str) -> DebugPlotsMode {
     match mode {
         "all" => DebugPlotsMode::All,
         "prefixes" => {
-            let values = prefixes
-                .split(',')
-                .map(|s| s.trim())
-                .filter(|s| !s.is_empty())
-                .map(|s| s.to_string())
-                .collect::<Vec<_>>();
-            if values.is_empty() {
-                DebugPlotsMode::Off
-            } else {
-                DebugPlotsMode::Prefixes(values)
-            }
+            let values = prefixes.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).map(|s| s.to_string()).collect::<Vec<_>>();
+            if values.is_empty() { DebugPlotsMode::Off } else { DebugPlotsMode::Prefixes(values) }
         }
         _ => DebugPlotsMode::Off,
     }
@@ -180,17 +171,9 @@ pub fn plot_heatmap(path: &str, _t: &Tensor) -> Result<(), Box<dyn std::error::E
 
     root.fill(&WHITE)?;
 
-    let mut chart = ChartBuilder::on(&root)
-        .margin(20)
-        .x_label_area_size(10)
-        .y_label_area_size(10)
-        .build_cartesian_2d(-2.1f64..0.6f64, -1.2f64..1.2f64)?;
+    let mut chart = ChartBuilder::on(&root).margin(20).x_label_area_size(10).y_label_area_size(10).build_cartesian_2d(-2.1f64..0.6f64, -1.2f64..1.2f64)?;
 
-    chart
-        .configure_mesh()
-        .disable_x_mesh()
-        .disable_y_mesh()
-        .draw()?;
+    chart.configure_mesh().disable_x_mesh().disable_y_mesh().draw()?;
 
     let plotting_area = chart.plotting_area();
 
@@ -219,13 +202,7 @@ pub fn list_devices() -> Vec<Device> {
     debug!("cuda_if_available={cuda_if_available:?}");
 
     let devices = unsafe { atc_cuda_device_count() };
-    if devices == 0 {
-        vec![Device::Cpu]
-    } else {
-        (0..devices)
-            .map(|i| Device::Cuda(i.try_into().unwrap()))
-            .collect()
-    }
+    if devices == 0 { vec![Device::Cpu] } else { (0..devices).map(|i| Device::Cuda(i.try_into().unwrap())).collect() }
 }
 
 lazy_static! {
@@ -386,14 +363,13 @@ fn shorten_path_for_fs_limits(path: &Path) -> PathBuf {
     }
 }
 
-
 #[doc(hidden)]
 pub fn debug_plot_impl(t_0: &Tensor, label: &str, plot_repeats: u64) -> anyhow::Result<()> {
     debug_plot_impl_wh(t_0, label, plot_repeats, (2000, 1000))
 }
 
 #[doc(hidden)]
-pub fn debug_plot_impl_wh(t_0: &Tensor, label: &str, plot_repeats: u64, w_h: (u32, u32),) -> anyhow::Result<()> {
+pub fn debug_plot_impl_wh(t_0: &Tensor, label: &str, plot_repeats: u64, w_h: (u32, u32)) -> anyhow::Result<()> {
     let file_stem = sanitize_debug_plot_label(label);
     let file_name = {
         let mut counts = match DEBUG_PLOT_LABEL_COUNTS.lock() {
@@ -406,11 +382,7 @@ pub fn debug_plot_impl_wh(t_0: &Tensor, label: &str, plot_repeats: u64, w_h: (u3
         if (plot_repeats == 0 && *seen > 1) || (plot_repeats > 0 && *seen % plot_repeats != 0) {
             return Ok(());
         }
-        let file_name = if *seen == 0 {
-            format!("{file_stem}.png")
-        } else {
-            format!("{file_stem}_{}.png", *seen)
-        };
+        let file_name = if *seen == 0 { format!("{file_stem}.png") } else { format!("{file_stem}_{}.png", *seen) };
 
         file_name
     };
@@ -420,18 +392,7 @@ pub fn debug_plot_impl_wh(t_0: &Tensor, label: &str, plot_repeats: u64, w_h: (u3
         (0..t_0.size()[0])
             .into_iter()
             .zip(DistinctColorIter::new())
-            .map(|(channel, color)| {
-                (
-                    format!("channel {channel}"),
-                    color,
-                    t_0.i((channel, ..))
-                        .iter::<f64>()
-                        .unwrap()
-                        .enumerate()
-                        .map(|(i, v)| (i as f32, v as f32))
-                        .collect::<Vec<(f32, f32)>>(),
-                )
-            })
+            .map(|(channel, color)| (format!("channel {channel}"), color, t_0.i((channel, ..)).iter::<f64>().unwrap().enumerate().map(|(i, v)| (i as f32, v as f32)).collect::<Vec<(f32, f32)>>()))
             .collect(),
         label,
         w_h,
@@ -440,53 +401,28 @@ pub fn debug_plot_impl_wh(t_0: &Tensor, label: &str, plot_repeats: u64, w_h: (u3
     Ok(())
 }
 
-
-pub fn plot_series<S>(
-    name_x_y_vec: Vec<(String, S, Vec<(f32, f32)>)>,
-    caption: &str,
-    w_h: (u32, u32),
-    path: &impl AsRef<std::path::Path>,
-) -> anyhow::Result<()>
+pub fn plot_series<S>(name_x_y_vec: Vec<(String, S, Vec<(f32, f32)>)>, caption: &str, w_h: (u32, u32), path: &impl AsRef<std::path::Path>) -> anyhow::Result<()>
 where
     S: Into<ShapeStyle> + Clone,
 {
     _plot_series(name_x_y_vec, caption, w_h, path, None, None)
 }
 
-pub fn plot_series_with_points<S>(
-    name_x_y_vec: Vec<(String, S, Vec<(f32, f32)>)>,
-    caption: &str,
-    w_h: (u32, u32),
-    path: &impl AsRef<std::path::Path>,
-    points: &Vec<(f32, f32)>,
-) -> anyhow::Result<()>
+pub fn plot_series_with_points<S>(name_x_y_vec: Vec<(String, S, Vec<(f32, f32)>)>, caption: &str, w_h: (u32, u32), path: &impl AsRef<std::path::Path>, points: &Vec<(f32, f32)>) -> anyhow::Result<()>
 where
     S: Into<ShapeStyle> + Clone,
 {
     _plot_series(name_x_y_vec, caption, w_h, path, Some(points), None)
 }
 
-pub fn plot_series_with_lanes<S>(
-    name_x_y_vec: Vec<(String, S, Vec<(f32, f32)>)>,
-    caption: &str,
-    w_h: (u32, u32),
-    path: &impl AsRef<std::path::Path>,
-    lanes: &[(i32, i32)],
-) -> anyhow::Result<()>
+pub fn plot_series_with_lanes<S>(name_x_y_vec: Vec<(String, S, Vec<(f32, f32)>)>, caption: &str, w_h: (u32, u32), path: &impl AsRef<std::path::Path>, lanes: &[(i32, i32)]) -> anyhow::Result<()>
 where
     S: Into<ShapeStyle> + Clone,
 {
     _plot_series(name_x_y_vec, caption, w_h, path, None, Some(lanes))
 }
 
-pub fn plot_series_with_sidebar_values<S>(
-    name_x_y_vec: Vec<(String, S, Vec<(f32, f32)>)>,
-    caption: &str,
-    w_h: (u32, u32),
-    path: &impl AsRef<std::path::Path>,
-    sidebar_title: &str,
-    sidebar_rows: &[(String, f32)],
-) -> anyhow::Result<()>
+pub fn plot_series_with_sidebar_values<S>(name_x_y_vec: Vec<(String, S, Vec<(f32, f32)>)>, caption: &str, w_h: (u32, u32), path: &impl AsRef<std::path::Path>, sidebar_title: &str, sidebar_rows: &[(String, f32)]) -> anyhow::Result<()>
 where
     S: Into<ShapeStyle> + Clone,
 {
@@ -535,29 +471,15 @@ where
     chart.configure_mesh().draw()?;
 
     for (name, color, x_y) in name_x_y_vec {
-        chart
-            .draw_series(LineSeries::new(x_y, color.clone()))?
-            .label(name)
-            .legend(move |(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], color.clone()));
+        chart.draw_series(LineSeries::new(x_y, color.clone()))?.label(name).legend(move |(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], color.clone()));
     }
 
-    chart
-        .configure_series_labels()
-        .background_style(&WHITE.mix(0.8))
-        .border_style(&BLACK)
-        .draw()?;
+    chart.configure_series_labels().background_style(&WHITE.mix(0.8)).border_style(&BLACK).draw()?;
 
     sidebar_area.fill(&RGBColor(245, 245, 245))?;
     let (sidebar_w_px, sidebar_h_px) = sidebar_area.dim_in_pixel();
-    sidebar_area.draw(&Rectangle::new(
-        [(0, 0), (sidebar_w_px as i32 - 1, sidebar_h_px as i32 - 1)],
-        ShapeStyle::from(&BLACK).stroke_width(1),
-    ))?;
-    sidebar_area.draw(&Text::new(
-        sidebar_title.to_string(),
-        (12, 32),
-        ("sans-serif", 26).into_font().color(&BLACK),
-    ))?;
+    sidebar_area.draw(&Rectangle::new([(0, 0), (sidebar_w_px as i32 - 1, sidebar_h_px as i32 - 1)], ShapeStyle::from(&BLACK).stroke_width(1)))?;
+    sidebar_area.draw(&Text::new(sidebar_title.to_string(), (12, 32), ("sans-serif", 26).into_font().color(&BLACK)))?;
 
     let mut y = 66;
     let line_step = 30;
@@ -568,11 +490,7 @@ where
             clipped = true;
             break;
         }
-        sidebar_area.draw(&Text::new(
-            format!("{name}: {value:.6}"),
-            (12, y),
-            ("sans-serif", 18).into_font().color(&BLACK),
-        ))?;
+        sidebar_area.draw(&Text::new(format!("{name}: {value:.6}"), (12, y), ("sans-serif", 18).into_font().color(&BLACK)))?;
         y += line_step;
     }
     if clipped {
@@ -583,15 +501,7 @@ where
     Ok(())
 }
 
-
-fn _plot_series<S>(
-    name_x_y_vec: Vec<(String, S, Vec<(f32, f32)>)>,
-    caption: &str,
-    w_h: (u32, u32),
-    path: &impl AsRef<std::path::Path>,
-    points: Option<&Vec<(f32, f32)>>,
-    _lanes: Option<&[(i32, i32)]>,
-) -> anyhow::Result<()>
+fn _plot_series<S>(name_x_y_vec: Vec<(String, S, Vec<(f32, f32)>)>, caption: &str, w_h: (u32, u32), path: &impl AsRef<std::path::Path>, points: Option<&Vec<(f32, f32)>>, _lanes: Option<&[(i32, i32)]>) -> anyhow::Result<()>
 where
     S: Into<ShapeStyle> + Clone,
 {
@@ -602,65 +512,39 @@ where
         fs::create_dir_all(parent)?;
     }
 
-    let (min_x, max_x, min_y, max_y) = name_x_y_vec
-        .iter()
-        .flat_map(|name_x_y_vec| name_x_y_vec.2.iter())
-        .fold(
-            (f32::MAX, f32::MIN, f32::MAX, f32::MIN),
-            |mut max_min, (x, y)| {
-                if max_min.0 > *x {
-                    max_min.0 = *x
-                }
-                if max_min.1 < *x {
-                    max_min.1 = *x
-                }
+    let (min_x, max_x, min_y, max_y) = name_x_y_vec.iter().flat_map(|name_x_y_vec| name_x_y_vec.2.iter()).fold((f32::MAX, f32::MIN, f32::MAX, f32::MIN), |mut max_min, (x, y)| {
+        if max_min.0 > *x {
+            max_min.0 = *x
+        }
+        if max_min.1 < *x {
+            max_min.1 = *x
+        }
 
-                if max_min.2 > *y {
-                    max_min.2 = *y
-                }
-                if max_min.3 < *y {
-                    max_min.3 = *y
-                }
+        if max_min.2 > *y {
+            max_min.2 = *y
+        }
+        if max_min.3 < *y {
+            max_min.3 = *y
+        }
 
-                max_min
-            },
-        );
+        max_min
+    });
 
     let root = BitMapBackend::new(&path, w_h).into_drawing_area();
     root.fill(&WHITE)?;
-    let mut chart = ChartBuilder::on(&root)
-        .caption(caption, ("sans-serif", 50).into_font())
-        .margin(5)
-        .x_label_area_size(30)
-        .y_label_area_size(100)
-        .build_cartesian_2d(min_x..max_x, min_y..max_y)?;
+    let mut chart = ChartBuilder::on(&root).caption(caption, ("sans-serif", 50).into_font()).margin(5).x_label_area_size(30).y_label_area_size(100).build_cartesian_2d(min_x..max_x, min_y..max_y)?;
 
     chart.configure_mesh().draw()?;
 
     for (name, color, x_y) in name_x_y_vec {
-        chart
-            .draw_series(LineSeries::new(x_y, color.clone()))?
-            .label(name)
-            .legend(move |(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], color.clone()));
+        chart.draw_series(LineSeries::new(x_y, color.clone()))?.label(name).legend(move |(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], color.clone()));
     }
 
-    chart
-        .configure_series_labels()
-        .background_style(&WHITE.mix(0.8))
-        .border_style(&BLACK)
-        .draw()?;
+    chart.configure_series_labels().background_style(&WHITE.mix(0.8)).border_style(&BLACK).draw()?;
 
     if let Some(points) = points {
         for point in points {
-            root.draw(&Circle::new(
-                chart.backend_coord(point),
-                10,
-                ShapeStyle {
-                    color: BLUE.mix(0.6),
-                    filled: false,
-                    stroke_width: 2,
-                },
-            ))?;
+            root.draw(&Circle::new(chart.backend_coord(point), 10, ShapeStyle { color: BLUE.mix(0.6), filled: false, stroke_width: 2 }))?;
         }
     }
 
@@ -669,13 +553,7 @@ where
     Ok(())
 }
 
-pub fn draw_function_plot(
-    output_path: &impl AsRef<std::path::Path>,
-    w_h: (u32, u32),
-    xy: &[(f32, f32)],
-    bands: &[(f32, f32)],
-    title: &str,
-) -> anyhow::Result<()> {
+pub fn draw_function_plot(output_path: &impl AsRef<std::path::Path>, w_h: (u32, u32), xy: &[(f32, f32)], bands: &[(f32, f32)], title: &str) -> anyhow::Result<()> {
     let (width, height) = w_h;
     let output_path = shorten_path_for_fs_limits(output_path.as_ref());
 
@@ -683,16 +561,12 @@ pub fn draw_function_plot(
     let mut xs = xy.iter().map(|(x, _)| *x).collect::<Vec<_>>();
     xs.extend(bands.iter().flat_map(|(a, b)| [*a, *b]));
 
-    let (mut xmin, mut xmax) = match (xs.iter().cloned().fold(f32::INFINITY, f32::min),
-                                      xs.iter().cloned().fold(f32::NEG_INFINITY, f32::max)) {
+    let (mut xmin, mut xmax) = match (xs.iter().cloned().fold(f32::INFINITY, f32::min), xs.iter().cloned().fold(f32::NEG_INFINITY, f32::max)) {
         (a, b) if a.is_finite() && b.is_finite() && a < b => (a, b),
         _ => (0.0, 1.0),
     };
 
-    let (mut ymin, mut ymax) = match (
-        xy.iter().map(|&(_, y)| y).fold(f32::INFINITY, f32::min),
-        xy.iter().map(|&(_, y)| y).fold(f32::NEG_INFINITY, f32::max),
-    ) {
+    let (mut ymin, mut ymax) = match (xy.iter().map(|&(_, y)| y).fold(f32::INFINITY, f32::min), xy.iter().map(|&(_, y)| y).fold(f32::NEG_INFINITY, f32::max)) {
         (a, b) if a.is_finite() && b.is_finite() && a < b => (a, b),
         _ => (-1.0, 1.0),
     };
@@ -700,8 +574,10 @@ pub fn draw_function_plot(
     // Add a little padding so the plot isn't glued to edges
     let pad_x = ((xmax - xmin).abs()).max(1e-6) * 0.05;
     let pad_y = ((ymax - ymin).abs()).max(1e-6) * 0.10;
-    xmin -= pad_x; xmax += pad_x;
-    ymin -= pad_y; ymax += pad_y;
+    xmin -= pad_x;
+    xmax += pad_x;
+    ymin -= pad_y;
+    ymax += pad_y;
 
     // ----- Backend & chart -----
     if let Some(parent) = output_path.parent() {
@@ -710,14 +586,10 @@ pub fn draw_function_plot(
     let root = BitMapBackend::new(&output_path, (width, height)).into_drawing_area();
     root.fill(&WHITE)?;
 
-    let mut chart = ChartBuilder::on(&root)
-        .caption(title, ("sans-serif", 20))
-        .margin(10)
-        .x_label_area_size(35)
-        .y_label_area_size(45)
-        .build_cartesian_2d(xmin..xmax, ymin..ymax)?;
+    let mut chart = ChartBuilder::on(&root).caption(title, ("sans-serif", 20)).margin(10).x_label_area_size(35).y_label_area_size(45).build_cartesian_2d(xmin..xmax, ymin..ymax)?;
 
-    chart.configure_mesh()
+    chart
+        .configure_mesh()
         .x_labels(20)
         .y_labels(10)
         .light_line_style(&TRANSPARENT) // grid only on major lines
@@ -728,24 +600,15 @@ pub fn draw_function_plot(
     for &(x0, x1) in bands {
         let (a, b) = if x0 <= x1 { (x0, x1) } else { (x1, x0) };
         // Slightly translucent orange fill
-        plot_area.draw(&Rectangle::new(
-            [(a, ymin), (b, ymax)],
-            RGBAColor(255, 165, 0, 0.20).filled(),
-        ))?;
+        plot_area.draw(&Rectangle::new([(a, ymin), (b, ymax)], RGBAColor(255, 165, 0, 0.20).filled()))?;
     }
 
     // ----- Draw the function line -----
     // Filter out NaNs just in case.
     let clean = xy.iter().copied().filter(|(x, y)| x.is_finite() && y.is_finite());
-    chart
-        .draw_series(LineSeries::new(clean, &BLUE))?
-        .label("f(x)")
-        .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], &BLUE));
+    chart.draw_series(LineSeries::new(clean, &BLUE))?.label("f(x)").legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], &BLUE));
 
-    chart.configure_series_labels()
-        .background_style(&WHITE.mix(0.8))
-        .border_style(&BLACK)
-        .draw()?;
+    chart.configure_series_labels().background_style(&WHITE.mix(0.8)).border_style(&BLACK).draw()?;
 
     root.present()?;
     Ok(())
@@ -757,7 +620,7 @@ pub fn plot_spectrogram<P: AsRef<Path>>(
     width: u32,
     height: u32,
 ) -> anyhow::Result<()> {
-    let spectrogram = spectrogram.transpose(0,1);
+    let spectrogram = spectrogram.transpose(0, 1);
     let size = spectrogram.size();
 
     if size.len() != 2 {
@@ -773,9 +636,7 @@ pub fn plot_spectrogram<P: AsRef<Path>>(
 
     // Move to CPU and convert to double for easy scalar reading.
     // For large spectrograms this is not the fastest approach, but it is simple and robust.
-    let spec = spectrogram
-        .to_device(Device::Cpu)
-        .to_kind(Kind::Double);
+    let spec = spectrogram.to_device(Device::Cpu).to_kind(Kind::Double);
 
     let mut min_v = f64::INFINITY;
     let mut max_v = f64::NEG_INFINITY;
@@ -805,19 +666,9 @@ pub fn plot_spectrogram<P: AsRef<Path>>(
     let root = BitMapBackend::new(path.as_ref(), (width, height)).into_drawing_area();
     root.fill(&WHITE)?;
 
-    let mut chart = ChartBuilder::on(&root)
-        .caption("Spectrogram", ("sans-serif", 20))
-        .margin(10)
-        .x_label_area_size(35)
-        .y_label_area_size(45)
-        .build_cartesian_2d(0i64..t_bins, 0i64..f_bins)?;
+    let mut chart = ChartBuilder::on(&root).caption("Spectrogram", ("sans-serif", 20)).margin(10).x_label_area_size(35).y_label_area_size(45).build_cartesian_2d(0i64..t_bins, 0i64..f_bins)?;
 
-    chart
-        .configure_mesh()
-        .x_desc("time bin")
-        .y_desc("frequency bin")
-        .disable_mesh()
-        .draw()?;
+    chart.configure_mesh().x_desc("time bin").y_desc("frequency bin").disable_mesh().draw()?;
 
     chart.draw_series((0..t_bins).flat_map(|t| {
         let spec = &spec;
@@ -825,11 +676,7 @@ pub fn plot_spectrogram<P: AsRef<Path>>(
         (0..f_bins).map(move |f| {
             let v = spec.double_value(&[t, f]);
 
-            let x = if v.is_finite() {
-                ((v - min_v) / range).clamp(0.0, 1.0)
-            } else {
-                0.0
-            };
+            let x = if v.is_finite() { ((v - min_v) / range).clamp(0.0, 1.0) } else { 0.0 };
 
             let color = turbo_colormap(x);
 
@@ -838,10 +685,7 @@ pub fn plot_spectrogram<P: AsRef<Path>>(
             let y0 = f_bins - f - 1;
             let y1 = f_bins - f;
 
-            Rectangle::new(
-                [(t, y0), (t + 1, y1)],
-                color.filled(),
-            )
+            Rectangle::new([(t, y0), (t + 1, y1)], color.filled())
         })
     }))?;
 
@@ -856,38 +700,19 @@ fn turbo_colormap(x: f64) -> RGBColor {
     let x = x.clamp(0.0, 1.0);
 
     // Polynomial approximation of Google's Turbo colormap.
-    let r = 34.61
-        + x * (1172.33
-        + x * (-10793.56
-        + x * (33300.12
-        + x * (-38394.49
-        + x * 14825.05))));
+    let r = 34.61 + x * (1172.33 + x * (-10793.56 + x * (33300.12 + x * (-38394.49 + x * 14825.05))));
 
-    let g = 23.31
-        + x * (557.33
-        + x * (1225.33
-        + x * (-3574.96
-        + x * (1073.77
-        + x * 707.56))));
+    let g = 23.31 + x * (557.33 + x * (1225.33 + x * (-3574.96 + x * (1073.77 + x * 707.56))));
 
-    let b = 27.2
-        + x * (3211.10
-        + x * (-15327.97
-        + x * (27814.00
-        + x * (-22569.18
-        + x * 6838.66))));
+    let b = 27.2 + x * (3211.10 + x * (-15327.97 + x * (27814.00 + x * (-22569.18 + x * 6838.66))));
 
-    RGBColor(
-        r.clamp(0.0, 255.0) as u8,
-        g.clamp(0.0, 255.0) as u8,
-        b.clamp(0.0, 255.0) as u8,
-    )
+    RGBColor(r.clamp(0.0, 255.0) as u8, g.clamp(0.0, 255.0) as u8, b.clamp(0.0, 255.0) as u8)
 }
-
 
 //from tch-0.14.0/tests/test_utils.rs
 pub fn from<'a, T>(t: &'a Tensor) -> anyhow::Result<T>
-where T: TryFrom<&'a Tensor, Error = tch::TchError>,
+where
+    T: TryFrom<&'a Tensor, Error = tch::TchError>,
 {
     // Preserve LibTorch's typed error so conversion failures participate in recovery.
     Ok(tch_result(T::try_from(t))?)
@@ -919,11 +744,7 @@ pub fn pad_to_2(input: &Tensor, to_size: &[i64], truncate: bool, with_mask: bool
     debug!("pad_to: input.size={:?}, to_size={:?}", input.size(), to_size);
 
     if input.size().len() != to_size.len() {
-        return Err(anyhow::anyhow!(format!(
-            "dimensions don't match: {:?} vs {:?}",
-            input.size(),
-            to_size
-        )));
+        return Err(anyhow::anyhow!(format!("dimensions don't match: {:?} vs {:?}", input.size(), to_size)));
     }
 
     let mut result = input.shallow_clone();
@@ -942,9 +763,7 @@ pub fn pad_to_2(input: &Tensor, to_size: &[i64], truncate: bool, with_mask: bool
         // in pure pad mode treat from > to as an error.
         for (dim, (&from, &to)) in cur_size.iter().zip(to_size.iter()).enumerate() {
             if from > to {
-                return Err(anyhow::anyhow!(format!(
-                    "from {from} > to {to} at dim {dim}"
-                )));
+                return Err(anyhow::anyhow!(format!("from {from} > to {to} at dim {dim}")));
             }
         }
     }
@@ -959,12 +778,10 @@ pub fn pad_to_2(input: &Tensor, to_size: &[i64], truncate: bool, with_mask: bool
     for (i, (&from, &to)) in from_rev.iter().zip(to_rev.iter()).enumerate() {
         if from > to {
             // should not happen if truncate == true and the above logic ran.
-            return Err(anyhow::anyhow!(format!(
-                "after truncation: from {from} > to {to} at reversed dim {i}"
-            )));
+            return Err(anyhow::anyhow!(format!("after truncation: from {from} > to {to} at reversed dim {i}")));
         }
-        pad_idx.push(0);          // pad on the "left"
-        pad_idx.push(to - from);  // pad on the "right"
+        pad_idx.push(0); // pad on the "left"
+        pad_idx.push(to - from); // pad on the "right"
     }
 
     let padded = tch_result(result.f_pad(pad_idx.as_slice(), "constant", 0.0))?;
@@ -978,7 +795,6 @@ pub fn pad_to_2(input: &Tensor, to_size: &[i64], truncate: bool, with_mask: bool
 
     Ok((padded, mask))
 }
-
 
 pub fn clone(from: &Tensor) -> anyhow::Result<Tensor> {
     Ok(tch_result(tch_result(from.f_detach_copy())?.f_to_device(Device::Cpu))?)
@@ -995,7 +811,6 @@ pub fn hist_1_dim(tensor: &Tensor, bins: u32) -> anyhow::Result<Tensor> {
     let one_hot = tch_result(indices.f_one_hot(bins as i64))?;
     Ok(tch_result(one_hot.f_sum_dim_intlist(1, false, Kind::Int))?)
 }
-
 
 pub fn kick_register_cuda_hooks() {
     unsafe {
@@ -1034,7 +849,7 @@ pub fn masked_mean(x: &Tensor, mask: &Tensor) -> anyhow::Result<Tensor> {
     // denom = count(valid) over T, clamp to avoid div-by-zero
     let denom = mask_f
         .f_sum_dim_intlist(2, false, Kind::Float)? // [B,1]
-        .f_clamp_min(1.0)?;                           // [B,1]
+        .f_clamp_min(1.0)?; // [B,1]
 
     // broadcast denom over C
     let mean = sum.f_div(&denom)?; // [B,C]
@@ -1054,14 +869,14 @@ pub fn masked_max(x: &Tensor, mask: &Tensor) -> anyhow::Result<Tensor> {
     let x_keep = x.f_mul(&mask_f)?; // [B,C,T]
 
     // inv = (1 - mask) * neg
-    let ones = mask_f.f_ones_like()?;                 // [B,1,T]
-    let inv = ones.f_subtract(&mask_f)?;              // [B,1,T]
-    let inv_scaled = inv.f_multiply_scalar(neg)?;     // [B,1,T]
+    let ones = mask_f.f_ones_like()?; // [B,1,T]
+    let inv = ones.f_subtract(&mask_f)?; // [B,1,T]
+    let inv_scaled = inv.f_multiply_scalar(neg)?; // [B,1,T]
 
     // x_masked = x_keep + inv_scaled  (broadcast over C)
-    let x_masked = x_keep.f_add(&inv_scaled)?;        // [B,C,T]
+    let x_masked = x_keep.f_add(&inv_scaled)?; // [B,C,T]
 
-    let (mx, _idx) = x_masked.f_max_dim(2, false)?;   // mx: [B,C]
+    let (mx, _idx) = x_masked.f_max_dim(2, false)?; // mx: [B,C]
     Ok(mx)
 }
 
@@ -1077,23 +892,18 @@ pub fn mask_from_lengths(lengths: &[i64], max_len: i64, device: Device) -> anyho
     Ok(range.f_lt_tensor(&lengths_t)?.to_kind(Kind::Bool))
 }
 
-
 pub fn z_norm(t_0: &Tensor, dim: i64) -> anyhow::Result<Tensor> {
     let std = t_0.f_std_dim(dim, false, true)?.f_add_scalar_(f64::EPSILON)?;
 
     Ok(t_0.f_sub(&t_0.f_mean_dim(dim, true, t_0.kind())?)?.f_div(&std)?)
 }
 
-#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="z_norm_dims"))]
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "z_norm_dims"))]
 pub fn z_norm_dims(x: &Tensor, dims: &[i64], eps: f64) -> anyhow::Result<Tensor> {
     // Compute variance and mean together.
     // unbiased=false => population variance
     // keepdim=true   => results broadcast back over x
-    let (var, mean) = x.f_var_mean_dim(
-        dims,
-        /*unbiased=*/ false,
-        /*keepdim=*/ true,
-    )?;
+    let (var, mean) = x.f_var_mean_dim(dims, /*unbiased=*/ false, /*keepdim=*/ true)?;
 
     // std = sqrt(var + eps)
     let std = var.f_add_scalar(eps)?.f_sqrt()?;
@@ -1126,14 +936,7 @@ pub fn dot_norm(dim: i64, slice_01: &Tensor, slice_02: &Tensor) -> anyhow::Resul
     Ok(norm_01.f_tensordot(&norm_02, [dim], [dim])?.f_diag(0)?)
 }
 
-pub fn self_dot(
-    t1: &Tensor,
-    i_0: i64,
-    i_1: i64,
-    dim: i64,
-    step: i64,
-    d_i: i64,
-) -> anyhow::Result<Tensor> {
+pub fn self_dot(t1: &Tensor, i_0: i64, i_1: i64, dim: i64, step: i64, d_i: i64) -> anyhow::Result<Tensor> {
     let slice_1 = t1.f_slice(dim, Some(i_0), Some(i_0 + d_i), step)?;
     let slice_2 = t1.f_slice(dim, Some(i_1), Some(i_1 + d_i), step)?;
 
@@ -1145,12 +948,7 @@ pub fn norm(t: &Tensor, dim: &[i64]) -> Tensor {
 }
 
 pub fn norm_2(t: &Tensor, dim: i64) -> anyhow::Result<Tensor> {
-    let denom = t
-        .f_tensordot(&t, dim, dim)?
-        .f_diag(0)?
-        .f_sqrt()?
-        .f_view([1, -1])?
-        .f_transpose(0, 1)?;
+    let denom = t.f_tensordot(&t, dim, dim)?.f_diag(0)?.f_sqrt()?.f_view([1, -1])?.f_transpose(0, 1)?;
     Ok(t.f_div(&denom)?)
 }
 
@@ -1164,8 +962,7 @@ pub fn lin_for_size(k: f64, size: [i64; 2], kind: Kind, device: &Device) -> anyh
 
     debug!("lin_for_size: end={end}");
 
-    let mut t = panic_to_err!(Tensor::f_arange(end, (kind, *device)))?
-        .f_view(&size[..])?;
+    let mut t = panic_to_err!(Tensor::f_arange(end, (kind, *device)))?.f_view(&size[..])?;
 
     t = t.set_requires_grad(false);
     match kind {
@@ -1189,10 +986,9 @@ pub fn lin_iter(n: u32) -> Map<Range<u32>, fn(u32) -> f32> {
 
 use crate::nets::common_nets::ThoModuleWithStore;
 
-
 pub trait TrainListener: Send + Sync {
     fn on_cycle(&mut self, _cycle: usize, _loss: f32) -> BoxFuture<'_, ListenerResponse> {
-        async {ListenerResponse::Nope}.boxed()
+        async { ListenerResponse::Nope }.boxed()
     }
     fn on_valid_cycle(&mut self, cycle: u32, loss: f32) -> ListenerResponse;
 }
@@ -1202,7 +998,6 @@ pub enum ListenerResponse {
     UpdateLR(f64),
     Nope,
 }
-
 
 pub fn two_sigs(n: u32) -> (Tensor, Tensor) {
     let sig_1 = Tensor::from_slice(
@@ -1215,7 +1010,7 @@ pub fn two_sigs(n: u32) -> (Tensor, Tensor) {
                 (300, pulse_v(80., 30., 200, 20.)),
             ],
         )
-            .as_slice(),
+        .as_slice(),
     );
 
     let sig_2 = Tensor::from_slice(pulse_in_rand(n, &[], 10., 0.001, 0.1).as_slice());
@@ -1223,26 +1018,11 @@ pub fn two_sigs(n: u32) -> (Tensor, Tensor) {
 }
 
 //f(x)=-sin(3x)+x^2+0.7 *x
-pub fn sin3_pow2(
-    n: i64,
-    min: f32,
-    max: f32,
-    with_noise: Option<f32>,
-) -> (Tensor, Tensor, Vec<f32>) {
+pub fn sin3_pow2(n: i64, min: f32, max: f32, with_noise: Option<f32>) -> (Tensor, Tensor, Vec<f32>) {
     let mut rng = rand::rng();
-    let x = (0..n)
-        .map(|i| min + (i as f32 / (n - 1) as f32) * (max - min))
-        .into_iter()
-        .collect::<Vec<f32>>();
+    let x = (0..n).map(|i| min + (i as f32 / (n - 1) as f32) * (max - min)).into_iter().collect::<Vec<f32>>();
 
-    let y_train_full = Tensor::from_slice(
-        x.iter()
-            .map(|x| sin3_pow2_with_noise_f(with_noise, &mut rng, *x))
-            .collect::<Vec<f32>>()
-            .as_slice(),
-    )
-        .view((1, -1))
-        .totype(Float); //.transpose(0,1);
+    let y_train_full = Tensor::from_slice(x.iter().map(|x| sin3_pow2_with_noise_f(with_noise, &mut rng, *x)).collect::<Vec<f32>>().as_slice()).view((1, -1)).totype(Float); //.transpose(0,1);
 
     let x_t = Tensor::from_slice(x.as_slice()).totype(Float).view((-1, 1));
 
@@ -1269,12 +1049,7 @@ pub fn pulse_t(μ: f32, σ: f32, n: i64, f: f32) -> Tensor {
     Tensor::from(pulse_v(μ, σ, n, f).as_slice())
 }
 
-pub fn three_sigs_tensor(
-    n: u32,
-    sig_0_v: &Vec<f32>,
-    sig_1_v: &Vec<f32>,
-    sig_2_v: &Vec<f32>,
-) -> (Tensor, Tensor, Tensor, Tensor) {
+pub fn three_sigs_tensor(n: u32, sig_0_v: &Vec<f32>, sig_1_v: &Vec<f32>, sig_2_v: &Vec<f32>) -> (Tensor, Tensor, Tensor, Tensor) {
     let t_0_0 = t_0_0(n, sig_0_v, sig_2_v);
 
     // debug!("t_0_0 mean={} max-min={}", t_0_0.mean(None).double_value(&[]), t_0_0.max() - t_0_0.min());
@@ -1329,10 +1104,8 @@ pub fn reset_print_options() {
     unsafe {
         let printer_options_ptr: *mut PrinterOptions = &mut printer_options;
 
-        let threshold_ptr =
-            (printer_options_ptr as *mut u8).add(size_of::<usize>() * 1) as *mut usize;
-        let line_width_ptr =
-            (printer_options_ptr as *mut u8).add(size_of::<usize>() * 3) as *mut usize;
+        let threshold_ptr = (printer_options_ptr as *mut u8).add(size_of::<usize>() * 1) as *mut usize;
+        let line_width_ptr = (printer_options_ptr as *mut u8).add(size_of::<usize>() * 3) as *mut usize;
 
         ptr::write(threshold_ptr, usize::MAX);
         ptr::write(line_width_ptr, 10_000);
@@ -1345,17 +1118,11 @@ pub fn tensor_mem_size(t: &Tensor) -> usize {
 }
 
 pub fn vs_mem_size(opt: &VarStore) -> usize {
-    opt.trainable_variables()
-        .iter()
-        .map(|t| tensor_mem_size(t))
-        .sum()
+    opt.trainable_variables().iter().map(|t| tensor_mem_size(t)).sum()
 }
 
 pub fn optimizer_mem_size(opt: &Optimizer) -> usize {
-    opt.trainable_variables()
-        .iter()
-        .map(|t| tensor_mem_size(t))
-        .sum()
+    opt.trainable_variables().iter().map(|t| tensor_mem_size(t)).sum()
 }
 
 pub fn set_requires_grad_in_subpath(vsd: &VarStore, subpath: &str, requires_grad: bool) {
@@ -1372,18 +1139,9 @@ pub fn set_requires_grad_in_subpath(vsd: &VarStore, subpath: &str, requires_grad
     }
 }
 
-pub fn mix_x_binary_with_labels(
-    x_1: &Tensor,
-    lengths_1: Option<&BatchLengths>,
-    x_0: &Tensor,
-    lengths_0: Option<&BatchLengths>,
-) -> anyhow::Result<(Tensor, Option<BatchLengths>, Tensor)> {
-    let [ma, _na, ..] = x_1.size()[0..2] else {
-        panic!("x_1 {:?} must be 2D [m, n]", x_1.size())
-    };
-    let [mb, _nb, ..] = x_0.size()[0..2] else {
-        panic!("x_0 {:?} must be 2D [m, n]", x_0.size())
-    };
+pub fn mix_x_binary_with_labels(x_1: &Tensor, lengths_1: Option<&BatchLengths>, x_0: &Tensor, lengths_0: Option<&BatchLengths>) -> anyhow::Result<(Tensor, Option<BatchLengths>, Tensor)> {
+    let [ma, _na, ..] = x_1.size()[0..2] else { panic!("x_1 {:?} must be 2D [m, n]", x_1.size()) };
+    let [mb, _nb, ..] = x_0.size()[0..2] else { panic!("x_0 {:?} must be 2D [m, n]", x_0.size()) };
 
     assert_eq!(x_0.device(), x_1.device(), "A and B must be on the same device");
 
@@ -1397,19 +1155,11 @@ pub fn mix_x_binary_with_labels(
         _ => Kind::Float,
     };
 
-    let y0 = Tensor::f_cat(
-        &[
-            Tensor::f_ones(&[ma, 1], (y_kind, device))?,
-            Tensor::f_zeros(&[mb, 1], (y_kind, device))?,
-        ],
-        0,
-    )?;
+    let y0 = Tensor::f_cat(&[Tensor::f_ones(&[ma, 1], (y_kind, device))?, Tensor::f_zeros(&[mb, 1], (y_kind, device))?], 0)?;
 
     // Generate permutation on CPU first.
     let perm_cpu = Tensor::f_randperm(total, (Kind::Int64, Device::Cpu))?;
-    let perm_vec: Vec<i64> = (&perm_cpu)
-        .try_into()
-        .with_context(|| "mix_x_binary_with_labels: perm to vec")?;
+    let perm_vec: Vec<i64> = (&perm_cpu).try_into().with_context(|| "mix_x_binary_with_labels: perm to vec")?;
 
     // Copy permutation to target device once for tensor indexing.
     let perm = perm_cpu.f_to_device(device)?;
@@ -1421,16 +1171,10 @@ pub fn mix_x_binary_with_labels(
         (None, None) => None,
         (Some(lengths_1), Some(lengths_0)) => {
             if lengths_1.as_slice().len() != ma as usize {
-                return Err(anyhow::anyhow!(format!(
-                    "lengths_1 len mismatch: expected={ma} got={}",
-                    lengths_1.as_slice().len()
-                )));
+                return Err(anyhow::anyhow!(format!("lengths_1 len mismatch: expected={ma} got={}", lengths_1.as_slice().len())));
             }
             if lengths_0.as_slice().len() != mb as usize {
-                return Err(anyhow::anyhow!(format!(
-                    "lengths_0 len mismatch: expected={mb} got={}",
-                    lengths_0.as_slice().len()
-                )));
+                return Err(anyhow::anyhow!(format!("lengths_0 len mismatch: expected={mb} got={}", lengths_0.as_slice().len())));
             }
 
             let mut lengths_all = Vec::with_capacity(total as usize);
@@ -1444,23 +1188,14 @@ pub fn mix_x_binary_with_labels(
 
             Some(BatchLengths::new(lengths_perm))
         }
-        _ => {
-            return Err(anyhow::anyhow!(
-                "lengths_1 and lengths_0 must both be Some or None",
-            ))
-        }
+        _ => return Err(anyhow::anyhow!("lengths_1 and lengths_0 must both be Some or None",)),
     };
 
     Ok((x, lengths, y))
 }
 
 ///sums and multiplies inputs by k
-pub fn test_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
-    num_features: u32,
-    k: f64,
-    device: Device,
-    _descr: &str,
-) -> anyhow::Result<Box<ThoModuleWithStore<DI, DO>>> {
+pub fn test_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(num_features: u32, k: f64, device: Device, _descr: &str) -> anyhow::Result<Box<ThoModuleWithStore<DI, DO>>> {
     let vs = VarStore::new(device);
 
     let builder = Arc::new(move |path: &nn::Path| -> anyhow::Result<Box<dyn crate::nets::nodes::ThoModule<DI, DO>>> {
@@ -1478,23 +1213,14 @@ pub fn test_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
             .build_tch_module(path)
     });
 
-    Ok(Box::new(ThoModuleWithStore::with_factory(
-        "test_net",
-        Arc::clone(&builder)(&vs.root())?,
-        vs,
-        Some(builder)
-    )))
-
+    Ok(Box::new(ThoModuleWithStore::with_factory("test_net", Arc::clone(&builder)(&vs.root())?, vs, Some(builder))))
 }
 
-pub fn assert_close<A:Into<f64> + Display, B:Into<f64> + Display>(val_a: A, val_b: B, max_diff: f64) {
+pub fn assert_close<A: Into<f64> + Display, B: Into<f64> + Display>(val_a: A, val_b: B, max_diff: f64) {
     let a = <A as Into<f64>>::into(val_a);
     let b = <B as Into<f64>>::into(val_b);
     let diff = (a - b).abs();
-    assert!(
-        diff <= max_diff,
-        "values not close enough: {a} vs {b} (diff={diff}, max_diff={max_diff})"
-    );
+    assert!(diff <= max_diff, "values not close enough: {a} vs {b} (diff={diff}, max_diff={max_diff})");
 }
 
 #[cfg(test)]
@@ -1505,7 +1231,7 @@ fn assert_tensor_eq(a: &Tensor, b: &Tensor) {
     assert!(ok, "tensor values differ:\nleft: {a:?}\nright: {b:?}");
 }
 
-pub fn pad_stack_with_mask<T:AsRef<Tensor>>(tensors: &[&T], dim_0: i64, max_input: i64) -> anyhow::Result<(Tensor, Vec<i64>)> {
+pub fn pad_stack_with_mask<T: AsRef<Tensor>>(tensors: &[&T], dim_0: i64, max_input: i64) -> anyhow::Result<(Tensor, Vec<i64>)> {
     let mut stack = Vec::with_capacity(tensors.len());
     let mut lengths = Vec::with_capacity(tensors.len());
 
@@ -1532,7 +1258,7 @@ pub fn pad_stack_with_mask<T:AsRef<Tensor>>(tensors: &[&T], dim_0: i64, max_inpu
         lengths.push(len);
     }
 
-    let stack = Tensor::f_stack(stack.as_slice(), 0)?;//copies to new storage
+    let stack = Tensor::f_stack(stack.as_slice(), 0)?; //copies to new storage
 
     Ok((stack, lengths))
 }
@@ -1572,27 +1298,19 @@ pub fn white_tophat1d(x: &Tensor, k: i64) -> Result<Tensor, TchError> {
     x.f_sub(&opened)
 }
 
-
 /// Local-maximum mask along the last dimension (expects xs shape [B, C, L]).
 ///
 /// A position is a local max if it equals the max over a sliding window of size `kernel`.
 /// Note: flat plateaus produce multiple `true`s (all equal-to-max positions).
 pub fn local_max_1d_mask(xs: &Tensor, kernel: i64) -> Result<Tensor, TchError> {
     if xs.dim() != 3 {
-        return Err(TchError::Shape(format!(
-            "f_local_max_1d_mask: expected xs dim=3 ([B,C,L]), got shape {:?}",
-            xs.size()
-        )));
+        return Err(TchError::Shape(format!("f_local_max_1d_mask: expected xs dim=3 ([B,C,L]), got shape {:?}", xs.size())));
     }
     if kernel <= 0 {
-        return Err(TchError::Shape(format!(
-            "f_local_max_1d_mask: kernel must be > 0, got {kernel}"
-        )));
+        return Err(TchError::Shape(format!("f_local_max_1d_mask: kernel must be > 0, got {kernel}")));
     }
     if kernel % 2 == 0 {
-        return Err(TchError::Shape(format!(
-            "f_local_max_1d_mask: kernel must be odd to preserve alignment, got {kernel}"
-        )));
+        return Err(TchError::Shape(format!("f_local_max_1d_mask: kernel must be odd to preserve alignment, got {kernel}")));
     }
 
     let pad = (kernel - 1) / 2;
@@ -1617,7 +1335,7 @@ pub fn local_max_1d(xs: &Tensor, kernel: i64) -> Result<Tensor, TchError> {
 /// Global-max over time: [B,1,T’] -> [B,1]
 pub fn pool_time_max(sims: &Tensor) -> Result<Tensor, TchError> {
     // dim=2 is time; keepdim=false to drop it
-    let (pooled, _idx) = sims.f_max_dim(2, /*keepdim=*/false)?;
+    let (pooled, _idx) = sims.f_max_dim(2, /*keepdim=*/ false)?;
     Ok(pooled) // [B,1]
 }
 
@@ -1625,21 +1343,20 @@ pub fn pool_time_max(sims: &Tensor) -> Result<Tensor, TchError> {
 /// τ≈0.3–1.0 - aggregates several nearby high responses and gives better gradients early in training. As τ→0 it approaches max; as τ grows it approaches mean.
 pub fn pool_time_lse(sims: &Tensor, tau: f64) -> Result<Tensor, TchError> {
     // Stable LSE: m + τ*log(Σ exp((x-m)/τ))
-    let (m, _idx) = sims.f_max_dim(2, /*keepdim=*/true)?;           // [B,1,1]
-    let x_centered = sims.f_sub(&m)?.f_div_scalar(tau)?;            // [B,1,T’]
-    let ex = x_centered.f_exp()?;                                   // [B,1,T’]
-    let s = ex.f_sum_dim_intlist(2, /*keepdim=*/false, Kind::Float)?; // [B,1]
-    let lse = s.f_log()?.f_mul_scalar(tau)?;                         // [B,1]
-    Ok(lse.f_add(&m.f_squeeze_dim(2)?)?)                             // [B,1]
+    let (m, _idx) = sims.f_max_dim(2, /*keepdim=*/ true)?; // [B,1,1]
+    let x_centered = sims.f_sub(&m)?.f_div_scalar(tau)?; // [B,1,T’]
+    let ex = x_centered.f_exp()?; // [B,1,T’]
+    let s = ex.f_sum_dim_intlist(2, /*keepdim=*/ false, Kind::Float)?; // [B,1]
+    let lse = s.f_log()?.f_mul_scalar(tau)?; // [B,1]
+    Ok(lse.f_add(&m.f_squeeze_dim(2)?)?) // [B,1]
 }
 
 /// Mean over time (simple baseline): [B,1,T’] -> [B,1]
 pub fn pool_time_mean(sims: &Tensor) -> Result<Tensor, TchError> {
     let tprime = sims.size()[2] as f64;
-    let sum = sims.f_sum_dim_intlist(2, /*keepdim=*/false, Kind::Float)?; // [B,1]
+    let sum = sims.f_sum_dim_intlist(2, /*keepdim=*/ false, Kind::Float)?; // [B,1]
     sum.f_div_scalar(tprime)
 }
-
 
 /// Proportionally stretches (or shrinks) a tensor along `dim` using
 /// nearest-neighbor style indexing.
@@ -1652,17 +1369,13 @@ pub fn pool_time_mean(sims: &Tensor) -> Result<Tensor, TchError> {
 ///   [0,1,2,3] -> len 6 => [0,0,1,2,2,3]
 ///
 /// This works for any dimensionality and preserves autograd w.r.t. the source tensor.
-pub fn stretch<T: AsRef<Tensor>>(
-    t: T,
-    stretch_to: usize,
-    dim: u32,
-) -> anyhow::Result<Tensor> {
+pub fn stretch<T: AsRef<Tensor>>(t: T, stretch_to: usize, dim: u32) -> anyhow::Result<Tensor> {
     let t = t.as_ref();
     let sizes = t.size();
 
     let dim = dim as usize;
 
-    assert!(dim< sizes.len(), "stretch: dim {dim} out of range for tensor with sizes={sizes:?}");
+    assert!(dim < sizes.len(), "stretch: dim {dim} out of range for tensor with sizes={sizes:?}");
 
     let in_len = sizes[dim];
     assert!(in_len > 0, "stretch: in_len({in_len}) should be > 0");
@@ -1672,9 +1385,8 @@ pub fn stretch<T: AsRef<Tensor>>(
 
     // Same length: return a shallow clone.
     if in_len == stretch_to {
-        return Ok(t.shallow_clone());//it's used only from StackAppliedMotifNets::consume
+        return Ok(t.shallow_clone()); //it's used only from StackAppliedMotifNets::consume
     }
-
 
     // Build output->input index mapping:
     // idx[j] = floor(j * in_len / stretch_to)
@@ -1696,25 +1408,13 @@ pub fn parse_run_config_ids_vec(payload: &str) -> anyhow::Result<Vec<RunConfigId
         .trim_matches(|ch| ch == '\'' || ch == '"')
         .split(',')
         .filter(|part| !part.is_empty())
-        .map(|part| {
-            Ok(part
-                .trim()
-                .trim_matches(|ch| ch == '\'' || ch == '"')
-                .replace(" ", "")
-                .parse::<RunConfigId>()
-                .with_context(|| format!("can't parse {part:?}"))?)
-        })
+        .map(|part| Ok(part.trim().trim_matches(|ch| ch == '\'' || ch == '"').replace(" ", "").parse::<RunConfigId>().with_context(|| format!("can't parse {part:?}"))?))
         .collect()
 }
 
 pub fn parse_run_config_ids(s: &str) -> anyhow::Result<u32> {
-    Ok(s.trim()
-        .trim_matches(|ch| ch == '\'' || ch == '"')
-        .replace(" ", "")
-        .parse::<u32>()
-        .with_context(|| format!("invalid integer '{s}'"))?)
+    Ok(s.trim().trim_matches(|ch| ch == '\'' || ch == '"').replace(" ", "").parse::<u32>().with_context(|| format!("invalid integer '{s}'"))?)
 }
-
 
 /// Deterministic "periodic motif" with exactly `periods` repeats across `width` samples.
 /// Shape: [1, width]
@@ -1724,15 +1424,10 @@ pub fn make_periodic_signal(width: i64, periods: i64) -> Tensor {
     let phi = k * (two_pi) * (periods as f64) / (width as f64);
 
     // x = sin(phi) + 0.35 sin(3phi) + 0.15 sin(7phi)
-    let x = phi.sin()
-        + (&phi * 3.0).sin() * 0.35
-        + (&phi * 7.0).sin() * 0.15;
+    let x = phi.sin() + (&phi * 3.0).sin() * 0.35 + (&phi * 7.0).sin() * 0.15;
 
     x.view([1, width])
 }
-
-
-
 
 #[derive(Debug, Clone)]
 pub struct TensorDigest {
@@ -1760,7 +1455,7 @@ pub struct TensorDigest {
 /// - Half/BFloat16 are converted to Float before hashing because extracting raw
 ///   f16/bf16 bytes ergonomically in `tch` is awkward. If you need bit-exact
 ///   distinction between Float16/BFloat16 payloads, that can be added separately.
-#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="tensor_digest"))]
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "tensor_digest"))]
 pub fn tensor_digest(t: &Tensor) -> tch::Result<TensorDigest> {
     let shape = t.size();
     let stride = t.stride();
@@ -1856,9 +1551,7 @@ pub fn tensor_digest(t: &Tensor) -> tch::Result<TensorDigest> {
             }
         }
         other => {
-            return Err(tch::TchError::Torch(format!(
-                "tensor_digest: unsupported kind: {other:?}"
-            )));
+            return Err(tch::TchError::Torch(format!("tensor_digest: unsupported kind: {other:?}")));
         }
     }
 
@@ -1869,14 +1562,7 @@ pub fn tensor_digest(t: &Tensor) -> tch::Result<TensorDigest> {
         write!(&mut hex, "{:02x}", b).unwrap();
     }
 
-    Ok(TensorDigest {
-        hex,
-        shape,
-        stride,
-        kind,
-        device,
-        requires_grad,
-    })
+    Ok(TensorDigest { hex, shape, stride, kind, device, requires_grad })
 }
 
 #[cfg(test)]
@@ -1905,7 +1591,6 @@ pub mod tests {
 
     use thoosa_shared::hyperparameter::Hyperparameter;
 
-
     use thoosa_shared::run_configs::RunConfigId;
     use thoosa_shared::val::Val::{Int, UInt};
     use thoosa_shared::val::{NamedVal, Val};
@@ -1917,13 +1602,8 @@ pub mod tests {
     }
 
     fn assert_allclose(a: &Tensor, b: &Tensor, atol: f64) {
-        let ok = a.allclose(b, /*rtol=*/1e-5, /*atol=*/atol, /*equal_nan=*/false);
-        assert!(
-            ok,
-            "tensors not close:\n  a={:?}\n  b={:?}",
-            a,
-            b
-        );
+        let ok = a.allclose(b, /*rtol=*/ 1e-5, /*atol=*/ atol, /*equal_nan=*/ false);
+        assert!(ok, "tensors not close:\n  a={:?}\n  b={:?}", a, b);
     }
 
     #[test]
@@ -1943,38 +1623,22 @@ pub mod tests {
         // x[b,c,:]
         // b0,c0: [1,2,3,4]   b0,c1: [10,20,30,40]
         // b1,c0: [5,6,7,8]   b1,c1: [50,60,70,80]
-        let x = Tensor::from_slice(&[
-            1f32, 2., 3., 4.,      10., 20., 30., 40.,
-            5.,   6., 7., 8.,      50., 60., 70., 80.,
-        ])
-            .view([2i64, 2i64, 4i64])
-            .to_kind(Kind::Float);
+        let x = Tensor::from_slice(&[1f32, 2., 3., 4., 10., 20., 30., 40., 5., 6., 7., 8., 50., 60., 70., 80.]).view([2i64, 2i64, 4i64]).to_kind(Kind::Float);
 
         // mask[b,1,:]
         // b0 valid first 3: [1,1,1,0]
         // b1 valid first 2: [1,1,0,0]
-        let mask = Tensor::from_slice(&[
-            1i64, 1, 1, 0,
-            1,    1, 0, 0,
-        ])
-            .view([2i64, 1i64, 4i64])
-            .to_kind(Kind::Bool);
+        let mask = Tensor::from_slice(&[1i64, 1, 1, 0, 1, 1, 0, 0]).view([2i64, 1i64, 4i64]).to_kind(Kind::Bool);
 
         // Expected masked mean:
         // b0: c0=(1+2+3)/3=2,   c1=(10+20+30)/3=20
         // b1: c0=(5+6)/2=5.5,   c1=(50+60)/2=55
-        let expected_mean = Tensor::from_slice(
-            &[
-                2f32, 20.,
-                5.5, 55.
-            ])
-            .view([2i64, 2i64]);
+        let expected_mean = Tensor::from_slice(&[2f32, 20., 5.5, 55.]).view([2i64, 2i64]);
 
         // Expected masked max:
         // b0: c0=max(1,2,3)=3,   c1=max(10,20,30)=30
         // b1: c0=max(5,6)=6,     c1=max(50,60)=60
-        let expected_max = Tensor::from_slice(&[3f32, 30., 6., 60.])
-            .view([2i64, 2i64]);
+        let expected_max = Tensor::from_slice(&[3f32, 30., 6., 60.]).view([2i64, 2i64]);
 
         let mean = masked_mean(&x, &mask).unwrap();
         let mx = masked_max(&x, &mask).unwrap();
@@ -1988,12 +1652,7 @@ pub mod tests {
         // If everything is masked:
         // - masked_mean_f returns 0 (because x*mask = 0 and denom is clamped to 1)
         // - masked_max_f returns neg fill value (-1e9) for every channel
-        let x = Tensor::from_slice(&[
-            1f32, 2., 3.,
-            10., 20., 30.,
-        ])
-            .view([1i64, 2i64, 3i64])
-            .to_kind(Kind::Float);
+        let x = Tensor::from_slice(&[1f32, 2., 3., 10., 20., 30.]).view([1i64, 2i64, 3i64]).to_kind(Kind::Float);
 
         let mask = Tensor::zeros([1i64, 1i64, 3i64], (Kind::Bool, x.device()));
 
@@ -2014,15 +1673,12 @@ pub mod tests {
         let t = Tensor::rand(&[1, n as i64], FLOAT_CPU);
         let slices_num = 100;
         let (step, pad) = clc_step(n, w, slices_num).unwrap(); //(n-w)/(k-1);
-        let u = t
-            .pad([0i64, pad as i64], "constant", 0.)
-            .unfold(1, w as i64, step as i64);
+        let u = t.pad([0i64, pad as i64], "constant", 0.).unfold(1, w as i64, step as i64);
 
         debug!("u={u:?}");
 
         assert_eq!(slices_num, u.size()[1] as u32);
     }
-
 
     #[test]
     fn test_cdt_for_dir() {
@@ -2042,11 +1698,7 @@ pub mod tests {
     #[test]
     fn test_pad_to() -> anyhow::Result<()> {
         let t = Tensor::vstack(&[Tensor::from_slice(&[1., 2.]), Tensor::from_slice(&[3., 4.])]);
-        let expected = Tensor::vstack(&[
-            Tensor::from_slice(&[1., 2., 0.]),
-            Tensor::from_slice(&[3., 4., 0.]),
-            Tensor::from_slice(&[0., 0., 0.]),
-        ]);
+        let expected = Tensor::vstack(&[Tensor::from_slice(&[1., 2., 0.]), Tensor::from_slice(&[3., 4., 0.]), Tensor::from_slice(&[0., 0., 0.])]);
         let expected_mask = Tensor::from_slice(&[1u8, 1, 0, 1, 1, 0, 0, 0, 0]).view([3, 3]).to_kind(Kind::Bool);
 
         let (actual, mask) = super::pad_to_2(&t, &[3, 3], false, true)?;
@@ -2062,16 +1714,9 @@ pub mod tests {
 
     #[test]
     fn test_pad_to_truncate_and_pad() -> anyhow::Result<()> {
-        let t = Tensor::vstack(&[
-            Tensor::from_slice(&[1., 2., 3.]),
-            Tensor::from_slice(&[4., 5., 6.]),
-        ]);
+        let t = Tensor::vstack(&[Tensor::from_slice(&[1., 2., 3.]), Tensor::from_slice(&[4., 5., 6.])]);
 
-        let expected = Tensor::vstack(&[
-            Tensor::from_slice(&[1., 2.]),
-            Tensor::from_slice(&[4., 5.]),
-            Tensor::from_slice(&[0., 0.]),
-        ]);
+        let expected = Tensor::vstack(&[Tensor::from_slice(&[1., 2.]), Tensor::from_slice(&[4., 5.]), Tensor::from_slice(&[0., 0.])]);
 
         // from shape [2, 3] to [3, 2] with truncation enabled
         let (actual, mask) = pad_to_2(&t, &[3, 2], true, true)?;
@@ -2086,10 +1731,7 @@ pub mod tests {
     fn test_pad_to_same() -> anyhow::Result<()> {
         let t = Tensor::vstack(&[Tensor::from_slice(&[1., 2.]), Tensor::from_slice(&[3., 4.])]);
 
-        assert_eq!(
-            Tensor::vstack(&[Tensor::from_slice(&[1., 2.]), Tensor::from_slice(&[3., 4.]),]),
-            super::pad_to(&t, &[2, 2], 0.)?
-        );
+        assert_eq!(Tensor::vstack(&[Tensor::from_slice(&[1., 2.]), Tensor::from_slice(&[3., 4.]),]), super::pad_to(&t, &[2, 2], 0.)?);
 
         Ok(())
     }
@@ -2098,13 +1740,7 @@ pub mod tests {
     fn test_pad_to_one_dim() -> anyhow::Result<()> {
         let t = Tensor::ones([1, 3], (Float, Cpu));
 
-        assert_eq!(
-            Tensor::vstack(&[
-                Tensor::from_slice(&[1., 1., 1.]),
-                Tensor::from_slice(&[0., 0., 0.]),
-            ]),
-            super::pad_to(&t, &[2, 3], 0.)?
-        );
+        assert_eq!(Tensor::vstack(&[Tensor::from_slice(&[1., 1., 1.]), Tensor::from_slice(&[0., 0., 0.]),]), super::pad_to(&t, &[2, 3], 0.)?);
 
         Ok(())
     }
@@ -2112,28 +1748,15 @@ pub mod tests {
     #[test]
     fn test_devices() {
         let devices = vec!["dev1", "dev2"];
-        let classes = [
-            "seizure_vote",
-            "lpd_vote",
-            "gpd_vote",
-            "lrda_vote",
-            "grda_vote",
-            "other_vote",
-        ];
+        let classes = ["seizure_vote", "lpd_vote", "gpd_vote", "lrda_vote", "grda_vote", "other_vote"];
 
         let chunk_len = classes.len() / devices.len();
-        let devices_classes = devices
-            .into_iter()
-            .cycle()
-            .zip(classes.chunks(chunk_len).into_iter())
-            .collect::<Vec<(&str, &[&str])>>();
+        let devices_classes = devices.into_iter().cycle().zip(classes.chunks(chunk_len).into_iter()).collect::<Vec<(&str, &[&str])>>();
         let mut processed_classes: HashSet<&str> = HashSet::new();
-        devices_classes
-            .into_iter()
-            .for_each(|(device, classes_chunk)| {
-                debug!("2. device={:?} class={:?}", device, classes_chunk);
-                processed_classes.extend(classes_chunk)
-            });
+        devices_classes.into_iter().for_each(|(device, classes_chunk)| {
+            debug!("2. device={:?} class={:?}", device, classes_chunk);
+            processed_classes.extend(classes_chunk)
+        });
 
         assert_eq!(processed_classes.len(), 6);
         //TODO devices
@@ -2205,8 +1828,6 @@ pub mod tests {
             net_type_1: Option<NetType>,
         }
 
-
-
         #[derive(Parser, Clone)]
         #[command(version, about, long_about = None)]
         struct TestCli {
@@ -2260,53 +1881,25 @@ pub mod tests {
                 "#,
         ]);
 
-
         let opt_sources = match &cli.command {
             Commands::TrainLabels(train_labels_args) => {
                 debug!("Commands::TrainLabels: train_labels_args={train_labels_args:?}");
 
-                let v: TrainLabelsRunConfigRangeOrValue =
-                    serde_json5::from_str(&train_labels_args.run_config_cnt).unwrap();
+                let v: TrainLabelsRunConfigRangeOrValue = serde_json5::from_str(&train_labels_args.run_config_cnt).unwrap();
 
                 debug!("TrainLabelsRunConfigRangeOrValue: v={v:?}");
 
                 assert_eq!(RangeOrValue::Value(1), v.some_prop);
-                assert_eq!(
-                    Some(RangeOrValue::Range {
-                        range: 1..10,
-                        step: None
-                    }),
-                    v.common_config.beta
-                );
-                assert_eq!(
-                    RangeOrValue::Range {
-                        range: 0..10,
-                        step: Some((5, 1))
-                    },
-                    v.common_config.sub_config.lr
-                );
+                assert_eq!(Some(RangeOrValue::Range { range: 1..10, step: None }), v.common_config.beta);
+                assert_eq!(RangeOrValue::Range { range: 0..10, step: Some((5, 1)) }, v.common_config.sub_config.lr);
 
-                let NetTypeRangeOrValue::NetOne(NetOneConfigRangeOrValue {
-                    num_aaa: ref num_aaa_range_or_value,
-                }) = v.net_type_0
-                else {
-                    panic!("no NetOne/num_aaa")
-                };
+                let NetTypeRangeOrValue::NetOne(NetOneConfigRangeOrValue { num_aaa: ref num_aaa_range_or_value }) = v.net_type_0 else { panic!("no NetOne/num_aaa") };
                 assert_eq!(&RangeOrValue::Value(1), num_aaa_range_or_value);
 
-                let Some(NetTypeRangeOrValue::NetTwo(NetTwoConfigRangeOrValue {
-                    num_bbb: ref num_bbb_range_or_value,
-                })) = v.net_type_1
-                else {
+                let Some(NetTypeRangeOrValue::NetTwo(NetTwoConfigRangeOrValue { num_bbb: ref num_bbb_range_or_value })) = v.net_type_1 else {
                     panic!("no NetOne/num_bbb")
                 };
-                assert_eq!(
-                    &RangeOrValue::Range {
-                        range: 10..100,
-                        step: Some((50, 1))
-                    },
-                    num_bbb_range_or_value
-                );
+                assert_eq!(&RangeOrValue::Range { range: 10..100, step: Some((50, 1)) }, num_bbb_range_or_value);
 
                 v.opt_run_configs().expect("TrainLabelsRunConfigRangeOrValue::opt_run_configs should not fail")
             }
@@ -2316,45 +1909,24 @@ pub mod tests {
             }
         };
 
-        debug!(
-            "const_params={:?}",
-            opt_sources.grid_run_config_source().const_params()
-        );
+        debug!("const_params={:?}", opt_sources.grid_run_config_source().const_params());
         assert_eq!(
             &vec![
                 NamedVal::new(TrainLabelsRunConfigFields::SomeProp, UInt(1)),
-                NamedVal::new(
-                    TrainLabelsRunConfigFields::NetType0(NetTypeFields::NetOne(
-                        NetOneConfigFields::NumAaa
-                    )),
-                    UInt(1)
-                ),
+                NamedVal::new(TrainLabelsRunConfigFields::NetType0(NetTypeFields::NetOne(NetOneConfigFields::NumAaa)), UInt(1)),
                 // NamedVal::new(TrainLabelsRunConfigFields::NetType1(NetTypeFields::NetTwo(NetTwoConfigFields::NumBbb)), UInt(2)),
             ],
             opt_sources.grid_run_config_source().const_params()
         );
 
-        debug!(
-            "       grid_to_vals={:?}",
-            opt_sources.grid_run_config_source().grid_to_vals().expect("valid test grid")
-        );
+        debug!("       grid_to_vals={:?}", opt_sources.grid_run_config_source().grid_to_vals().expect("valid test grid"));
         assert_eq!(
             (10..100)
                 .step_by(50)
                 .flat_map(|num_bbb| (0..10).step_by(5).map(move |lr| {
                     vec![
-                        NamedVal::<TrainLabelsRunConfigFields>::new(
-                            TrainLabelsRunConfigFields::CommonConfig(
-                                CommonTrainConfigFields::SubConfig(SomeSubTrainConfigFields::Lr),
-                            ),
-                            Int(lr),
-                        ),
-                        NamedVal::<TrainLabelsRunConfigFields>::new(
-                            TrainLabelsRunConfigFields::NetType1(NetTypeFields::NetTwo(
-                                NetTwoConfigFields::NumBbb,
-                            )),
-                            UInt(num_bbb),
-                        ),
+                        NamedVal::<TrainLabelsRunConfigFields>::new(TrainLabelsRunConfigFields::CommonConfig(CommonTrainConfigFields::SubConfig(SomeSubTrainConfigFields::Lr)), Int(lr)),
+                        NamedVal::<TrainLabelsRunConfigFields>::new(TrainLabelsRunConfigFields::NetType1(NetTypeFields::NetTwo(NetTwoConfigFields::NumBbb)), UInt(num_bbb)),
                     ]
                 }))
                 .collect::<Vec<_>>(),
@@ -2370,7 +1942,6 @@ pub mod tests {
             }],
             opt_sources.opt_params()
         );
-
     }
 
     #[test]
@@ -2536,26 +2107,11 @@ pub mod tests {
         let path_vals = [
             NamedVal::new(SomeStructFields::Field00, Int(1)),
             NamedVal::new(SomeStructFields::Field01, Val::Real(2.0)),
-            NamedVal::new(
-                SomeStructFields::SubStruct(SubStructBFields::FieldA),
-                Int(3),
-            ),
-            NamedVal::new(
-                SomeStructFields::SubStruct(SubStructBFields::FieldB),
-                Int(4),
-            ),
-            NamedVal::new(
-                SomeStructFields::SubStructOp(SubStructBFields::FieldA),
-                Int(5),
-            ),
-            NamedVal::new(
-                SomeStructFields::SubStructOp(SubStructBFields::FieldB),
-                Int(6),
-            ),
-            NamedVal::new(
-                SomeStructFields::SubEnum(SubEnumFields::Sub0(SubStruct0Fields::FieldA)),
-                UInt(1),
-            ),
+            NamedVal::new(SomeStructFields::SubStruct(SubStructBFields::FieldA), Int(3)),
+            NamedVal::new(SomeStructFields::SubStruct(SubStructBFields::FieldB), Int(4)),
+            NamedVal::new(SomeStructFields::SubStructOp(SubStructBFields::FieldA), Int(5)),
+            NamedVal::new(SomeStructFields::SubStructOp(SubStructBFields::FieldB), Int(6)),
+            NamedVal::new(SomeStructFields::SubEnum(SubEnumFields::Sub0(SubStruct0Fields::FieldA)), UInt(1)),
         ];
 
         let some_struct: SomeStruct = Vec::from(path_vals).into_iter().try_into().expect("valid test configuration"); // SomeStructBuilder::add_path_vals(path_vals);
@@ -2567,14 +2123,8 @@ pub mod tests {
         assert_eq!(some_struct.sub_struct.field_a, 3);
         assert_eq!(some_struct.sub_struct.field_b, 4);
 
-        assert_eq!(
-            some_struct.sub_struct_op.as_ref().map(|v| v.field_a),
-            Some(5)
-        );
-        assert_eq!(
-            some_struct.sub_struct_op.as_ref().map(|v| v.field_b),
-            Some(6)
-        );
+        assert_eq!(some_struct.sub_struct_op.as_ref().map(|v| v.field_a), Some(5));
+        assert_eq!(some_struct.sub_struct_op.as_ref().map(|v| v.field_b), Some(6));
 
         let SubEnum::Sub0(sub_struct_0) = some_struct.sub_enum else {
             panic!("some_struct.sub_enum should be Sub0");
@@ -2584,18 +2134,9 @@ pub mod tests {
         let path_vals = [
             NamedVal::new(SomeStructFields::Field00, Val::Int(1)),
             NamedVal::new(SomeStructFields::Field01, Val::Real(2.0)),
-            NamedVal::new(
-                SomeStructFields::SubStruct(SubStructBFields::FieldA),
-                Val::Int(3),
-            ),
-            NamedVal::new(
-                SomeStructFields::SubStruct(SubStructBFields::FieldB),
-                Val::Int(4),
-            ),
-            NamedVal::new(
-                SomeStructFields::SubEnum(SubEnumFields::Sub1(SubStruct1Fields::FieldB)),
-                Val::UInt(2),
-            ),
+            NamedVal::new(SomeStructFields::SubStruct(SubStructBFields::FieldA), Val::Int(3)),
+            NamedVal::new(SomeStructFields::SubStruct(SubStructBFields::FieldB), Val::Int(4)),
+            NamedVal::new(SomeStructFields::SubEnum(SubEnumFields::Sub1(SubStruct1Fields::FieldB)), Val::UInt(2)),
         ];
 
         let some_struct: SomeStruct = Vec::from(path_vals).into_iter().try_into().expect("valid test configuration"); // SomeStructBuilder_::add_path_vals(path_vals);
@@ -2609,25 +2150,17 @@ pub mod tests {
         assert_eq!(sub_struct_1.field_b, 2);
     }
 
-
     #[test]
     fn test_hist_1_dim() {
         // log::set_max_level(Trace);
-        let t = Tensor::vstack(&[
-            Tensor::from_slice(&[1., 2., 3., 4., 5., 6., 7., 8., 9.]),
-            Tensor::from_slice(&[1., 2., 4., 4., 5., 6., 6., 8., 9.]),
-            Tensor::from_slice(&[1., 1., 1., 1., 1., 1., 1., 1., 1.]),
-        ]);
+        let t = Tensor::vstack(&[Tensor::from_slice(&[1., 2., 3., 4., 5., 6., 7., 8., 9.]), Tensor::from_slice(&[1., 2., 4., 4., 5., 6., 6., 8., 9.]), Tensor::from_slice(&[1., 1., 1., 1., 1., 1., 1., 1., 1.])]);
 
         // debug!("t={t}");
 
         let hist = hist_1_dim(&t, 3).unwrap();
         // debug!("hist={hist}");
 
-        assert_eq!(
-            Tensor::from_slice(&[3, 3, 3, 2, 5, 2, 9, 0, 0]).view((3, 3)),
-            hist
-        )
+        assert_eq!(Tensor::from_slice(&[3, 3, 3, 2, 5, 2, 9, 0, 0]).view((3, 3)), hist)
     }
 
     #[test]
@@ -2686,33 +2219,21 @@ pub mod tests {
             field_a: 1,
             field_b: 2,
             field_o: Some(22),
-            sub_struct: AnotherTestStruct {
-                field_c: 3,
-                field_d: 4,
-            },
-            sub_struct_o: Some(AnotherTestStruct {
-                field_c: 30,
-                field_d: 40,
-            }),
+            sub_struct: AnotherTestStruct { field_c: 3, field_d: 4 },
+            sub_struct_o: Some(AnotherTestStruct { field_c: 30, field_d: 40 }),
             sub_enum: SomeEnum::VariantA(VariantA { some_field: 5 }),
             sub_enum_o: Some(SomeEnum::VariantB(VariantB { another_field: 50 })),
         };
 
         let props: HashMap<String, Val> = run_config.to_properties_iter(None).collect();
         debug!("props={props:?}");
-        assert_eq!(
-            run_config,
-            TestTopStruct::from_properties_map(None, &props).unwrap()
-        );
+        assert_eq!(run_config, TestTopStruct::from_properties_map(None, &props).unwrap());
 
         let run_config = TestTopStruct {
             field_a: 1,
             field_b: 2,
             field_o: None,
-            sub_struct: AnotherTestStruct {
-                field_c: 3,
-                field_d: 4,
-            },
+            sub_struct: AnotherTestStruct { field_c: 3, field_d: 4 },
             sub_struct_o: None,
             sub_enum: SomeEnum::VariantA(VariantA { some_field: 5 }),
             sub_enum_o: None,
@@ -2720,10 +2241,7 @@ pub mod tests {
 
         let props: HashMap<String, Val> = run_config.to_properties_iter(None).collect();
 
-        assert_eq!(
-            run_config,
-            TestTopStruct::from_properties_map(None, &props).unwrap()
-        );
+        assert_eq!(run_config, TestTopStruct::from_properties_map(None, &props).unwrap());
     }
 
     #[test]
@@ -2768,7 +2286,6 @@ pub mod tests {
 
         Ok(())
     }
-
 
     #[test]
     fn test_mix_masks_align_with_rows() -> anyhow::Result<()> {
@@ -2839,20 +2356,14 @@ pub mod tests {
         assert_eq!(super::parse_debug_plots_mode("all", ""), super::DebugPlotsMode::All);
         assert_eq!(
             super::parse_debug_plots_mode("prefixes", "batch_motif_,batch_random_motif_in_batch_"),
-            super::DebugPlotsMode::Prefixes(vec![
-                "batch_motif_".to_string(),
-                "batch_random_motif_in_batch_".to_string(),
-            ]),
+            super::DebugPlotsMode::Prefixes(vec!["batch_motif_".to_string(), "batch_random_motif_in_batch_".to_string(),]),
         );
         assert_eq!(super::parse_debug_plots_mode("prefixes", ""), super::DebugPlotsMode::Off);
     }
 
     #[test]
     fn test_debug_plot_label_allowed_with_mode_prefixes() {
-        let mode = super::DebugPlotsMode::Prefixes(vec![
-            "batch_motif_".to_string(),
-            "batch_random_motif_in_batch_".to_string(),
-        ]);
+        let mode = super::DebugPlotsMode::Prefixes(vec!["batch_motif_".to_string(), "batch_random_motif_in_batch_".to_string()]);
 
         assert!(super::debug_plot_label_allowed_with_mode(&mode, "batch_motif_10"));
         assert!(super::debug_plot_label_allowed_with_mode(&mode, "batch_random_motif_in_batch_99"));
@@ -2903,13 +2414,10 @@ pub mod tests {
     }
 
     #[test]
-    fn test_stretch() -> anyhow::Result<()>{
+    fn test_stretch() -> anyhow::Result<()> {
         let stretched = stretch(Tensor::from_slice(&[0., 1., 1., 2.]), 8, 0)?;
 
-        assert_eq!(
-            stretched,
-            Tensor::from_slice(&[0., 0.,  1., 1.,  1., 1., 2., 2.])
-        );
+        assert_eq!(stretched, Tensor::from_slice(&[0., 0., 1., 1., 1., 1., 2., 2.]));
 
         Ok(())
     }
@@ -2955,17 +2463,11 @@ pub mod tests {
 
     #[test]
     fn test_stretch_dim_1() -> anyhow::Result<()> {
-        let t = Tensor::from_slice(&[
-            1., 2., 3.,
-            10., 20., 30.,
-        ]).reshape([2, 3]);
+        let t = Tensor::from_slice(&[1., 2., 3., 10., 20., 30.]).reshape([2, 3]);
 
         let stretched = stretch(&t, 5, 1)?;
 
-        let expected = Tensor::from_slice(&[
-            1., 1., 2., 2., 3.,
-            10., 10., 20., 20., 30.,
-        ]).reshape([2, 5]);
+        let expected = Tensor::from_slice(&[1., 1., 2., 2., 3., 10., 10., 20., 20., 30.]).reshape([2, 5]);
 
         assert_tensor_eq(&stretched, &expected);
         Ok(())
@@ -2990,36 +2492,18 @@ pub mod tests {
 
     // #[test]
     fn test_spectrogram() -> anyhow::Result<()> {
-
-
-        let sig_t = Tensor::from_slice(sin_v_f(160_000, 8000.0, 32_000.0).as_slice()).view((1,-1));
+        let sig_t = Tensor::from_slice(sin_v_f(160_000, 8000.0, 32_000.0).as_slice()).view((1, -1));
         debug!("sig_t = {sig_t:?}");
 
-        let spec = sig_t.stft(
-            16000,
-            4000,
-            16000,
-            None::<Tensor>,
-            false,
-            true,
-            true,
-            true
-        );
+        let spec = sig_t.stft(16000, 4000, 16000, None::<Tensor>, false, true, true, true);
 
         debug!("spec = {spec:?}");
 
-        let spec_abs =spec.squeeze_dim(0).abs();
+        let spec_abs = spec.squeeze_dim(0).abs();
         debug!("spec_abs = {spec_abs:?}");
 
-        plot_spectrogram(
-            &spec_abs,
-            "/tmp/plots/spectrogram.png",
-            1200,
-            600,
-        )?;
+        plot_spectrogram(&spec_abs, "/tmp/plots/spectrogram.png", 1200, 600)?;
 
         Ok(())
     }
-
-
 }

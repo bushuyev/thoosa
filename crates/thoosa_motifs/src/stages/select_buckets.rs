@@ -1,6 +1,12 @@
 #![allow(non_camel_case_types)]
 use crate::motifs_store::MotifsStore;
 
+use crate::dims::MotifSlices;
+use crate::stages::find_motifs_run_config::{EnergyMetric, FindMotifsRunConfig, Metrics, MotifCriterionConstraint, SelectMotifsRunConfig, SelectMotifsRunResult, SelectMotifsSavableResult};
+use crate::stages::motif_loader::{MotifLoaderInput, MotifMeta};
+use crate::stages::motif_stats::{MotifStats, MotifStatsInput};
+use crate::stages::select_motifs::{SelectMotifsInput, SelectMotifsOutputMode, clc_constraint_metrics};
+use crate::stages::stage_ids::SELECT_BUCKETS;
 use log::{debug, info};
 use parking_lot::RwLock;
 use serde::Deserialize;
@@ -10,19 +16,14 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use thoosa_common::data_with_extra::DataWithExtra;
 use thoosa_common::dims::ChannelsData;
-use crate::dims::MotifSlices;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
 use thoosa_common::runner::oom_handler::{Adjusters, NoInputAdjuster, NoStageAdjuster, OOMHandler, WithRunCtxContext, run_ctx_adjuster};
+use thoosa_common::runner::sync_stage::SyncStage;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::utils::load_run_config;
 use thoosa_cpu_data_derive::CpuData;
-use crate::stages::find_motifs_run_config::{EnergyMetric, FindMotifsRunConfig, Metrics, MotifCriterionConstraint, SelectMotifsRunConfig, SelectMotifsRunResult, SelectMotifsSavableResult};
-use crate::stages::motif_loader::{MotifLoaderInput, MotifMeta};
-use crate::stages::motif_stats::{MotifStats, MotifStatsInput};
-use crate::stages::select_motifs::{SelectMotifsInput, SelectMotifsOutputMode, clc_constraint_metrics};
-use crate::stages::stage_ids::SELECT_BUCKETS;
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::applicables_runner::Input;
@@ -31,9 +32,7 @@ use thoosa_shared::resource::{Resource, ResourcesConfig};
 use thoosa_shared::run_configs::{RunConfig, RunConfigId};
 use thoosa_shared::tracked_await::t;
 use thoosa_shared::traits::{Adjustable, AsyncStage, Data, MaxParallelCtx, OutId, RunCtx, Stage};
-use thoosa_common::runner::sync_stage::{SyncStage};
 use thoosa_shared::{FuturesOrdering, ThoError, collect_futures_with_progress, mono_key};
-
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, CpuData)]
 #[cpu_data(shallow)]
@@ -87,7 +86,10 @@ pub struct SelectBucketsRunConfig {
 
 impl SelectBucketsRunConfig {
     pub fn new(id: Option<RunConfigId>, energy_k: f64) -> Self {
-        Self { id, selection_mode: SelectionMode::Filter(FilterSelectionMode { threshold: energy_k as f32 }) }
+        Self {
+            id,
+            selection_mode: SelectionMode::Filter(FilterSelectionMode { threshold: energy_k as f32 }),
+        }
     }
 
     fn to_select_motifs_run_config(&self) -> SelectMotifsRunConfig {
@@ -146,14 +148,9 @@ where
     C: RunCtx + Adjustable + 'static,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SelectBucketsStage")
-            .field("id", &self.id)
-            .field("run_configs", &self.run_configs)
-            .field("sync_select_buckets_stage", &self.sync_select_buckets_stage)
-            .finish()
+        f.debug_struct("SelectBucketsStage").field("id", &self.id).field("run_configs", &self.run_configs).field("sync_select_buckets_stage", &self.sync_select_buckets_stage).finish()
     }
 }
-
 
 impl<L, ML, C> SelectBucketsStage<L, ML, C>
 where
@@ -171,17 +168,8 @@ where
         select_motifs_input: Arc<SelectMotifsInput>,
         mut init_ctx: C,
     ) -> Result<Self, ThoError> {
-        let motif_stats = Arc::new(MotifStats::new(
-            Arc::clone(store),
-            Arc::clone(&loader),
-            Arc::clone(ws),
-            Arc::clone(&motif_loader),
-        ));
-        let (resources, output_mode) = t!(Self::load_resources_for_selection(
-            &select_motifs_input,
-            store,
-            init_ctx.branch(false),
-        )).await?;
+        let motif_stats = Arc::new(MotifStats::new(Arc::clone(store), Arc::clone(&loader), Arc::clone(ws), Arc::clone(&motif_loader)));
+        let (resources, output_mode) = t!(Self::load_resources_for_selection(&select_motifs_input, store, init_ctx.branch(false),)).await?;
         if resources.is_empty() {
             return Err(ThoError::new(format!("SelectBucketsStage::new: no resources found in {select_motifs_input:?}")));
         }
@@ -190,21 +178,9 @@ where
         let mut reference_mean_energies = HashMap::new();
         for find_motifs_run_config_id in &find_motifs_run_config_ids {
             let motif_ids = t!(store.list_motifs(*find_motifs_run_config_id)).await?;
-            let energies = t!(Self::preload_bucket_mean_energies(
-                &motif_stats,
-                *find_motifs_run_config_id,
-                motif_ids,
-                init_ctx.branch(true),
-            )).await?;
+            let energies = t!(Self::preload_bucket_mean_energies(&motif_stats, *find_motifs_run_config_id, motif_ids, init_ctx.branch(true),)).await?;
             let find_motifs_run_config: FindMotifsRunConfig = t!(load_run_config(store, *find_motifs_run_config_id, FindMotifsRunConfig::type_name())).await?;
-            let reference_energy = t!(Self::reference_energy_for_find_run(
-                &motif_stats,
-                resources.as_ref(),
-                *find_motifs_run_config_id,
-                &find_motifs_run_config,
-                energies.len(),
-                init_ctx.branch(false),
-            )).await?;
+            let reference_energy = t!(Self::reference_energy_for_find_run(&motif_stats, resources.as_ref(), *find_motifs_run_config_id, &find_motifs_run_config, energies.len(), init_ctx.branch(false),)).await?;
             debug!("SelectBucketsStage::new: find_motifs_run_config_id={find_motifs_run_config_id} reference_energy={reference_energy} energies_len={}", energies.len());
             bucket_mean_energies.insert(*find_motifs_run_config_id, energies);
             reference_mean_energies.insert(*find_motifs_run_config_id, reference_energy);
@@ -213,22 +189,12 @@ where
         Ok(Self {
             id: SynKey::new([mono_key!(SELECT_BUCKETS, "SelectBucketsStage")]),
             run_configs,
-            sync_select_buckets_stage: Arc::new(SyncSelectBucketsStage::new(
-                find_motifs_run_config_ids,
-                bucket_mean_energies,
-                reference_mean_energies,
-                output_mode,
-            )),
+            sync_select_buckets_stage: Arc::new(SyncSelectBucketsStage::new(find_motifs_run_config_ids, bucket_mean_energies, reference_mean_energies, output_mode)),
             pd: PhantomData,
         })
     }
 
-    async fn preload_bucket_mean_energies(
-        motif_stats: &Arc<MotifStats<ML, L, C>>,
-        find_motifs_run_config_id: RunConfigId,
-        motif_ids: Vec<u32>,
-        mut ctx: C,
-    ) -> Result<HashMap<u32, BucketEnergy>, ThoError> {
+    async fn preload_bucket_mean_energies(motif_stats: &Arc<MotifStats<ML, L, C>>, find_motifs_run_config_id: RunConfigId, motif_ids: Vec<u32>, mut ctx: C) -> Result<HashMap<u32, BucketEnergy>, ThoError> {
         let energy_metric = energy_metric();
         let motif_ids_len = motif_ids.len();
         let futures = motif_ids.into_iter().map(|motif_id| {
@@ -237,14 +203,7 @@ where
             let mut ctx = ctx.branch(true);
 
             async move {
-                let stats = t!(Arc::clone(&motif_stats)
-                    .run(
-                        Arc::new(MotifStatsInput::from_motif_input(
-                            MotifLoaderInput::find_motif_slices_only((motif_id, "motif_id").into()),
-                            vec![energy_metric.clone()],
-                        )),
-                        ctx.branch(false),
-                    )).await?;
+                let stats = t!(Arc::clone(&motif_stats).run(Arc::new(MotifStatsInput::from_motif_input(MotifLoaderInput::find_motif_slices_only((motif_id, "motif_id").into()), vec![energy_metric.clone()],)), ctx.branch(false),)).await?;
 
                 let energy = BucketEnergy {
                     mean_energy: stats.channel_value(&energy_metric, 0)? as f64,
@@ -262,7 +221,8 @@ where
             FuturesOrdering::Unordered,
             thoosa_shared::CollectionErrorPolicy::SkipData(&[thoosa_shared::DataErrorKind::InputTooShort]),
             "SelectBucketsStage::preload_bucket_mean_energies",
-        )).await?;
+        ))
+        .await?;
         if energies.len() != motif_ids_len {
             return Err(ThoError::new(format!("SelectBucketsStage::preload_bucket_mean_energies: preloaded {} of {motif_ids_len} motifs", energies.len())));
         }
@@ -270,11 +230,7 @@ where
         Ok(energies.into_iter().collect())
     }
 
-    async fn load_resources_for_selection(
-        input: &Arc<SelectMotifsInput>,
-        store: &Arc<dyn MotifsStore>,
-        _ctx: C,
-    ) -> Result<(Arc<Vec<Resource>>, SelectMotifsOutputMode), ThoError> {
+    async fn load_resources_for_selection(input: &Arc<SelectMotifsInput>, store: &Arc<dyn MotifsStore>, _ctx: C) -> Result<(Arc<Vec<Resource>>, SelectMotifsOutputMode), ThoError> {
         let (resources_config, output_mode) = (input.resources_input().resources_config().clone(), input.output_mode());
 
         Ok((Arc::new(t!(resources_config.to_resources(store)).await?.into_iter().collect::<Vec<_>>()), output_mode))
@@ -286,10 +242,7 @@ where
         }
 
         let input_len_adjuster = find_motifs_run_config.input_len_adjuster();
-        let available = resources
-            .iter()
-            .map(|resource| input_len_adjuster(resource.length()) / find_motifs_run_config.window)
-            .sum::<u32>();
+        let available = resources.iter().map(|resource| input_len_adjuster(resource.length()) / find_motifs_run_config.window).sum::<u32>();
         if available < 2 {
             return Err(ThoError::new(format!("SelectBucketsStage::reference_random_slices: only {available} slices available for window {}", find_motifs_run_config.window)));
         }
@@ -298,26 +251,10 @@ where
         Ok(desired.min(available))
     }
 
-    async fn reference_energy_for_find_run(
-        motif_stats: &Arc<MotifStats<ML, L, C>>,
-        resources: &[Resource],
-        find_motifs_run_config_id: RunConfigId,
-        find_motifs_run_config: &FindMotifsRunConfig,
-        motif_count: usize,
-        mut ctx: C,
-    ) -> Result<f64, ThoError> {
+    async fn reference_energy_for_find_run(motif_stats: &Arc<MotifStats<ML, L, C>>, resources: &[Resource], find_motifs_run_config_id: RunConfigId, find_motifs_run_config: &FindMotifsRunConfig, motif_count: usize, mut ctx: C) -> Result<f64, ThoError> {
         let max_slices = Self::reference_random_slices(resources, find_motifs_run_config, motif_count)?;
         let energy_metric = energy_metric();
-        let stats = t!(Arc::clone(motif_stats)
-            .run_cached(
-                Arc::new(MotifStatsInput::from_random_resources(
-                    max_slices,
-                    find_motifs_run_config_id,
-                    Some(resources.to_vec()),
-                    vec![energy_metric.clone()],
-                )),
-                ctx.branch(false),
-            )).await?;
+        let stats = t!(Arc::clone(motif_stats).run_cached(Arc::new(MotifStatsInput::from_random_resources(max_slices, find_motifs_run_config_id, Some(resources.to_vec()), vec![energy_metric.clone()],)), ctx.branch(false),)).await?;
 
         let values = stats.channels_values(&energy_metric)?;
         if values.is_empty() {
@@ -325,7 +262,6 @@ where
         }
         Ok(values.iter().map(|value| value.value() as f64).sum::<f64>() / values.len() as f64)
     }
-
 }
 
 #[derive(Debug)]
@@ -341,7 +277,6 @@ impl<'a> SelectBucketsSyncInput<'a> {
 
 impl Data for SelectBucketsSyncInput<'_> {
     type Metrics = ();
-
 
     fn size(&self) -> Self::Metrics {
         ()
@@ -369,11 +304,15 @@ impl SelectBucketsSyncInputWrapper {
     }
 }
 
-
 impl BorrowRef for SelectBucketsSyncInputWrapper {
-    fn protect(&self, _device: usize) -> thoosa_common::runner::residency::ResidencyLease { thoosa_common::runner::residency::ResidencyLease::default() }
+    fn protect(&self, _device: usize) -> thoosa_common::runner::residency::ResidencyLease {
+        thoosa_common::runner::residency::ResidencyLease::default()
+    }
 
-    type Out<'a> = SelectBucketsSyncInput<'a> where Self: 'a;
+    type Out<'a>
+        = SelectBucketsSyncInput<'a>
+    where
+        Self: 'a;
 
     fn borrow_ref<'a>(&'a self, _to_device_idx: usize) -> impl std::future::Future<Output = Result<Self::Out<'a>, ThoError>> + Send
     where
@@ -381,13 +320,12 @@ impl BorrowRef for SelectBucketsSyncInputWrapper {
     {
         async move { Ok(SelectBucketsSyncInput::new(&self.select_config)) }
     }
-
 }
 
 #[derive(Debug)]
 struct SyncSelectBucketsStage<C>
 where
-    C: RunCtx  + 'static,
+    C: RunCtx + 'static,
 {
     find_motifs_run_config_ids: Vec<RunConfigId>,
     bucket_mean_energies: HashMap<RunConfigId, HashMap<u32, BucketEnergy>>,
@@ -400,13 +338,14 @@ impl<C> SyncSelectBucketsStage<C>
 where
     C: RunCtx + 'static,
 {
-    fn new(
-        find_motifs_run_config_ids: Vec<RunConfigId>,
-        bucket_mean_energies: HashMap<RunConfigId, HashMap<u32, BucketEnergy>>,
-        reference_mean_energies: HashMap<RunConfigId, f64>,
-        output_mode: SelectMotifsOutputMode,
-    ) -> Self {
-        Self { find_motifs_run_config_ids, bucket_mean_energies, reference_mean_energies, output_mode, pd: PhantomData }
+    fn new(find_motifs_run_config_ids: Vec<RunConfigId>, bucket_mean_energies: HashMap<RunConfigId, HashMap<u32, BucketEnergy>>, reference_mean_energies: HashMap<RunConfigId, f64>, output_mode: SelectMotifsOutputMode) -> Self {
+        Self {
+            find_motifs_run_config_ids,
+            bucket_mean_energies,
+            reference_mean_energies,
+            output_mode,
+            pd: PhantomData,
+        }
     }
 
     fn evaluations_for_find_run(&self, find_motifs_run_config_id: RunConfigId) -> Result<Vec<BucketEvaluation>, ThoError> {
@@ -418,7 +357,10 @@ where
             .reference_mean_energies
             .get(&find_motifs_run_config_id)
             .ok_or_else(|| ThoError::new(format!("SyncSelectBucketsStage::evaluations_for_find_run: missing reference energy for find_motifs_run_config_id={find_motifs_run_config_id}")))?;
-        debug!("SyncSelectBucketsStage::evaluations_for_find_run: find_motifs_run_config_id={find_motifs_run_config_id} reference_energy={reference_energy} bucket_energies_len={}", bucket_energies.len());
+        debug!(
+            "SyncSelectBucketsStage::evaluations_for_find_run: find_motifs_run_config_id={find_motifs_run_config_id} reference_energy={reference_energy} bucket_energies_len={}",
+            bucket_energies.len()
+        );
 
         Ok(bucket_energies
             .iter()
@@ -457,16 +399,11 @@ where
             }
         };
 
-        Ok(SelectMotifsRunResult::new(
-            select_config.to_select_motifs_run_config(),
-            selected,
-            constraint_metrics,
-        ))
+        Ok(SelectMotifsRunResult::new(select_config.to_select_motifs_run_config(), selected, constraint_metrics))
     }
 }
 
 impl<C> Adjustable for SyncSelectBucketsStage<C> where C: RunCtx + Adjustable + 'static {}
-
 
 impl<C> Stage for SyncSelectBucketsStage<C>
 where
@@ -516,26 +453,15 @@ where
             async move {
                 // Selection reads configuration and stored scores, with no cached tensor inputs.
 
-                let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(
-                    vec![
-                        Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(*MaxParallelStep::FAST))),
-                        Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("select_buckets"))),
-                    ],
-                    None,
-                );
+                let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(vec![Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(*MaxParallelStep::FAST))), Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("select_buckets")))], None);
 
-                t!(oom_handler
-                    .run(
-                        &sync_stage,
-                        Arc::new(SelectBucketsSyncInputWrapper::new(select_config)),
-                        ctx.branch(false),
-                        WithRunCtxContext::new(
-                            MaxParallelAndDumpToCpuAdjustableContex::new(
-                                MaxParallelAdjustContextImpl::new(),
-                                DumpToCpuContextImpl::new(),
-                            ),
-                        ),
-                    )).await
+                t!(oom_handler.run(
+                    &sync_stage,
+                    Arc::new(SelectBucketsSyncInputWrapper::new(select_config)),
+                    ctx.branch(false),
+                    WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new(),),),
+                ))
+                .await
             }
         });
 
@@ -545,7 +471,8 @@ where
             FuturesOrdering::Unordered,
             thoosa_shared::CollectionErrorPolicy::SkipData(&[thoosa_shared::DataErrorKind::InputTooShort]),
             "SelectBucketsStage::run",
-        )).await?;
+        ))
+        .await?;
         if run_results.len() != run_configs_len {
             return Err(ThoError::new(format!("SelectBucketsStage::run: completed {} of {run_configs_len} run configs", run_results.len())));
         }
@@ -557,21 +484,21 @@ where
 
 #[cfg(test)]
 mod tests {
-    use thoosa_common::tch_error::tch_result;
     use super::{BestSelectionMode, BucketEvaluation, SelectBucketsRunConfig, SelectBucketsStage, SelectionMode};
     use crate::motifs_store::MockMotifsStoreBuilder;
-    use parking_lot::RwLock;
-    use std::sync::Arc;
-    use tch::{Kind, Tensor};
-    use thoosa_common::runner::common::mock_run_ctx;
-    use thoosa_common::runner::global_ctx::GlobalCtx;
-    use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
-    use thoosa_common::resources::Simple;
     use crate::stages::cross_loader::ResourcesConfigInput;
     use crate::stages::find_motifs_run_config::FindMotifsRunConfig;
     use crate::stages::motif_loader::{MotifLoaderInput, MotifMeta, mock_motif_loader};
     use crate::stages::select_motifs::SelectMotifsInput;
     use crate::stages::tensor_loader::mock_tensor_loader;
+    use parking_lot::RwLock;
+    use std::sync::Arc;
+    use tch::{Kind, Tensor};
+    use thoosa_common::resources::Simple;
+    use thoosa_common::runner::common::mock_run_ctx;
+    use thoosa_common::runner::global_ctx::GlobalCtx;
+    use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
+    use thoosa_common::tch_error::tch_result;
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::ResourceType::NotInGroup;
     use thoosa_shared::ThoError;
@@ -583,9 +510,24 @@ mod tests {
     #[test]
     fn test_selection_mode_best_selects_highest_scores() {
         let selected = SelectionMode::Best(BestSelectionMode { limit: 2 }).selected_evaluations(vec![
-            BucketEvaluation { motif_id: 1, energy: 1.0, score: 0.5, criterion_scores: vec![] },
-            BucketEvaluation { motif_id: 2, energy: 2.0, score: 2.0, criterion_scores: vec![] },
-            BucketEvaluation { motif_id: 3, energy: 3.0, score: 1.5, criterion_scores: vec![] },
+            BucketEvaluation {
+                motif_id: 1,
+                energy: 1.0,
+                score: 0.5,
+                criterion_scores: vec![],
+            },
+            BucketEvaluation {
+                motif_id: 2,
+                energy: 2.0,
+                score: 2.0,
+                criterion_scores: vec![],
+            },
+            BucketEvaluation {
+                motif_id: 3,
+                energy: 3.0,
+                score: 1.5,
+                criterion_scores: vec![],
+            },
         ]);
 
         assert_eq!(selected.iter().map(|evaluation| evaluation.motif_id).collect::<Vec<_>>(), vec![2, 3]);
@@ -605,16 +547,12 @@ mod tests {
         let low_motif_id = 101;
         let high_motif_id = 102;
 
-        let store =
-            MockMotifsStoreBuilder::new()
-                .with_run_config_descr([find_motifs_run_config_descr(find_motifs_run_config_id)])
-                .with_list_run_config_values([(
-                    find_motifs_run_config_id,
-                    Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_config_id), 1, 4, None, None).to_properties_iter(None).collect()),
-                )])
-                .with_list_motifs([(find_motifs_run_config_id, Ok(vec![low_motif_id, high_motif_id]))])
-                .with_list_resources_not_in_group([(resources_group, Ok(vec![resource_a.clone(), resource_b.clone()]))])
-                .build();
+        let store = MockMotifsStoreBuilder::new()
+            .with_run_config_descr([find_motifs_run_config_descr(find_motifs_run_config_id)])
+            .with_list_run_config_values([(find_motifs_run_config_id, Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_config_id), 1, 4, None, None).to_properties_iter(None).collect()))])
+            .with_list_motifs([(find_motifs_run_config_id, Ok(vec![low_motif_id, high_motif_id]))])
+            .with_list_resources_not_in_group([(resources_group, Ok(vec![resource_a.clone(), resource_b.clone()]))])
+            .build();
 
         let loader = Arc::new(
             mock_tensor_loader::build()

@@ -1,3 +1,6 @@
+use crate::device_stats::ThoDeviceStats;
+use crate::futures_limits::FutureLimitProgressEntry;
+use crate::{perf_log, sync_mutex_lock};
 use log::{debug, trace};
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
@@ -6,9 +9,6 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::watch;
-use crate::futures_limits::FutureLimitProgressEntry;
-use crate::device_stats::ThoDeviceStats;
-use crate::{perf_log, sync_mutex_lock};
 
 pub(crate) const COLLECT_ETA_LOG_INTERVAL: Duration = Duration::from_secs(10);
 pub const COLLECT_ETA_PROGRESS_SOCKET_ID: &str = "thoosa-progress";
@@ -21,7 +21,7 @@ struct CollectEtaInvocation {
     started_at: Instant,
     last_completion_at: Option<Instant>,
     warmup: usize,
-    ewma_interval_s: Option<f64>,//Exponentially Weighted Moving Average
+    ewma_interval_s: Option<f64>, //Exponentially Weighted Moving Average
     alpha: f64,
 }
 
@@ -157,10 +157,7 @@ struct CollectEtaTracker {
 
 impl CollectEtaTracker {
     fn new() -> Self {
-        let started_at_unix_ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
+        let started_at_unix_ms = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
         let (progress_tx, _progress_rx) = watch::channel(CollectEtaProgressState {
             invocations: vec![],
             started_at_unix_ms,
@@ -232,9 +229,7 @@ impl CollectEtaTracker {
         }
         let next_completed = state.historical_completed.saturating_add(completed_weight);
         state.historical_interval_s = Some(match (state.historical_interval_s, state.historical_completed) {
-            (Some(current_interval), current_weight) if current_weight > 0 => {
-                weighted_f64_avg(current_interval, current_weight, interval_s, completed_weight)
-            }
+            (Some(current_interval), current_weight) if current_weight > 0 => weighted_f64_avg(current_interval, current_weight, interval_s, completed_weight),
             _ => interval_s,
         });
         state.historical_completed = next_completed;
@@ -257,7 +252,6 @@ impl CollectEtaTracker {
         };
         let _ = self.progress_tx.send_replace(progress_state);
     }
-
 
     fn set_device_stats(&self, device_stats: Option<ThoDeviceStats>) {
         let progress_state = {
@@ -282,7 +276,6 @@ impl CollectEtaTracker {
         };
         let _ = self.progress_tx.send_replace(progress_state);
     }
-
 
     fn build_snapshot(&self, state: &CollectEtaState, now: Instant) -> CollectEtaSnapshot {
         let mut snapshot = CollectEtaSnapshot {
@@ -320,9 +313,7 @@ impl CollectEtaTracker {
             if remaining == 0 {
                 continue;
             }
-            let eta = invocation
-                .eta(now)
-                .or_else(|| fallback_interval_s.map(|interval_s| Duration::from_secs_f64(remaining as f64 * interval_s)));
+            let eta = invocation.eta(now).or_else(|| fallback_interval_s.map(|interval_s| Duration::from_secs_f64(remaining as f64 * interval_s)));
             if let Some(eta) = eta {
                 let is_slowest = snapshot.max_eta.map(|current| eta > current).unwrap_or(true);
                 if is_slowest {
@@ -361,10 +352,22 @@ impl CollectEtaTracker {
         let _ = self.progress_tx.send_replace(snapshot.progress_state.clone());
 
         if let Some(max_eta) = snapshot.max_eta {
-            debug!("collect_futures_with_progress ETA: active={} completed={} remaining={} max_eta={} slowest=\"{}\" ({}/{})", snapshot.active_collectors, snapshot.total_completed, snapshot.total_remaining, format_duration(max_eta), snapshot.slowest_descr.as_deref().unwrap_or("unknown"), snapshot.slowest_completed, snapshot.slowest_total);
+            debug!(
+                "collect_futures_with_progress ETA: active={} completed={} remaining={} max_eta={} slowest=\"{}\" ({}/{})",
+                snapshot.active_collectors,
+                snapshot.total_completed,
+                snapshot.total_remaining,
+                format_duration(max_eta),
+                snapshot.slowest_descr.as_deref().unwrap_or("unknown"),
+                snapshot.slowest_completed,
+                snapshot.slowest_total
+            );
         } else {
             let unknown_reason = if snapshot.total_completed == 0 { "waiting for first completions" } else { "warming up throughput model" };
-            debug!("collect_futures_with_progress ETA: active={} completed={} remaining={} max_eta=unknown ({})", snapshot.active_collectors, snapshot.total_completed, snapshot.total_remaining, unknown_reason);
+            debug!(
+                "collect_futures_with_progress ETA: active={} completed={} remaining={} max_eta=unknown ({})",
+                snapshot.active_collectors, snapshot.total_completed, snapshot.total_remaining, unknown_reason
+            );
         }
         true
     }
@@ -473,9 +476,9 @@ fn format_duration(duration: Duration) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{CollectEtaProgressInvocation, CollectEtaTracker, COLLECT_ETA_LOG_INTERVAL};
-    use crate::futures_limits::{ENTRY, FutureLimitProgressEntry};
+    use super::{COLLECT_ETA_LOG_INTERVAL, CollectEtaProgressInvocation, CollectEtaTracker};
     use crate::device_stats::ThoDeviceStats;
+    use crate::futures_limits::{ENTRY, FutureLimitProgressEntry};
     use std::time::{Duration, Instant};
 
     #[test]
@@ -582,29 +585,11 @@ mod tests {
         tracker.maybe_log(true);
         assert_eq!(
             rx.borrow().clone().invocations,
-            vec![
-                CollectEtaProgressInvocation {
-                    descr: "first".to_string(),
-                    total: 3,
-                    completed: 1,
-                },
-                CollectEtaProgressInvocation {
-                    descr: "second".to_string(),
-                    total: 5,
-                    completed: 2,
-                },
-            ]
+            vec![CollectEtaProgressInvocation { descr: "first".to_string(), total: 3, completed: 1 }, CollectEtaProgressInvocation { descr: "second".to_string(), total: 5, completed: 2 },]
         );
 
         tracker.unregister_at(first, now + Duration::from_secs(4));
-        assert_eq!(
-            rx.borrow().clone().invocations,
-            vec![CollectEtaProgressInvocation {
-                descr: "second".to_string(),
-                total: 5,
-                completed: 2,
-            }]
-        );
+        assert_eq!(rx.borrow().clone().invocations, vec![CollectEtaProgressInvocation { descr: "second".to_string(), total: 5, completed: 2 }]);
     }
 
     #[test]

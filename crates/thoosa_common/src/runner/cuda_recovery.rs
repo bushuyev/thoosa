@@ -28,7 +28,7 @@ pub(crate) struct CudaRecoveryCoordinator {
     cycle: Mutex<Option<RecoveryCycle>>,
     restart_fn: RestartFn,
     retire: Option<RetireFn>,
-    process_failure: Option<ProcessFailureFn>,//to tear down main process in local mode.
+    process_failure: Option<ProcessFailureFn>, //to tear down main process in local mode.
     drain_timeout: Duration,
 }
 
@@ -45,7 +45,14 @@ impl CudaRecoveryCoordinator {
     }
 
     pub(crate) fn with_backend(gate: Arc<CudaActivityGate>, restart_fn: RestartFn, retire: Option<RetireFn>, process_failure: Option<ProcessFailureFn>) -> Arc<Self> {
-        Arc::new(Self { gate, cycle: Mutex::new(None), restart_fn, retire, process_failure, drain_timeout: RECOVERY_DRAIN_TIMEOUT })
+        Arc::new(Self {
+            gate,
+            cycle: Mutex::new(None),
+            restart_fn,
+            retire,
+            process_failure,
+            drain_timeout: RECOVERY_DRAIN_TIMEOUT,
+        })
     }
 
     pub(crate) fn gate(&self) -> &Arc<CudaActivityGate> {
@@ -55,12 +62,7 @@ impl CudaRecoveryCoordinator {
     /// Closing admission and arranging this device's SyncStageRunner drain are one
     /// synchronous operation. Publication uses the same mutex, so late reports
     /// either join this cycle or are recognized as belonging to a retired worker.
-    pub(crate) fn request(
-        self: &Arc<Self>,
-        generation: CudaDeviceGeneration,
-        cause: ThoError,
-        drain: impl FnOnce() -> Result<oneshot::Receiver<()>, ThoError>,
-    ) -> Result<Option<CudaActivityPauseTicket>, ThoError> {
+    pub(crate) fn request(self: &Arc<Self>, generation: CudaDeviceGeneration, cause: ThoError, drain: impl FnOnce() -> Result<oneshot::Receiver<()>, ThoError>) -> Result<Option<CudaActivityPauseTicket>, ThoError> {
         let mut cycle = self.cycle.lock();
         let gate = &self.gate;
         if let Some(error) = gate.failure() {
@@ -73,9 +75,17 @@ impl CudaRecoveryCoordinator {
         if generation != current {
             return Err(ThoError::new("CUDA recovery report refers to a future device generation"));
         }
-        debug!("CudaRecoveryCoordinator::request: needs_cuda_ctx_reset={:?} is_cuda_recovery_failed={:?} process_failure={:?} cycle={:?}", cause.needs_cuda_recovery(), cause.is_cuda_recovery_failed(), self.process_failure.is_some(), cycle.deref());
+        debug!(
+            "CudaRecoveryCoordinator::request: needs_cuda_ctx_reset={:?} is_cuda_recovery_failed={:?} process_failure={:?} cycle={:?}",
+            cause.needs_cuda_recovery(),
+            cause.is_cuda_recovery_failed(),
+            self.process_failure.is_some(),
+            cycle.deref()
+        );
 
-        if (cause.needs_cuda_recovery() || cause.is_cuda_recovery_failed()) && let Some(process_failure) = &self.process_failure {
+        if (cause.needs_cuda_recovery() || cause.is_cuda_recovery_failed())
+            && let Some(process_failure) = &self.process_failure
+        {
             // Local fatal errors or an unsuccessful stream drain invalidate the
             // process; neither can be repaired by resetting live LibTorch state.
             // Publish synchronously,
@@ -87,7 +97,9 @@ impl CudaRecoveryCoordinator {
             let task = cycle.take().and_then(|cycle| cycle.task);
             let _ = drain();
             drop(cycle);
-            if let Some(task) = task { task.abort(); }
+            if let Some(task) = task {
+                task.abort();
+            }
             process_failure(failure.clone());
             return Err(failure);
         }
@@ -125,7 +137,8 @@ impl CudaRecoveryCoordinator {
         let guard = RecoveryGuard { coordinator: Arc::clone(self), ticket };
         let task = runtime.spawn(async move {
             let _guard = guard;
-            if let Err(error) = _guard.coordinator.run(ticket, drained, generation, cause).await {//<-- calls thoosa_common::runner::global_ctx::GlobalCtx::cuda_restart
+            if let Err(error) = _guard.coordinator.run(ticket, drained, generation, cause).await {
+                //<-- calls thoosa_common::runner::global_ctx::GlobalCtx::cuda_restart
                 error!("CudaRecoveryCoordinator::request: run failed, error={error:?}");
                 _guard.coordinator.fail(ticket, error);
             }
@@ -167,15 +180,10 @@ impl CudaRecoveryCoordinator {
         }
         info!("CudaRecoveryCoordinator::run: calling restart_fn");
 
-        tokio::time::timeout(RECOVERY_BACKEND_TIMEOUT, CudaActivityScope::run_recovery(&self.gate, ticket, async {
-            (self.restart_fn)(device).await
-        })).await
-        .map_err(|e| {
-            ThoError::new(format!("CUDA backend recovery timed out: ({e:?})"))
-        })?
-        .map_err(|error| {
-            error.context(format!("recovering CUDA device {device}, generation {}, after {cause:#}", generation.0))
-        })?;
+        tokio::time::timeout(RECOVERY_BACKEND_TIMEOUT, CudaActivityScope::run_recovery(&self.gate, ticket, async { (self.restart_fn)(device).await }))
+            .await
+            .map_err(|e| ThoError::new(format!("CUDA backend recovery timed out: ({e:?})")))?
+            .map_err(|error| error.context(format!("recovering CUDA device {device}, generation {}, after {cause:#}", generation.0)))?;
 
         // Generation publication and report deduplication share this lock. No
         // other device participates in this completion or delays its reopening.
@@ -199,7 +207,9 @@ impl CudaRecoveryCoordinator {
             drop(cycle);
             // A failed local maintenance operation cannot be repaired by a
             // successor worker either; terminate the application in this case.
-            if let Some(process_failure) = &self.process_failure { process_failure(failure); }
+            if let Some(process_failure) = &self.process_failure {
+                process_failure(failure);
+            }
         }
     }
 }
@@ -261,7 +271,10 @@ mod tests {
         });
         let reset: RestartFn = Arc::new({
             let retired = Arc::clone(&retired);
-            move |_| { assert!(retired.load(Ordering::Acquire)); Box::pin(async { Ok(()) }) }
+            move |_| {
+                assert!(retired.load(Ordering::Acquire));
+                Box::pin(async { Ok(()) })
+            }
         });
         let mut coordinator = CudaRecoveryCoordinator::with_backend(Arc::clone(&gate), reset, Some(retire), None);
         Arc::get_mut(&mut coordinator).unwrap().drain_timeout = Duration::from_millis(10);
@@ -274,7 +287,14 @@ mod tests {
     async fn test_local_fatal_failure_is_terminal_and_notifies_application_without_reload() {
         let gate = Arc::new(CudaActivityGate::new(1));
         let (failure_tx, mut failure_rx) = tokio::sync::mpsc::unbounded_channel();
-        let coordinator = CudaRecoveryCoordinator::with_backend(Arc::clone(&gate), Arc::new(|_| panic!("fatal local errors must never reload")), None, Some(Arc::new(move |failure| { failure_tx.send(failure).unwrap(); })));
+        let coordinator = CudaRecoveryCoordinator::with_backend(
+            Arc::clone(&gate),
+            Arc::new(|_| panic!("fatal local errors must never reload")),
+            None,
+            Some(Arc::new(move |failure| {
+                failure_tx.send(failure).unwrap();
+            })),
+        );
         let error = coordinator.request(gate.device_generation(), fatal(), drained).unwrap_err();
         assert!(error.is_cuda_recovery_failed());
         assert!(failure_rx.recv().await.unwrap().is_cuda_recovery_failed());
@@ -286,7 +306,14 @@ mod tests {
     async fn test_failed_local_stream_drain_is_terminal_without_reset() {
         let gate = Arc::new(CudaActivityGate::new(1));
         let (failure_tx, mut failure_rx) = tokio::sync::mpsc::unbounded_channel();
-        let coordinator = CudaRecoveryCoordinator::with_backend(Arc::clone(&gate), Arc::new(|_| panic!("uncertain local completion must not reset live LibTorch")), None, Some(Arc::new(move |failure| { failure_tx.send(failure).unwrap(); })));
+        let coordinator = CudaRecoveryCoordinator::with_backend(
+            Arc::clone(&gate),
+            Arc::new(|_| panic!("uncertain local completion must not reset live LibTorch")),
+            None,
+            Some(Arc::new(move |failure| {
+                failure_tx.send(failure).unwrap();
+            })),
+        );
         let failure = crate::cuda_copier::complete_cuda_stream(Err(ThoError::oom()), || Err(ThoError::oom())).result.unwrap_err();
         assert!(!failure.needs_cuda_recovery());
         let error = coordinator.request(gate.device_generation(), failure, drained).unwrap_err();
@@ -299,7 +326,14 @@ mod tests {
     async fn test_local_fatal_report_supersedes_maintenance_without_reopening() {
         let gate = Arc::new(CudaActivityGate::new(1));
         let (failure_tx, mut failure_rx) = tokio::sync::mpsc::unbounded_channel();
-        let coordinator = CudaRecoveryCoordinator::with_backend(Arc::clone(&gate), Arc::new(|_| panic!("maintenance must not run after a fatal report")), None, Some(Arc::new(move |failure| { failure_tx.send(failure).unwrap(); })));
+        let coordinator = CudaRecoveryCoordinator::with_backend(
+            Arc::clone(&gate),
+            Arc::new(|_| panic!("maintenance must not run after a fatal report")),
+            None,
+            Some(Arc::new(move |failure| {
+                failure_tx.send(failure).unwrap();
+            })),
+        );
         let (_held, pending) = oneshot::channel();
         let ticket = coordinator.request(gate.device_generation(), ThoError::CudaBeingRecovered, || Ok(pending)).unwrap().unwrap();
         let error = coordinator.request(gate.device_generation(), fatal(), drained).unwrap_err();
@@ -367,7 +401,9 @@ mod tests {
             assert!(starts.try_recv().is_err());
             assert!(first.request(CudaDeviceGeneration(2), fatal(), || panic!("future report drained")).is_err());
             first.gate().check_admission().unwrap();
-        }).await.expect("devices must complete recovery independently");
+        })
+        .await
+        .expect("devices must complete recovery independently");
     }
 
     #[tokio::test]
@@ -398,22 +434,25 @@ mod tests {
             tokio::time::timeout(Duration::from_secs(2), async {
                 let started = Arc::new(Notify::new());
                 let panics = mode == "panic";
-                let coordinator = CudaRecoveryCoordinator::new(Arc::new(CudaActivityGate::new(1)), Arc::new({
-                    let started = Arc::clone(&started);
-                    move |_| {
+                let coordinator = CudaRecoveryCoordinator::new(
+                    Arc::new(CudaActivityGate::new(1)),
+                    Arc::new({
                         let started = Arc::clone(&started);
-                        Box::pin(async move {
-                            if panics {
-                                panic!("injected coordinator backend panic");
-                            }
-                            if mode == "backend_error" {
-                                return Err(ThoError::new("injected backend failure"));
-                            }
-                            started.notify_one();
-                            std::future::pending::<Result<(), ThoError>>().await
-                        })
-                    }
-                }));
+                        move |_| {
+                            let started = Arc::clone(&started);
+                            Box::pin(async move {
+                                if panics {
+                                    panic!("injected coordinator backend panic");
+                                }
+                                if mode == "backend_error" {
+                                    return Err(ThoError::new("injected backend failure"));
+                                }
+                                started.notify_one();
+                                std::future::pending::<Result<(), ThoError>>().await
+                            })
+                        }
+                    }),
+                );
                 let gate = coordinator.gate();
                 let healthy = Arc::new(CudaActivityGate::new(2));
                 let generation = gate.device_generation();
@@ -450,7 +489,9 @@ mod tests {
                 healthy.check_admission().unwrap();
                 let _activity = CudaActivityScope::for_operation(&healthy).unwrap();
                 assert_eq!(healthy.device_generation(), CudaDeviceGeneration(0));
-            }).await.expect("coordinator failure must wake waiters");
+            })
+            .await
+            .expect("coordinator failure must wake waiters");
         }
     }
 }

@@ -1,11 +1,3 @@
-#[cfg(test)]
-use std::collections::HashMap;
-use thoosa_common::ipc::state_transfer::StateTransfer;
-use thoosa_common::runner::execution::{StageExecution, ExecutionContext, execute_stateful};
-use std::future::Future;
-use std::borrow::Borrow;
-use thoosa_common::runner::sync_stage::PrepareStage;
-use thoosa_common::tch_error::tch_result;
 use anyhow::Context as _;
 use async_trait::async_trait;
 use cached_derive::Cached;
@@ -17,41 +9,51 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 #[cfg(test)]
 use std::any::Any;
+use std::borrow::Borrow;
+#[cfg(test)]
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt::Debug;
+use std::future::Future;
 use std::marker::PhantomData;
 use std::ops::Range;
 use std::sync::Arc;
 use tch::{Device, IndexOp, Kind, Tensor};
+use thoosa_common::ipc::state_transfer::StageStateInfo;
+use thoosa_common::ipc::state_transfer::StateTransfer;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
 use thoosa_common::runner::adjusters::splits::{OutputBuilder, SplitsAdjusterContext, SplitsAdjusterContextImpl};
-use thoosa_common::runner::common::cachable::{DevicesWrap};
 #[cfg(test)]
 use thoosa_common::runner::common::cachable::Cached;
+use thoosa_common::runner::common::cachable::DevicesWrap;
+use thoosa_common::runner::execution::{ExecutionContext, StageExecution, execute_stateful};
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, NoStageAdjuster, NoopRunnableContext, OOMHandler, input_adjuster, run_ctx_adjuster};
+use thoosa_common::runner::sync_stage::PrepareStage;
+use thoosa_common::runner::sync_stage::StageWithState;
+use thoosa_common::tch_error::tch_result;
 use thoosa_named_derive::Named;
 use thoosa_shared::traits::{AsyncStage, OutId, Stage, ThoSelector};
-use thoosa_common::runner::sync_stage::{StageWithState};
-use thoosa_common::ipc::state_transfer::StageStateInfo;
 use thoosa_shared::traits::{MaxParallelCtx, RunCtx};
 
 use thoosa_common::dims::{AnyMetrics, ChannelsData, Dims};
 use thoosa_common::transforms::filters::{AverageFilterParams, BandPassFilterParams, InputFilter, MedianFilterParams, NotchBandFilterParams, SavGolFilterParams, ZNormFilterParams};
 
-use crate::dims::LocalSelect;
 use crate::cuda_utils::tensor_mem_size;
+use crate::dims::LocalSelect;
+use crate::instance_cache::InstanceCache;
 #[cfg(test)]
 use crate::ipc::serialization::json::JsonIpcCodec;
 #[cfg(test)]
 use crate::ipc::wraps::SyncStageIpcWrapper;
-use thoosa_common::ipc::cuda_wokrer::{WorkerStageInput};
 #[cfg(test)]
 use thoosa_common::ipc::cuda_wokrer::AllTensors;
 #[cfg(test)]
 use thoosa_common::ipc::cuda_wokrer::WokerRunCtx;
+use thoosa_common::ipc::cuda_wokrer::WorkerStageInput;
 use thoosa_common::ipc::proxy::DynSyncStageWithStateEnum;
+use thoosa_common::ipc::tensor_info::WorkerTensorInfoPayload;
 use thoosa_common::ipc::worker_msg::WorkerInput;
 #[cfg(test)]
 use thoosa_common::ipc::wraps::WorkerWrapperWithState;
@@ -61,20 +63,18 @@ use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::transforms::filters::{Padding, band_pass_filter, notch_band_rfft};
 use thoosa_common::transforms::smoothing::{median, moving_average};
 use thoosa_common::utils::z_norm;
-use thoosa_common::ws::{WsConfigs};
 #[cfg(test)]
 use thoosa_common::ws::Workspace;
+use thoosa_common::ws::WsConfigs;
 use thoosa_digest_id::DigestHash;
 use thoosa_shared::comp_id::SynKey;
+use thoosa_shared::ipc_types::TensorKey;
 use thoosa_shared::math::sg_smoothing_coeffs;
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::tracked_await::t;
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Metrics, MonoMetrics, WithId};
 use thoosa_shared::{CopyToDevice, ThoError, mono_key};
-use thoosa_shared::ipc_types::{TensorKey};
-use thoosa_common::ipc::tensor_info::{WorkerTensorInfoPayload};
 use tokio::sync::MutexGuard;
-use crate::instance_cache::InstanceCache;
 
 pub const SYNC_FREQ_FILTER_ENDPOINT: &str = "SyncFreqFilter";
 
@@ -82,7 +82,7 @@ pub const SYNC_FREQ_FILTER_ENDPOINT: &str = "SyncFreqFilter";
 pub struct BandPassDims;
 
 impl Dims for BandPassDims {
-    type Metrics = AnyMetrics;//TODO
+    type Metrics = AnyMetrics; //TODO
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, DigestHash)]
@@ -92,28 +92,27 @@ pub struct SyncFreqFilterIpcInit {
     pub num_channels: i64,
     pub sample_rate: f64,
     pub find_motifs_run_config_id: RunConfigId,
-    pub tho_device_idx: usize
+    pub tho_device_idx: usize,
 }
-
 
 impl SyncFreqFilterIpcInit {
-
     pub fn new(filter_configs: Vec<InputFilter>, num_channels: i64, sample_rate: f64, find_motifs_run_config_id: RunConfigId, tho_device_idx: usize) -> Self {
-        Self {  filter_configs, num_channels, sample_rate,find_motifs_run_config_id, tho_device_idx }
+        Self {
+            filter_configs,
+            num_channels,
+            sample_rate,
+            find_motifs_run_config_id,
+            tho_device_idx,
+        }
     }
 
-
-    fn new_id(&self)->SynKey {//TODO add trait for init types
-        SynKey::new([
-            mono_key!(FREQ_FILTER, "FreqFilter"),
-            mono_key!(self.blake3_hash(), format!("Hash for {:?}", self)),
-        ])
+    fn new_id(&self) -> SynKey {
+        //TODO add trait for init types
+        SynKey::new([mono_key!(FREQ_FILTER, "FreqFilter"), mono_key!(self.blake3_hash(), format!("Hash for {:?}", self))])
     }
-
 }
 
-impl WorkerStageInput for SyncFreqFilterIpcInit {
-}
+impl WorkerStageInput for SyncFreqFilterIpcInit {}
 
 #[typetag::serde]
 impl WorkerInput for SyncFreqFilterIpcInit {}
@@ -127,11 +126,10 @@ where
     // IPC installs this endpoint under the run-config id, not its output SynKey.
     stage_id: String,
     filters: tokio::sync::Mutex<Vec<PreparedFilter>>,
-    num_channels:i64,
-    sample_rate:f64,
-    pd:PhantomData<C>
+    num_channels: i64,
+    sample_rate: f64,
+    pd: PhantomData<C>,
 }
-
 
 static SYNC_FREQ_FILTER_INSTANCES: InstanceCache = InstanceCache::new();
 
@@ -139,8 +137,7 @@ impl<C> SyncFreqFilter<C>
 where
     C: RunCtx + 'static,
 {
-
-    pub async fn new(init:SyncFreqFilterIpcInit) -> Result<Arc<DynSyncStageWithStateEnum<SyncFreqFilter<C>>>, ThoError> {
+    pub async fn new(init: SyncFreqFilterIpcInit) -> Result<Arc<DynSyncStageWithStateEnum<SyncFreqFilter<C>>>, ThoError> {
         let _find_motifs_run_config_id = init.find_motifs_run_config_id;
         // Filters outlive training trials. Retain their proxy and configuration;
         // its endpoint is installed lazily in each replacement worker.
@@ -150,31 +147,37 @@ where
         // let id = (TypeId::of::<Self>(), find_motifs_run_config_id, init.tho_device_idx);
         let id = init.new_id().to_string();
 
-        SYNC_FREQ_FILTER_INSTANCES.get_or_try_insert_recreatable_with::<C, _, _, _, _>(init.tho_device_idx, GlobalCtx::global().cuda_activity_gate(init.tho_device_idx), GlobalCtx::global().is_ipc(), id.clone(), move || async move {
-            let remote = init.clone();
-            let stage = Arc::new(GlobalCtx::global().execution(init.tho_device_idx).install_stateful(
-                SYNC_FREQ_FILTER_ENDPOINT, crate::ipc::endpoints::StageRecovery::RecreateFromInit,
-                || async move { Ok(Arc::new(Self::new_local(init)?)) },
-                || async move { Ok((Box::new(remote) as Box<dyn WorkerInput>, ())) },
-                Some(Arc::new(|input: &ThoTensor<ChannelsData, SynKey>| Ok(Box::new(input.clone_ref()?) as Box<dyn WorkerInput>))),
-            ).await?);
-            let _registration = GlobalCtx::global().register_cache((stage.stage_id(), Arc::clone(&stage) as Arc<dyn CachePurger>));
+        SYNC_FREQ_FILTER_INSTANCES
+            .get_or_try_insert_recreatable_with::<C, _, _, _, _>(init.tho_device_idx, GlobalCtx::global().cuda_activity_gate(init.tho_device_idx), GlobalCtx::global().is_ipc(), id.clone(), move || async move {
+                let remote = init.clone();
+                let stage = Arc::new(
+                    GlobalCtx::global()
+                        .execution(init.tho_device_idx)
+                        .install_stateful(
+                            SYNC_FREQ_FILTER_ENDPOINT,
+                            crate::ipc::endpoints::StageRecovery::RecreateFromInit,
+                            || async move { Ok(Arc::new(Self::new_local(init)?)) },
+                            || async move { Ok((Box::new(remote) as Box<dyn WorkerInput>, ())) },
+                            Some(Arc::new(|input: &ThoTensor<ChannelsData, SynKey>| Ok(Box::new(input.clone_ref()?) as Box<dyn WorkerInput>))),
+                        )
+                        .await?,
+                );
+                let _registration = GlobalCtx::global().register_cache((stage.stage_id(), Arc::clone(&stage) as Arc<dyn CachePurger>));
 
-            Ok(stage)
-
-        }).await
+                Ok(stage)
+            })
+            .await
     }
 
-    pub fn new_local(init:SyncFreqFilterIpcInit) ->Result<Self, ThoError>{
-
+    pub fn new_local(init: SyncFreqFilterIpcInit) -> Result<Self, ThoError> {
         let filters = Self::prepare_filters(&init.filter_configs, init.num_channels, init.sample_rate, init.tho_device_idx)?;
 
         Ok(Self {
             id: init.new_id(),
             stage_id: init.find_motifs_run_config_id.to_string(),
             filters: tokio::sync::Mutex::new(filters),
-            num_channels:init.num_channels,
-            sample_rate:init.sample_rate,
+            num_channels: init.num_channels,
+            sample_rate: init.sample_rate,
             pd: Default::default(),
         })
     }
@@ -194,13 +197,7 @@ where
                 InputFilter::BandPassFilter(band_pass_config) => {
                     let high_hz = band_pass_config.low_hz + band_pass_config.band_hz;
 
-                    let kernel = tch_result(tch_result(band_pass_filter(
-                        band_pass_config.low_hz,
-                        high_hz,
-                        band_pass_config.kernel_size as i64,
-                        sample_rate,
-                        1e-6
-                    )?.f_repeat([num_channels, 1, 1]))?.f_to_device(device))?;
+                    let kernel = tch_result(tch_result(band_pass_filter(band_pass_config.low_hz, high_hz, band_pass_config.kernel_size as i64, sample_rate, 1e-6)?.f_repeat([num_channels, 1, 1]))?.f_to_device(device))?;
 
                     debug!("FreqFilter::new: band_pass_config={band_pass_config:?} kernel.size={:?}", kernel.size());
 
@@ -217,7 +214,7 @@ where
                         sav_gol_config.window_len
                     };
 
-                    if window_len < 3  {
+                    if window_len < 3 {
                         return Err(ThoError::new(format!("window_len must be odd and >= 3, got {}", window_len)));
                     }
 
@@ -226,11 +223,7 @@ where
                     }
 
                     let coeffs = sg_smoothing_coeffs(window_len as usize, sav_gol_config.poly_order as usize)?;
-                    let weights = tch_result(tch_result(tch_result(tch_result(tch_result(Tensor::f_from_slice(&coeffs))?
-                        .f_to_kind(tch::Kind::Float))?
-                        .f_to_device(device))?
-                        .f_view([1, 1, window_len as i64]))?
-                        .f_repeat([num_channels, 1, 1]))?;
+                    let weights = tch_result(tch_result(tch_result(tch_result(tch_result(Tensor::f_from_slice(&coeffs))?.f_to_kind(tch::Kind::Float))?.f_to_device(device))?.f_view([1, 1, window_len as i64]))?.f_repeat([num_channels, 1, 1]))?;
 
                     filters.push(PreparedFilter::SavGol {
                         weights: PreparedFilterTensor::new(weights)?,
@@ -240,24 +233,14 @@ where
                     });
                 }
                 InputFilter::MedianFilter(median_config) => {
-                    let effective_window = if median_config.window % 2 == 0 {
-                        median_config.window + 1
-                    } else {
-                        median_config.window
-                    };
+                    let effective_window = if median_config.window % 2 == 0 { median_config.window + 1 } else { median_config.window };
                     if effective_window <= 3 {
                         return Err(ThoError::new(format!("median window must be > 3 after odd normalization, got {}", median_config.window)));
                     }
-                    filters.push(PreparedFilter::Median {
-                        window: median_config.window,
-                    });
+                    filters.push(PreparedFilter::Median { window: median_config.window });
                 }
                 InputFilter::AverageFilter(moving_average_config) => {
-                    let effective_window = if moving_average_config.window % 2 == 0 {
-                        moving_average_config.window + 1
-                    } else {
-                        moving_average_config.window
-                    };
+                    let effective_window = if moving_average_config.window % 2 == 0 { moving_average_config.window + 1 } else { moving_average_config.window };
                     if effective_window <= 3 {
                         return Err(ThoError::new(format!("moving average window must be > 3 after odd normalization, got {}", moving_average_config.window)));
                     }
@@ -266,9 +249,7 @@ where
                         step: moving_average_config.step,
                     });
                 }
-                InputFilter::ZNorm(_) => {
-                    filters.push(PreparedFilter::ZNorm {})
-                }
+                InputFilter::ZNorm(_) => filters.push(PreparedFilter::ZNorm {}),
             }
         }
 
@@ -283,7 +264,7 @@ where
     fn apply_tho_tensor_with_state(&self, filters: &[PreparedFilter], input_tensor: &ThoTensor<ChannelsData, SynKey>) -> Result<ThoTensor<ChannelsData, SynKey>, ThoError> {
         debug!("FreqFilter::apply_tho_tensor: filters={filters:?}");
 
-        let mut filtered_t = tch_result(input_tensor.local()?.f_alias())?;//.f_totype(Float)?;
+        let mut filtered_t = tch_result(input_tensor.local()?.f_alias())?; //.f_totype(Float)?;
 
         for filter in filters.iter() {
             match filter {
@@ -300,7 +281,13 @@ where
                     let input_t = tch_result(filtered_t.as_ref().f_unsqueeze(0))?;
 
                     let output = self.run_conv_with_padding(*stride, padding, &*kernel.local()?, &input_t);
-                    debug!("FreqFilter::apply_tho_tensor, BandPass: id={} kernel.size={:?} input.size={:?} output.size={:?}", input_tensor.id(), kernel.size(), input_t.size(), output.as_ref().map(|v| v.size()));
+                    debug!(
+                        "FreqFilter::apply_tho_tensor, BandPass: id={} kernel.size={:?} input.size={:?} output.size={:?}",
+                        input_tensor.id(),
+                        kernel.size(),
+                        input_t.size(),
+                        output.as_ref().map(|v| v.size())
+                    );
                     filtered_t = output?;
 
                     // debug_plot!(&filtered_t, "{}_BandPass", input_tensor.id())?;
@@ -310,13 +297,22 @@ where
                     let t = filtered_t.size()[1];
                     if t < *window_len {
                         // This input cannot satisfy this filter; callers may explicitly skip this data category.
-                        return Err(ThoError::Data { kind: thoosa_shared::DataErrorKind::InputTooShort, msg: format!("time length T={} must be >= window_len={}", t, window_len) });
+                        return Err(ThoError::Data {
+                            kind: thoosa_shared::DataErrorKind::InputTooShort,
+                            msg: format!("time length T={} must be >= window_len={}", t, window_len),
+                        });
                     }
 
                     let input_t = tch_result(filtered_t.as_ref().f_unsqueeze(0))?;
 
                     let output = self.run_conv_with_padding(*stride, padding, &*weights.local()?, &input_t);
-                    debug!("FreqFilter::apply_tho_tensor, SavGol: id={} weights.size={:?} input.size={:?} output.size={:?}", input_tensor.id(), weights.size(), input_t.size(), output.as_ref().map(|v| v.size()));
+                    debug!(
+                        "FreqFilter::apply_tho_tensor, SavGol: id={} weights.size={:?} input.size={:?} output.size={:?}",
+                        input_tensor.id(),
+                        weights.size(),
+                        input_t.size(),
+                        output.as_ref().map(|v| v.size())
+                    );
                     filtered_t = output?;
                 }
                 PreparedFilter::Median { window } => {
@@ -329,7 +325,7 @@ where
                     debug!("FreqFilter::apply_tho_tensor, MovingAverage: id={} window={} filtered_t.size={:?} filtered_t_out.size={:?}", input_tensor.id(), window, filtered_t.size(), filtered_t_out.size());
                     filtered_t = filtered_t_out;
                 }
-                PreparedFilter::ZNorm {..} => {
+                PreparedFilter::ZNorm { .. } => {
                     debug!("FreqFilter::apply_tho_tensor, ZNorm: id={} filtered_t.size={:?}", input_tensor.id(), filtered_t.size(),);
 
                     filtered_t = z_norm(&filtered_t, 1)?;
@@ -345,7 +341,6 @@ where
         let kernel_size = kernel_t.size()[2];
         let pad = kernel_size / 2;
         let stride_i64 = stride as i64;
-
 
         let output_3d = match padding {
             Padding::Zero(_) => tch_result(input_t.f_conv1d(&kernel_t, None::<Tensor>, stride_i64, pad, 1, self.num_channels))?,
@@ -368,10 +363,9 @@ where
 
         Ok(tch_result(output_3d.f_view((self.num_channels, -1)))?)
     }
-
 }
 
-impl <C> WithId for SyncFreqFilter<C>
+impl<C> WithId for SyncFreqFilter<C>
 where
     C: RunCtx + 'static,
 {
@@ -381,7 +375,6 @@ where
         &self.id
     }
 }
-
 
 // Scalar filter parameters stay in PreparedFilter while IPC transfers only the
 // tensors. An empty slot means offloaded (or only partly restored), never ready.
@@ -394,7 +387,11 @@ pub struct PreparedFilterTensor {
 
 impl PreparedFilterTensor {
     fn new(tensor: Tensor) -> Result<Self, ThoError> {
-        Ok(Self { shape: tensor.size(), kind: tensor.kind(), tensor: Some(ThoTensor::new((), tensor)?) })
+        Ok(Self {
+            shape: tensor.size(),
+            kind: tensor.kind(),
+            tensor: Some(ThoTensor::new((), tensor)?),
+        })
     }
 
     fn ready(&self) -> Result<&ThoTensor<BandPassDims, ()>, ThoError> {
@@ -406,27 +403,11 @@ impl PreparedFilterTensor {
 // This is public because the public StageWithState implementation exposes the prepared filters as its associated state.
 pub enum PreparedFilter {
     NotchBand { low_hz: f64, high_hz: f64 },
-    BandPass {
-        kernel: PreparedFilterTensor,
-        stride: u32,
-        padding: Padding,
-    },
-    SavGol {
-        weights: PreparedFilterTensor,
-        window_len: i64,
-        stride: u32,
-        padding: Padding,
-    },
-    Median {
-        window: u32,
-    },
-    MovingAverage {
-        window: u32,
-        step: u32,
-    },
-    ZNorm {
-
-    }
+    BandPass { kernel: PreparedFilterTensor, stride: u32, padding: Padding },
+    SavGol { weights: PreparedFilterTensor, window_len: i64, stride: u32, padding: Padding },
+    Median { window: u32 },
+    MovingAverage { window: u32, step: u32 },
+    ZNorm {},
 }
 
 impl PreparedFilter {
@@ -455,27 +436,19 @@ where
     id: SynKey,
     _ctx: PhantomData<C>,
     filter_init: SyncFreqFilterIpcInit,
-    effective_output_stride:i64,
-    min_input_split_len:i64
+    effective_output_stride: i64,
+    min_input_split_len: i64,
 }
-
-
 
 impl<C> FreqFilter<C>
 where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
-
-
-    pub async fn new(filter_configs: &[InputFilter], ws_configs:WsConfigs, find_motifs_run_config_id: RunConfigId, tho_device_idx: usize) -> Result<Arc<Self>, ThoError> {
+    pub async fn new(filter_configs: &[InputFilter], ws_configs: WsConfigs, find_motifs_run_config_id: RunConfigId, tho_device_idx: usize) -> Result<Arc<Self>, ThoError> {
         debug!("FreqFilter::new: find_motifs_run_config_id={find_motifs_run_config_id} tho_device_idx={tho_device_idx}");
-        let id:SynKey = mono_key!(find_motifs_run_config_id, "FreqFilter").into();
+        let id: SynKey = mono_key!(find_motifs_run_config_id, "FreqFilter").into();
 
-
-        let (num_channels, sample_rate)  = {
-            (ws_configs.channels as i64, ws_configs.sample_rate as f64)
-        };
-
+        let (num_channels, sample_rate) = { (ws_configs.channels as i64, ws_configs.sample_rate as f64) };
 
         let effective_output_stride = Self::effective_output_stride(filter_configs)?;
         let min_input_split_len = Self::min_input_split_len(filter_configs)?;
@@ -483,25 +456,23 @@ where
         let filter_init = SyncFreqFilterIpcInit::new(filter_configs.to_vec(), num_channels, sample_rate, find_motifs_run_config_id, tho_device_idx);
         SyncFreqFilter::<C>::new(filter_init.clone()).await?;
 
-
         Ok(Arc::new(Self {
             //avoids caching each run_config separately when they have same filter - use filter_configs to build unique ids
-            id:id.clone(),
+            id: id.clone(),
             _ctx: PhantomData,
             filter_init,
             effective_output_stride,
-            min_input_split_len
+            min_input_split_len,
         }))
-
     }
 
     fn effective_output_stride(filter_configs: &[InputFilter]) -> Result<i64, ThoError> {
         filter_configs.iter().try_fold(1_i64, |effective_stride, filter| {
             let stage_stride = match &filter {
                 InputFilter::BandPassFilter(BandPassFilterParams { stride, .. }) | InputFilter::SavGolFilter(SavGolFilterParams { stride, .. }) => *stride as i64,
-                InputFilter::AverageFilter( AverageFilterParams{ step, .. }) => *step as i64,
-                InputFilter::NotchBandFilter (NotchBandFilterParams{ .. }) | InputFilter::MedianFilter(MedianFilterParams{..})  => 1,
-                InputFilter::ZNorm (ZNormFilterParams{..}) => {1}
+                InputFilter::AverageFilter(AverageFilterParams { step, .. }) => *step as i64,
+                InputFilter::NotchBandFilter(NotchBandFilterParams { .. }) | InputFilter::MedianFilter(MedianFilterParams { .. }) => 1,
+                InputFilter::ZNorm(ZNormFilterParams { .. }) => 1,
             };
 
             effective_stride
@@ -511,20 +482,18 @@ where
     }
 
     fn min_input_split_len(filter_configs: &[InputFilter]) -> Result<i64, ThoError> {
-        filter_configs.iter().rev().try_fold(1_i64, |required_len, filter| {
-            match filter {
-                InputFilter::NotchBandFilter (NotchBandFilterParams{ .. }) | InputFilter::MedianFilter(MedianFilterParams{..}) => Ok(required_len.max(1)),
-                InputFilter::AverageFilter( AverageFilterParams{ step, .. }) =>Self::expand_required_len(required_len, *step as i64, 1),
-                InputFilter::BandPassFilter(BandPassFilterParams { stride, padding, kernel_size, .. }) => {
-                    let local_min = match padding {
-                        Padding::Reflect(_) => (kernel_size / 2) + 1,
-                        Padding::Zero(_) | Padding::Replicate(_) => 1,
-                    };
-                    Self::expand_required_len(required_len, *stride as i64, local_min as i64)
-                }
-                InputFilter::SavGolFilter(SavGolFilterParams { window_len, stride, .. }) => Self::expand_required_len(required_len, *stride as i64, *window_len as i64),
-                InputFilter::ZNorm (ZNormFilterParams{..}) => { Ok(1) }
+        filter_configs.iter().rev().try_fold(1_i64, |required_len, filter| match filter {
+            InputFilter::NotchBandFilter(NotchBandFilterParams { .. }) | InputFilter::MedianFilter(MedianFilterParams { .. }) => Ok(required_len.max(1)),
+            InputFilter::AverageFilter(AverageFilterParams { step, .. }) => Self::expand_required_len(required_len, *step as i64, 1),
+            InputFilter::BandPassFilter(BandPassFilterParams { stride, padding, kernel_size, .. }) => {
+                let local_min = match padding {
+                    Padding::Reflect(_) => (kernel_size / 2) + 1,
+                    Padding::Zero(_) | Padding::Replicate(_) => 1,
+                };
+                Self::expand_required_len(required_len, *stride as i64, local_min as i64)
             }
+            InputFilter::SavGolFilter(SavGolFilterParams { window_len, stride, .. }) => Self::expand_required_len(required_len, *stride as i64, *window_len as i64),
+            InputFilter::ZNorm(ZNormFilterParams { .. }) => Ok(1),
         })
     }
 
@@ -554,10 +523,7 @@ struct FreqFilterOutputBuilder {
 
 impl FreqFilterOutputBuilder {
     fn new(output_id: SynKey) -> Self {
-        Self {
-            output_id,
-            partials: vec![],
-        }
+        Self { output_id, partials: vec![] }
     }
 }
 
@@ -566,11 +532,7 @@ impl OutputBuilder for FreqFilterOutputBuilder {
 
     async fn add_partial_output(&mut self, partial: Self::O) -> Result<(), ThoError> {
         // CPU transfer is part of accepting a split, so its failure is immediate.
-        let partial = if partial.tho_device_idx() == 0 {
-            partial
-        } else {
-            t!(partial.copy_to_device(0)).await?
-        };
+        let partial = if partial.tho_device_idx() == 0 { partial } else { t!(partial.copy_to_device(0)).await? };
 
         self.partials.push(partial);
         Ok(())
@@ -595,10 +557,7 @@ struct FreqFilterSplitsAdjuster {
 
 impl FreqFilterSplitsAdjuster {
     fn new(min_split_len: MonoMetrics<1, 2>, alignment: i64) -> Self {
-        Self {
-            min_split_len,
-            alignment: alignment.max(1),
-        }
+        Self { min_split_len, alignment: alignment.max(1) }
     }
 
     fn align_split_len(&self, split_len: &mut MonoMetrics<1, 2>) {
@@ -626,11 +585,7 @@ where
 {
     type A = ChannelsDataSelector;
 
-    async fn adjust(
-        &self,
-        _adjustable: Self::A,
-        adjust_context: &mut AC,
-    ) -> Result<Self::A, AdjusterError<Self::A>> {
+    async fn adjust(&self, _adjustable: Self::A, adjust_context: &mut AC) -> Result<Self::A, AdjusterError<Self::A>> {
         let split_start = adjust_context.done_to();
         let mut split_end = split_start.clone();
         split_end += adjust_context.split_len().clone();
@@ -654,11 +609,7 @@ where
     }
 }
 
-impl<C> Adjustable for SyncFreqFilter<C>
-where
-    C: RunCtx + 'static,
-{
-}
+impl<C> Adjustable for SyncFreqFilter<C> where C: RunCtx + 'static {}
 
 impl<C> OutId for SyncFreqFilter<C>
 where
@@ -683,7 +634,13 @@ where
     C: RunCtx + 'static,
 {
     fn execute<'a, 'i: 'a, I, IFut>(self: Arc<Self>, input: IFut, execution: &'a ExecutionContext<'_>, ctx: &'a Self::Ctx) -> futures_util::future::BoxFuture<'a, Result<Self::Out, ThoError>>
-    where Self: 'a, Self::In<'i>: Sync, Self::Out: Send, I: Borrow<Self::In<'i>> + Send + 'a, IFut: Future<Output = Result<I, ThoError>> + Send + 'a {
+    where
+        Self: 'a,
+        Self::In<'i>: Sync,
+        Self::Out: Send,
+        I: Borrow<Self::In<'i>> + Send + 'a,
+        IFut: Future<Output = Result<I, ThoError>> + Send + 'a,
+    {
         Box::pin(execute_stateful(self, input, execution, ctx))
     }
 }
@@ -699,7 +656,9 @@ where
             // Restores arrive one tensor at a time and in arbitrary order. Do
             // not expose a usable state until every tensor has been restored.
             for filter in filters.iter() {
-                if let Some(tensor) = filter.tensor() { tensor.ready()?; }
+                if let Some(tensor) = filter.tensor() {
+                    tensor.ready()?;
+                }
             }
             for filter in filters.iter_mut() {
                 if let Some(slot) = filter.tensor_mut() {
@@ -709,8 +668,9 @@ where
                     }
                 }
             }
-            Ok(MutexGuard::map(filters, |v|v))
-        }.boxed()
+            Ok(MutexGuard::map(filters, |v| v))
+        }
+        .boxed()
     }
 }
 
@@ -736,11 +696,17 @@ where
                     let tensor = slot.ready()?;
                     // Position identifies repeated filters of the same kind and
                     // preserves their association with the retained parameters.
-                    tensors.push(WorkerTensorInfoPayload::new(TensorKey::stage_state(SYNC_FREQ_FILTER_ENDPOINT, &self.stage_id, index), tensor.kind().into(), tensor.size(), tensor_mem_size(tensor.kind(), &tensor.size())));
+                    tensors.push(WorkerTensorInfoPayload::new(
+                        TensorKey::stage_state(SYNC_FREQ_FILTER_ENDPOINT, &self.stage_id, index),
+                        tensor.kind().into(),
+                        tensor.size(),
+                        tensor_mem_size(tensor.kind(), &tensor.size()),
+                    ));
                 }
             }
             Ok(StageStateInfo::new(tensors, None))
-        }.boxed()
+        }
+        .boxed()
     }
     fn get_state_tensor(&self, _tho_device: usize, tensor_id: String) -> BoxFuture<'_, Result<Tensor, ThoError>> {
         async move {
@@ -749,12 +715,18 @@ where
             // The worker's D2H request retains this alias until its copy has
             // synchronized; PurgeStage then drops the stage-owned allocation.
             Ok(tch_result(slot.ready()?.local()?.f_alias())?)
-        }.boxed()
+        }
+        .boxed()
     }
     fn set_state_tensor(&self, tho_device: usize, tensor_id: String, tensor: Tensor) -> BoxFuture<'_, Result<(), ThoError>> {
         async move {
             let mut filters = self.filters.lock().await;
-            let slot = filters.iter_mut().enumerate().find(|(index, _)| index.to_string() == tensor_id).and_then(|(_, filter)| filter.tensor_mut()).ok_or_else(|| ThoError::NotFound(Some(tensor_id.clone())))?;
+            let slot = filters
+                .iter_mut()
+                .enumerate()
+                .find(|(index, _)| index.to_string() == tensor_id)
+                .and_then(|(_, filter)| filter.tensor_mut())
+                .ok_or_else(|| ThoError::NotFound(Some(tensor_id.clone())))?;
             if slot.tensor.is_some() {
                 return Err(ThoError::new(format!("frequency filter state tensor {tensor_id} is already loaded")));
             }
@@ -763,15 +735,16 @@ where
             }
             slot.tensor = Some(ThoTensor::new((), tensor)?);
             Ok(())
-        }.boxed()
+        }
+        .boxed()
     }
 }
 
 #[async_trait]
-impl <C> CachePurger for SyncFreqFilter<C>
+impl<C> CachePurger for SyncFreqFilter<C>
 where
-    C:RunCtx,
-    Self:Send + Sync
+    C: RunCtx,
+    Self: Send + Sync,
 {
     async fn has_gpu_data(&self, device_idx: usize) -> bool {
         let filters = self.filters.lock().await;
@@ -783,7 +756,10 @@ where
         let mut filters = self.filters.lock().await;
         for filter in filters.iter_mut() {
             if let Some(slot) = filter.tensor_mut() {
-                if let Some(tensor) = &slot.tensor && device_idx != 0 && tensor.tho_device_idx() == device_idx {
+                if let Some(tensor) = &slot.tensor
+                    && device_idx != 0
+                    && tensor.tho_device_idx() == device_idx
+                {
                     slot.tensor = Some(t!(tensor.copy_to_device(0)).await?);
                 }
             }
@@ -805,9 +781,7 @@ where
         }
         Ok(())
     }
-
 }
-
 
 impl<C> OutId for FreqFilter<C>
 where
@@ -827,18 +801,11 @@ where
     type Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>;
 }
 
-
 impl<C> AsyncStage for FreqFilter<C>
 where
     C: MaxParallelCtx + RunCtx + Adjustable + 'static,
 {
-
-
-    async fn run(
-        self: Arc<Self>,
-        input: Self::In<'static>,
-        mut ctx: Self::Ctx,
-    ) -> Result<Self::Out, ThoError> {
+    async fn run(self: Arc<Self>, input: Self::In<'static>, mut ctx: Self::Ctx) -> Result<Self::Out, ThoError> {
         let out_id = self.out_id(input.id());
         let input_size = input.size().clone();
         let min_split_len = [input_size.dim::<0>(), self.min_input_split_len].into();
@@ -867,7 +834,8 @@ where
                 NoopRunnableContext {},
                 MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new()),
             ),
-        )).await?;
+        ))
+        .await?;
 
         debug!("FreqFilter::run: filtered={filtered:?} done");
 
@@ -878,12 +846,11 @@ where
 impl LocalSelect<SynKey, ChannelsDataSelector> for ThoTensor<ChannelsData, SynKey> {
     type Output = ThoTensor<ChannelsData, SynKey>;
 
-    fn local_subview(id:&SynKey, t:&Tensor, selector: ChannelsDataSelector) -> Result<Self::Output, ThoError> {
+    fn local_subview(id: &SynKey, t: &Tensor, selector: ChannelsDataSelector) -> Result<Self::Output, ThoError> {
         let _size: MonoMetrics<1, 2> = t.size().try_into()?;
 
         let ranges = MonoMetrics::<1, 2>::map_to_ranges(&selector.0.start, &selector.0.end);
         debug!("ChannelsData2Selector::subview 1. ranges={ranges:?}, size={:?}", t.size());
-
 
         let sub_tensor = tch_result(t.f_i((ranges[0].clone(), ranges[1].clone())))?;
 
@@ -891,19 +858,17 @@ impl LocalSelect<SynKey, ChannelsDataSelector> for ThoTensor<ChannelsData, SynKe
     }
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runner::common::cachable::SelectRef;
     use crate::ipc::cuda_wokrer::{CudaWorker, InitFn};
     use crate::ipc::worker_msg::OpResult;
+    use crate::runner::common::cachable::SelectRef;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use crate::transforms::filters::ZeroPadding;
     use crate::ws::mock_ws_simp;
-    use std::time::Duration;
     use std::sync::Arc;
+    use std::time::Duration;
     use tch::Tensor;
     use thoosa_common::runner::run_ctx::RunCtxImpl;
     use thoosa_common::stages::freq_filter::{SyncFreqFilter, SyncFreqFilterIpcInit};
@@ -915,12 +880,17 @@ mod tests {
     use thoosa_shared::ThoError;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::mono_key;
-    use thoosa_shared::traits::{StageHash};
+    use thoosa_shared::traits::StageHash;
 
     #[tokio::test]
     async fn test_short_filter_input_is_explicit_data_error() -> Result<(), ThoError> {
         let input = ThoTensor::new(mono_key!("short", "input").into(), tch_result(Tensor::f_ones([1, 3], (tch::Kind::Float, tch::Device::Cpu)))?)?;
-        let filters = vec![InputFilter::SavGolFilter(SavGolFilterParams { window_len: 7, poly_order: 2, stride: 1, padding: Padding::Zero(ZeroPadding {}) })];
+        let filters = vec![InputFilter::SavGolFilter(SavGolFilterParams {
+            window_len: 7,
+            poly_order: 2,
+            stride: 1,
+            padding: Padding::Zero(ZeroPadding {}),
+        })];
         let stage = Arc::new(SyncFreqFilter::<RunCtxImpl>::new_local(SyncFreqFilterIpcInit::new(filters, 1, 100.0, 1, 0))?);
         let error = stage.apply_tho_tensor(&input).unwrap_err();
         assert_eq!(error.data_error_kind(), Some(thoosa_shared::DataErrorKind::InputTooShort));
@@ -929,12 +899,29 @@ mod tests {
 
     fn state_test_filters() -> Vec<InputFilter> {
         vec![
-            InputFilter::BandPassFilter(BandPassFilterParams { low_hz: 3., band_hz: 12., kernel_size: 9, stride: 1, padding: Padding::Zero(ZeroPadding {}) }),
+            InputFilter::BandPassFilter(BandPassFilterParams {
+                low_hz: 3.,
+                band_hz: 12.,
+                kernel_size: 9,
+                stride: 1,
+                padding: Padding::Zero(ZeroPadding {}),
+            }),
             InputFilter::MedianFilter(MedianFilterParams { window: 5 }),
-            InputFilter::SavGolFilter(SavGolFilterParams { window_len: 7, poly_order: 2, stride: 1, padding: Padding::Zero(ZeroPadding {}) }),
+            InputFilter::SavGolFilter(SavGolFilterParams {
+                window_len: 7,
+                poly_order: 2,
+                stride: 1,
+                padding: Padding::Zero(ZeroPadding {}),
+            }),
             // A second band-pass verifies that tensor keys identify positions,
             // rather than collapsing repeated filter kinds into one entry.
-            InputFilter::BandPassFilter(BandPassFilterParams { low_hz: 5., band_hz: 16., kernel_size: 11, stride: 2, padding: Padding::Zero(ZeroPadding {}) }),
+            InputFilter::BandPassFilter(BandPassFilterParams {
+                low_hz: 5.,
+                band_hz: 16.,
+                kernel_size: 11,
+                stride: 2,
+                padding: Padding::Zero(ZeroPadding {}),
+            }),
         ]
     }
 
@@ -972,7 +959,8 @@ mod tests {
             init.tho_device_idx = device.tho_device_idx();
             let stage = Arc::new(SyncFreqFilter::<WokerRunCtx>::new_local(init)?);
             Ok(Box::new(WorkerWrapperWithState::new(stage, PhantomData::<JsonIpcCodec>)) as Box<dyn SyncStageIpcWrapper>)
-        }.boxed()
+        }
+        .boxed()
     }
 
     async fn do_test_filter_state() -> Result<(), ThoError> {
@@ -1033,9 +1021,7 @@ mod tests {
 
     #[test]
     fn test_filter_state_ipc() -> Result<(), ThoError> {
-        crate::ipc::tests::run_ipc_test(module_path!(), async {
-            tokio::time::timeout(Duration::from_secs(60), do_test_filter_state()).await?
-        }, async |sock| {
+        crate::ipc::tests::run_ipc_test(module_path!(), async { tokio::time::timeout(Duration::from_secs(60), do_test_filter_state()).await? }, async |sock| {
             let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)?));
             CudaWorker::run_worker(sock, &ws, HashMap::from([(SYNC_FREQ_FILTER_ENDPOINT.into(), Box::new(state_test_init) as InitFn)]), thoosa_common::tho_device::ThoDevice::from(1usize)).await
         })
@@ -1043,93 +1029,103 @@ mod tests {
 
     #[test]
     fn test_filter_rebuilds_after_worker_reset_ipc() -> Result<(), ThoError> {
-        crate::ipc::tests::run_ipc_test(module_path!(), async {
-            tokio::time::timeout(Duration::from_secs(60), async {
-                let global = GlobalCtx::global();
-                let configs = state_test_filters();
-                let init = SyncFreqFilterIpcInit::new(configs.clone(), 2, 100., 7110, 1);
-                let filter = FreqFilter::<RunCtxImpl>::new(&configs, WsConfigs::new(2, 0, 100), 7110, 1).await?;
-                let reference = SyncFreqFilter::<RunCtxImpl>::new_local(SyncFreqFilterIpcInit { tho_device_idx: 0, ..init.clone() })?;
-                let input = state_test_input(1.)?;
-                let expected = state_test_reference(&reference, &input)?;
-                // As in production, register input copies so reset can discard
-                // their old worker references while retaining the CPU source.
-                let inputs = crate::runner::tmp_cache::TmpCached::new("filter reset input").await;
-                let input_id = input.id().clone();
-                inputs.insert(input);
-                let input = inputs.get(&input_id).unwrap();
-                let mut previous = SyncFreqFilter::<RunCtxImpl>::new(init.clone()).await?;
-                let unused = SyncFreqFilter::<RunCtxImpl>::new(SyncFreqFilterIpcInit { find_motifs_run_config_id: 7111, ..init.clone() }).await?;
-                for cycle in 0..3 {
-                    if cycle > 0 {
-                        global.cuda_actor(1).restart().await?;
-                        // Unused filters remain registered without ever being
-                        // rebuilt. They must not poison a later global offload.
-                        assert!(!unused.has_gpu_data(1).await);
-                        unused.purge_gpu(None, 1, "retired filter").await?;
-                        global.dump_all_to_cpu(1, "before filter rebuild").await?;
-                        // Exercise the retained proxy directly: new use must
-                        // rebuild its kernels instead of uploading the old dump.
-                        let output = global.execution(1).run_stage(Arc::clone(&previous), Arc::clone(&input), 1, &RunCtxImpl::new(1, "retained filter")).await?;
-                        let output = output.copy_to_device(0).await?;
-                        assert!(tch_result(output.local()?.f_allclose(&expected, 1e-4, 1e-5, false))?, "retained filter changed after reset");
+        crate::ipc::tests::run_ipc_test(
+            module_path!(),
+            async {
+                tokio::time::timeout(Duration::from_secs(60), async {
+                    let global = GlobalCtx::global();
+                    let configs = state_test_filters();
+                    let init = SyncFreqFilterIpcInit::new(configs.clone(), 2, 100., 7110, 1);
+                    let filter = FreqFilter::<RunCtxImpl>::new(&configs, WsConfigs::new(2, 0, 100), 7110, 1).await?;
+                    let reference = SyncFreqFilter::<RunCtxImpl>::new_local(SyncFreqFilterIpcInit { tho_device_idx: 0, ..init.clone() })?;
+                    let input = state_test_input(1.)?;
+                    let expected = state_test_reference(&reference, &input)?;
+                    // As in production, register input copies so reset can discard
+                    // their old worker references while retaining the CPU source.
+                    let inputs = crate::runner::tmp_cache::TmpCached::new("filter reset input").await;
+                    let input_id = input.id().clone();
+                    inputs.insert(input);
+                    let input = inputs.get(&input_id).unwrap();
+                    let mut previous = SyncFreqFilter::<RunCtxImpl>::new(init.clone()).await?;
+                    let unused = SyncFreqFilter::<RunCtxImpl>::new(SyncFreqFilterIpcInit { find_motifs_run_config_id: 7111, ..init.clone() }).await?;
+                    for cycle in 0..3 {
+                        if cycle > 0 {
+                            global.cuda_actor(1).restart().await?;
+                            // Unused filters remain registered without ever being
+                            // rebuilt. They must not poison a later global offload.
+                            assert!(!unused.has_gpu_data(1).await);
+                            unused.purge_gpu(None, 1, "retired filter").await?;
+                            global.dump_all_to_cpu(1, "before filter rebuild").await?;
+                            // Exercise the retained proxy directly: new use must
+                            // rebuild its kernels instead of uploading the old dump.
+                            let output = global.execution(1).run_stage(Arc::clone(&previous), Arc::clone(&input), 1, &RunCtxImpl::new(1, "retained filter")).await?;
+                            let output = output.copy_to_device(0).await?;
+                            assert!(tch_result(output.local()?.f_allclose(&expected, 1e-4, 1e-5, false))?, "retained filter changed after reset");
+                        }
+                        // Keep the async loader alive across replacement, just as
+                        // RandomSlicesLoader does between training trial attempts.
+                        let output = Arc::clone(&filter).run(Arc::clone(&input), RunCtxImpl::new(1, "filter reset")).await?;
+                        let output = output.select_ref(0, None::<ChannelsDataSelector>).await?;
+                        assert!(tch_result(output.as_ref().local()?.f_allclose(&expected, 1e-4, 1e-5, false))?, "filter changed after reset {cycle}");
+                        let current = SyncFreqFilter::<RunCtxImpl>::new(init.clone()).await?;
+                        assert!(Arc::ptr_eq(&previous, &current), "recovery replaced the cached proxy instead of its endpoint");
+                        assert!(Arc::ptr_eq(&current, &SyncFreqFilter::<RunCtxImpl>::new(init.clone()).await?), "same-generation filter was not shared");
+                        previous = current;
+                        global.dump_all_to_cpu(1, "filter reset test").await?;
                     }
-                    // Keep the async loader alive across replacement, just as
-                    // RandomSlicesLoader does between training trial attempts.
-                    let output = Arc::clone(&filter).run(Arc::clone(&input), RunCtxImpl::new(1, "filter reset")).await?;
-                    let output = output.select_ref(0, None::<ChannelsDataSelector>).await?;
-                    assert!(tch_result(output.as_ref().local()?.f_allclose(&expected, 1e-4, 1e-5, false))?, "filter changed after reset {cycle}");
-                    let current = SyncFreqFilter::<RunCtxImpl>::new(init.clone()).await?;
-                    assert!(Arc::ptr_eq(&previous, &current), "recovery replaced the cached proxy instead of its endpoint");
-                    assert!(Arc::ptr_eq(&current, &SyncFreqFilter::<RunCtxImpl>::new(init.clone()).await?), "same-generation filter was not shared");
-                    previous = current;
-                    global.dump_all_to_cpu(1, "filter reset test").await?;
-                }
-                Ok(())
-            }).await?
-        }, async |sock| {
-            let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)?));
-            CudaWorker::run_worker(sock, &ws, HashMap::from([(SYNC_FREQ_FILTER_ENDPOINT.into(), Box::new(state_test_init) as InitFn)]), thoosa_common::tho_device::ThoDevice::from(1usize)).await
-        })
+                    Ok(())
+                })
+                .await?
+            },
+            async |sock| {
+                let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)?));
+                CudaWorker::run_worker(sock, &ws, HashMap::from([(SYNC_FREQ_FILTER_ENDPOINT.into(), Box::new(state_test_init) as InitFn)]), thoosa_common::tho_device::ThoDevice::from(1usize)).await
+            },
+        )
     }
 
     #[test]
     fn test_cached_filter_recomputes_after_worker_reset_ipc() -> Result<(), ThoError> {
-        crate::ipc::tests::run_ipc_test(module_path!(), async {
-            tokio::time::timeout(Duration::from_secs(60), async {
-                use crate::runner::common::cachable::CachedPurgeOutput;
-                let global = GlobalCtx::global();
-                let configs = state_test_filters();
-                let filter = FreqFilter::<RunCtxImpl>::new(&configs, WsConfigs::new(2, 0, 100), 7112, 1).await?;
-                let reference = SyncFreqFilter::<RunCtxImpl>::new_local(SyncFreqFilterIpcInit::new(configs, 2, 100., 7112, 0))?;
-                let input = state_test_input(1.)?;
-                let expected = state_test_reference(&reference, &input)?;
-                let inputs = crate::runner::tmp_cache::TmpCached::new("cached filter reset input").await;
-                let input_id = input.id().clone();
-                inputs.insert(input);
-                let input = inputs.get(&input_id).unwrap();
-                // Keep this cache area open so cleanup cannot offload the
-                // result to CPU and accidentally hide the lost-replica bug.
-                let mut ctx = RunCtxImpl::new(1, "cached filter reset");
-                let before = Arc::clone(&filter).run_cached(Arc::clone(&input), ctx.branch(false)).await?;
-                assert!(before.is_on_device(1) && !before.is_on_device(0));
-                let hit = Arc::clone(&filter).run_cached(Arc::clone(&input), ctx.branch(false)).await?;
-                assert!(Arc::ptr_eq(&before, &hit), "expected a cached GPU result before reset");
-                global.cuda_actor(1).restart().await?;
-                assert!(!before.has_any_data(), "reset must discard the failed worker's only replica");
-                // The input's CPU source survives. A fresh lookup must rerun
-                // the filter, using its restored endpoint, instead of returning
-                // the successful future whose output now has no replicas.
-                let after = Arc::clone(&filter).run_cached(input, ctx.branch(false)).await?;
-                assert!(!Arc::ptr_eq(&before, &after), "reset left an empty output in the cache");
-                let output = after.select_ref(0, None::<ChannelsDataSelector>).await?;
-                assert!(tch_result(output.as_ref().local()?.f_allclose(&expected, 1e-4, 1e-5, false))?, "recomputed filter output changed after reset");
-                Ok(())
-            }).await?
-        }, async |sock| {
-            let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)?));
-            CudaWorker::run_worker(sock, &ws, HashMap::from([(SYNC_FREQ_FILTER_ENDPOINT.into(), Box::new(state_test_init) as InitFn)]), thoosa_common::tho_device::ThoDevice::from(1usize)).await
-        })
+        crate::ipc::tests::run_ipc_test(
+            module_path!(),
+            async {
+                tokio::time::timeout(Duration::from_secs(60), async {
+                    use crate::runner::common::cachable::CachedPurgeOutput;
+                    let global = GlobalCtx::global();
+                    let configs = state_test_filters();
+                    let filter = FreqFilter::<RunCtxImpl>::new(&configs, WsConfigs::new(2, 0, 100), 7112, 1).await?;
+                    let reference = SyncFreqFilter::<RunCtxImpl>::new_local(SyncFreqFilterIpcInit::new(configs, 2, 100., 7112, 0))?;
+                    let input = state_test_input(1.)?;
+                    let expected = state_test_reference(&reference, &input)?;
+                    let inputs = crate::runner::tmp_cache::TmpCached::new("cached filter reset input").await;
+                    let input_id = input.id().clone();
+                    inputs.insert(input);
+                    let input = inputs.get(&input_id).unwrap();
+                    // Keep this cache area open so cleanup cannot offload the
+                    // result to CPU and accidentally hide the lost-replica bug.
+                    let mut ctx = RunCtxImpl::new(1, "cached filter reset");
+                    let before = Arc::clone(&filter).run_cached(Arc::clone(&input), ctx.branch(false)).await?;
+                    assert!(before.is_on_device(1) && !before.is_on_device(0));
+                    let hit = Arc::clone(&filter).run_cached(Arc::clone(&input), ctx.branch(false)).await?;
+                    assert!(Arc::ptr_eq(&before, &hit), "expected a cached GPU result before reset");
+                    global.cuda_actor(1).restart().await?;
+                    assert!(!before.has_any_data(), "reset must discard the failed worker's only replica");
+                    // The input's CPU source survives. A fresh lookup must rerun
+                    // the filter, using its restored endpoint, instead of returning
+                    // the successful future whose output now has no replicas.
+                    let after = Arc::clone(&filter).run_cached(input, ctx.branch(false)).await?;
+                    assert!(!Arc::ptr_eq(&before, &after), "reset left an empty output in the cache");
+                    let output = after.select_ref(0, None::<ChannelsDataSelector>).await?;
+                    assert!(tch_result(output.as_ref().local()?.f_allclose(&expected, 1e-4, 1e-5, false))?, "recomputed filter output changed after reset");
+                    Ok(())
+                })
+                .await?
+            },
+            async |sock| {
+                let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)?));
+                CudaWorker::run_worker(sock, &ws, HashMap::from([(SYNC_FREQ_FILTER_ENDPOINT.into(), Box::new(state_test_init) as InitFn)]), thoosa_common::tho_device::ThoDevice::from(1usize)).await
+            },
+        )
     }
 
     #[tokio::test]
@@ -1152,7 +1148,9 @@ mod tests {
         }
         // Model worker offload without requiring CUDA in this state-machine test.
         for filter in stage.filters.lock().await.iter_mut() {
-            if let Some(slot) = filter.tensor_mut() { slot.tensor = None; }
+            if let Some(slot) = filter.tensor_mut() {
+                slot.tensor = None;
+            }
         }
         assert!(PrepareStage::pre_run(stage.as_ref(), 0).await.is_err());
         assert!(stage.set_state_tensor(0, "unknown".into(), tch_result(Tensor::f_zeros([1], (Kind::Float, Device::Cpu)))?).await.is_err());
@@ -1165,14 +1163,15 @@ mod tests {
         while let Some((key, tensor)) = tensors.pop() {
             stage.set_state_tensor(0, key.clone(), tch_result(tensor.f_alias())?).await?;
             assert!(stage.set_state_tensor(0, key, tensor).await.is_err());
-            if !tensors.is_empty() { assert!(PrepareStage::pre_run(stage.as_ref(), 0).await.is_err()); }
+            if !tensors.is_empty() {
+                assert!(PrepareStage::pre_run(stage.as_ref(), 0).await.is_err());
+            }
         }
         let mut state = PrepareStage::pre_run(stage.as_ref(), 0).await?;
         let actual = Arc::clone(&stage).do_run_with_state(&input, &mut *state, &ctx)?;
         assert!(tch_result(actual.local()?.f_allclose(&*expected.local()?, 0., 0., false))?);
         Ok(())
     }
-
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_apply_tho_tensor_with_median_filter() -> Result<(), ThoError> {
@@ -1191,19 +1190,16 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_apply_tho_tensor_with_moving_average_filter() -> Result<(), ThoError> {
-
         let input_t = tch_result(Tensor::from_slice(&[1.0f32, 2.0, 3.0, 4.0, 5.0, 5.0, 4.0, 3.0, 2.0, 1.0]).f_view([2, 5]))?;
         let input = ThoTensor::new(SynKey::new([mono_key!("moving_average", "moving_average")]), input_t)?;
 
-        let output = Arc::new(SyncFreqFilter::<RunCtxImpl>::new_local(SyncFreqFilterIpcInit::new(vec![InputFilter::AverageFilter(AverageFilterParams { window: 4, step: 1 })], 2, 100.0, 0, 1) )?).apply_tho_tensor(&input)?;
+        let output = Arc::new(SyncFreqFilter::<RunCtxImpl>::new_local(SyncFreqFilterIpcInit::new(vec![InputFilter::AverageFilter(AverageFilterParams { window: 4, step: 1 })], 2, 100.0, 0, 1))?).apply_tho_tensor(&input)?;
         let expected = moving_average(&*input.local()?, 4, 1)?;
 
         assert!(output.local()?.allclose(&expected, 1e-5, 1e-5, false));
 
         Ok(())
     }
-
-
 
     #[test]
     fn test_hash_enum() {
@@ -1215,7 +1211,9 @@ mod tests {
             Tuple(u32),
             #[digest(name = "RenamedTuple")]
             OtherTuple(u32),
-            Named { value: u32 },
+            Named {
+                value: u32,
+            },
         }
 
         let unit_hash = EnumHashProbe::Unit.blake3_hash();
@@ -1229,9 +1227,7 @@ mod tests {
     }
 
     #[test]
-    fn test_hash(){
-
-
+    fn test_hash() {
         let init = SyncFreqFilterIpcInit::new(
             vec![
                 // Keep the smoke test non-empty so it executes the generated enum arm, not only Vec hashing.
@@ -1240,13 +1236,11 @@ mod tests {
             3,
             0.63,
             3,
-            4
+            4,
         );
 
-
-        let _d : StageHash = init.blake3_hash().into();
+        let _d: StageHash = init.blake3_hash().into();
         assert_eq!(size_of::<StageHash>(), 32);
-
     }
 }
 

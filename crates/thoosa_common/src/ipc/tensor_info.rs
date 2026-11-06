@@ -97,7 +97,4 @@ impl WorkerTensorInfoPayload {
 }
 
 #[typetag::serde]
-impl WorkerOutput for WorkerTensorInfoPayload {
-
-}
-
+impl WorkerOutput for WorkerTensorInfoPayload {}

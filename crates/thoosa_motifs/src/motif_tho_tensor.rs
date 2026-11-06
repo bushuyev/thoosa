@@ -46,11 +46,7 @@ impl<O> DerefMut for MotifWorkerOutput<O> {
     }
 }
 
-impl<O> Output for MotifWorkerOutput<O>
-where
-    O: Output,
-{
-}
+impl<O> Output for MotifWorkerOutput<O> where O: Output {}
 
 impl<O> WithId for MotifWorkerOutput<O>
 where

@@ -1,25 +1,21 @@
+use crate::runner::common::cachable::{BorrowRef, DevicesWrap, ThoDataRef};
+use dashmap::DashMap;
+use log::{debug, error};
+use rand::distr::{Alphanumeric, SampleString};
 use std::fmt::Debug;
 use std::mem;
 use std::sync::Arc;
-use dashmap::DashMap;
-use rand::distr::{Alphanumeric, SampleString};
-use log::{debug, error};
-use thoosa_shared::applicables_runner::Output;
-use thoosa_shared::ThoError;
-use thoosa_shared::traits::{Data, WithId};
 use thoosa_shared::CopyToDevice;
-use crate::runner::common::cachable::{BorrowRef, DevicesWrap, ThoDataRef};
+use thoosa_shared::ThoError;
+use thoosa_shared::applicables_runner::Output;
 use thoosa_shared::tracked_await::t;
-
-
+use thoosa_shared::traits::{Data, WithId};
 
 /// A temporary collection of automatically registered async data handles.
 #[derive(Debug)]
-pub struct TmpCached<D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static>
-{
+pub struct TmpCached<D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static> {
     pub name: String,
     map: Arc<DashMap<<D as WithId>::ID, Arc<DevicesWrap<D>>>>,
-
 }
 
 #[derive(Debug)]
@@ -37,9 +33,14 @@ pub struct TmpCachedEntry<D: Data + CopyToDevice + WithId + Output + Debug + Sen
 }
 
 impl<D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static> BorrowRef for TmpCachedEntry<D> {
-    fn protect(&self, device: usize) -> thoosa_common::runner::residency::ResidencyLease { self.value.protect(device) }
+    fn protect(&self, device: usize) -> thoosa_common::runner::residency::ResidencyLease {
+        self.value.protect(device)
+    }
 
-    type Out<'a> = ThoDataRef<'a, D> where Self: 'a;
+    type Out<'a>
+        = ThoDataRef<'a, D>
+    where
+        Self: 'a;
 
     fn borrow_ref<'a>(&'a self, device: usize) -> impl std::future::Future<Output = Result<Self::Out<'a>, ThoError>> + Send
     where
@@ -55,9 +56,10 @@ impl<D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static> D
     }
 }
 
-impl<D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static> TmpCached<D>
-{
-    pub fn ids(&self) -> Vec<D::ID> { self.map.iter().map(|entry| entry.key().clone()).collect() }
+impl<D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static> TmpCached<D> {
+    pub fn ids(&self) -> Vec<D::ID> {
+        self.map.iter().map(|entry| entry.key().clone()).collect()
+    }
 
     pub fn protect(&self, device: usize) -> thoosa_common::runner::residency::ResidencyLease {
         thoosa_common::runner::residency::ResidencyLease::combine(self.map.iter().map(|entry| entry.value().protect(device)))
@@ -100,11 +102,7 @@ impl<D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static> T
         }
     }
 
-    async fn recover_remaining_values(
-        res: &mut Vec<D>,
-        entries: impl Iterator<Item = (<D as WithId>::ID, Arc<DevicesWrap<D>>)>,
-        device: usize,
-    ) {
+    async fn recover_remaining_values(res: &mut Vec<D>, entries: impl Iterator<Item = (<D as WithId>::ID, Arc<DevicesWrap<D>>)>, device: usize) {
         for (key, val) in entries {
             if let Some(val) = Self::take_owned_wrap(&key, val) {
                 Self::recover_owned_value(res, &key, val, device).await;
@@ -116,8 +114,9 @@ impl<D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static> T
         err.context(format!("can't take from cache for {key:?}"))
     }
 
-    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TmpCached::take_all"))]
-    pub async fn take_all(self, device:usize) -> anyhow::Result<Vec<D>> {//TODO it can have only one device set when created
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "TmpCached::take_all"))]
+    pub async fn take_all(self, device: usize) -> anyhow::Result<Vec<D>> {
+        //TODO it can have only one device set when created
         match t!(self.take_all_recovering(device)).await {
             Ok(data) => Ok(data),
             Err(error) => Err(error.error.into()),
@@ -125,8 +124,9 @@ impl<D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static> T
     }
 
     //if data has been dumped to cpu and error happens when loading it back
-    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TmpCached::take_all_recovering"))]
-    pub async fn take_all_recovering(mut self, tho_device_idx:usize) -> Result<Vec<D>, TmpCacheTakeAllError<D>> {//TODO it can have only one device set when created
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "TmpCached::take_all_recovering"))]
+    pub async fn take_all_recovering(mut self, tho_device_idx: usize) -> Result<Vec<D>, TmpCacheTakeAllError<D>> {
+        //TODO it can have only one device set when created
         debug!("TmpCached::take_all_recovering: name={} map.len={}", self.name, self.map.len());
 
         let mut res = vec![];
@@ -140,20 +140,20 @@ impl<D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static> T
 
             match t!(devices_wrap.load_from_any_device_(tho_device_idx)).await.map(|guard| drop(guard)) {
                 Ok(()) => match devices_wrap.take_data(tho_device_idx).await {
-
                     Ok(value) => {
                         debug!("TmpCached::take_all: adding value={value:?}");
 
                         res.push(value)
-                    },
-                    Err(err) => {//TODO error is not not recoverable, doesn't make sense to return TmpCacheTakeAllError
+                    }
+                    Err(err) => {
+                        //TODO error is not not recoverable, doesn't make sense to return TmpCacheTakeAllError
                         debug!("TmpCached::take_all_recovering: take_data: err={err:?}");
 
                         let error = Self::contextualize_take_error(&key, err);
                         Self::recover_remaining_values(&mut res, entries, tho_device_idx).await;
                         return Err(TmpCacheTakeAllError { data: res, error });
                     }
-                }
+                },
                 Err(err) => {
                     debug!("TmpCached::take_all_recovering: load_from_any_device_: err={err:?}");
 
@@ -172,9 +172,7 @@ impl<D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static> T
         Ok(res)
     }
 
-
     pub async fn new(name: &str) -> Self {
-
         Self::register(format!("{}_{}", name, Alphanumeric.sample_string(&mut rand::rng(), 16)))
     }
 
@@ -182,36 +180,30 @@ impl<D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static> T
     // leases. The collection name is diagnostic and no longer controls eviction.
     pub fn restore(name: String, values: impl IntoIterator<Item = D>) -> Self {
         let cache = Self::register(name);
-        for value in values { cache.insert(value); }
+        for value in values {
+            cache.insert(value);
+        }
         cache
     }
 
     fn register(name: String) -> Self {
         let map: Arc<DashMap<<D as WithId>::ID, Arc<DevicesWrap<D>>>> = Arc::new(Default::default());
 
-        Self {
-            name,
-
-            map,
-        }
-
+        Self { name, map }
     }
-
 }
-
-
 
 #[cfg(test)]
 mod tests {
-    use async_trait::async_trait;
     use crate::runner::common::cachable::BorrowRef;
+    use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
+    use async_trait::async_trait;
+    use log::debug;
     use std::future::Future;
     use std::pin::Pin;
-        use log::debug;
     use thoosa_cpu_data_derive::CpuData;
-    use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_shared::applicables_runner::Output;
-    use thoosa_shared::{debug_id, CopyToDevice, ThoError, CudaAction};
+    use thoosa_shared::{CopyToDevice, CudaAction, ThoError, debug_id};
     // use crate::common::Data;
     use thoosa_shared::traits::{Data, DebugId, WithId};
     // use crate::common::Data;
@@ -232,7 +224,7 @@ mod tests {
             }
         }
 
-        impl Output for Foo {  }
+        impl Output for Foo {}
 
         let foo = Foo(debug_id!("foo"));
         let cloned = foo.clone();
@@ -243,9 +235,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
     async fn test_tmp_cache() -> Result<(), ThoError> {
-
-        use std::sync::Arc;
         use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
+        use std::sync::Arc;
         RealGlobalCtx::init_devices(2)?;
 
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
@@ -253,28 +244,22 @@ mod tests {
         #[derive(Debug, Clone)]
         struct TestData {
             id: DebugId,
-            device:usize
+            device: usize,
         }
 
         impl CopyToDevice for TestData {
-            fn copy_to_device<'life0, 'async_trait>(&'life0 self, dst_device: usize) -> Pin<Box<dyn Future<Output=Result<Self, ThoError>> + Send + 'async_trait>>
+            fn copy_to_device<'life0, 'async_trait>(&'life0 self, dst_device: usize) -> Pin<Box<dyn Future<Output = Result<Self, ThoError>> + Send + 'async_trait>>
             where
                 Self: Sized,
                 'life0: 'async_trait,
-                Self: 'async_trait
+                Self: 'async_trait,
             {
-                Box::pin(async move {
-                    Ok(TestData {
-                        id: self.id.clone(),
-                        device: dst_device
-                    })
-                })
+                Box::pin(async move { Ok(TestData { id: self.id.clone(), device: dst_device }) })
             }
         }
 
         impl Data for TestData {
             type Metrics = ();
-
 
             fn size(&self) -> Self::Metrics {
                 ()
@@ -296,16 +281,15 @@ mod tests {
                 &self.id
             }
         }
-        impl Output for TestData {  }
+        impl Output for TestData {}
 
         impl TestData {
-            pub fn new(id: DebugId, device:usize) -> Self {
-                Self { id, device}
+            pub fn new(id: DebugId, device: usize) -> Self {
+                Self { id, device }
             }
         }
 
-
-        let tmp_cache:TmpCached<TestData> = TmpCached::new("tmp").await;
+        let tmp_cache: TmpCached<TestData> = TmpCached::new("tmp").await;
         let foo_id = debug_id!("foo");
 
         tmp_cache.insert(TestData::new(foo_id.clone(), 1));
@@ -342,7 +326,6 @@ mod tests {
         assert!(queued.get(&other_id).unwrap().is_all_on_cpu().await);
 
         Ok(())
-
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
@@ -359,13 +342,12 @@ mod tests {
 
         #[async_trait]
         impl CopyToDevice for TestData {
-            async fn copy_to_device(&self, tho_dst_device: usize) -> Result<Self, ThoError> where Self:Sized{
-
+            async fn copy_to_device(&self, tho_dst_device: usize) -> Result<Self, ThoError>
+            where
+                Self: Sized,
+            {
                 if tho_dst_device == 0 {
-                    Ok(TestData {
-                        id: self.id.clone(),
-                        device: tho_dst_device,
-                    })
+                    Ok(TestData { id: self.id.clone(), device: tho_dst_device })
                 } else {
                     Err(ThoError::new_with_cause(
                         "copy failed",
@@ -373,13 +355,11 @@ mod tests {
                         thoosa_shared::tho_error::cuda_error(CudaAction::Other, "copy failed".into()),
                     ))
                 }
-
             }
         }
 
         impl Data for TestData {
             type Metrics = ();
-
 
             fn size(&self) -> Self::Metrics {
                 ()
@@ -402,34 +382,25 @@ mod tests {
             }
         }
 
-        impl Output for TestData {  }
+        impl Output for TestData {}
 
         let tmp_cache: TmpCached<TestData> = TmpCached::new("tmp").await;
         let foo_id = debug_id!("foo");
 
-        tmp_cache.insert(TestData {
-            id: foo_id.clone(),
-            device: 1,
-        });
+        tmp_cache.insert(TestData { id: foo_id.clone(), device: 1 });
 
         GlobalCtx::global().dump_all_to_cpu(1, "test").await?;
 
-        let result = tmp_cache
-            .take_all_recovering(1)
-            .await;
-
+        let result = tmp_cache.take_all_recovering(1).await;
 
         debug!("test_take_all_recovering_preserves_data_on_cuda_reset_error: result={result:?}");
 
-        let err = result
-            .expect_err("expected CUDA reset error");
+        let err = result.expect_err("expected CUDA reset error");
 
         assert_eq!(err.data.len(), 1);
         assert_eq!(err.data[0].id, foo_id);
-        assert_eq!(err.data[0].device, 0);//0 - was dumped to CPU
+        assert_eq!(err.data[0].device, 0); //0 - was dumped to CPU
 
         Ok(())
     }
-
-
 }

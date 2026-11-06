@@ -1,7 +1,7 @@
-use std::fmt::Debug;
-use std::sync::{Arc, OnceLock};
 use log::debug;
 use parking_lot::RwLock;
+use std::fmt::Debug;
+use std::sync::{Arc, OnceLock};
 use tch::{Kind, TchError, Tensor};
 use thoosa_common::utils::tensor_digest;
 
@@ -37,7 +37,7 @@ fn maybe_coherence_mock(x: &Tensor, iters: i64, eps: f64) -> Option<Result<Tenso
 }
 
 pub mod mock_criteria {
-    use super::{criteria_mocks, CoherenceMockFn, CriteriaMocks, InlierRatioMockFn, NormThicknessMockFn};
+    use super::{CoherenceMockFn, CriteriaMocks, InlierRatioMockFn, NormThicknessMockFn, criteria_mocks};
     use parking_lot::{Mutex, MutexGuard};
     use std::sync::{Arc, OnceLock};
     use tch::{TchError, Tensor};
@@ -99,7 +99,6 @@ pub mod mock_criteria {
     }
 }
 
-
 /// Quantile for x over dim=0 (x is [N, L]).
 /// Implemented via sort + select (no torch::quantile dependency).
 fn f_quantile_dim0(x: &Tensor, q: f64) -> Result<Tensor, TchError> {
@@ -148,7 +147,7 @@ fn f_quantile_1d(v: &Tensor, q: f64) -> Result<Tensor, TchError> {
 /// thickness = mean_t( q90(x[:,t]) - q10(x[:,t]) )
 /// amp       = q95(consensus) - q05(consensus)
 /// score     = 1 / (1 + k * thickness / (amp + eps))
-pub fn norm_thickness<ID:Debug>(id:&ID, x: &Tensor, eps: f64) -> Result<Tensor, TchError> {
+pub fn norm_thickness<ID: Debug>(id: &ID, x: &Tensor, eps: f64) -> Result<Tensor, TchError> {
     debug!("norm_thickness: id={id:?} tensor_digest={:?}", tensor_digest(x));
 
     if let Some(mocked) = maybe_norm_thickness_mock(x, eps) {
@@ -160,19 +159,19 @@ pub fn norm_thickness<ID:Debug>(id:&ID, x: &Tensor, eps: f64) -> Result<Tensor, 
 
     let q10 = f_quantile_dim0(x, 0.10)?;
     let q90 = f_quantile_dim0(x, 0.90)?;
-    let thickness_time = q90.f_sub(&q10)?;               // [L]
+    let thickness_time = q90.f_sub(&q10)?; // [L]
 
     let thickness_sum = thickness_time.f_sum(x.kind())?; // scalar
     let thickness = thickness_sum.f_div_scalar(l as f64)?; // scalar
 
-    let consensus = f_quantile_dim0(x, 0.50)?;           // [L]
+    let consensus = f_quantile_dim0(x, 0.50)?; // [L]
     let c_q05 = f_quantile_1d(&consensus, 0.05)?;
     let c_q95 = f_quantile_1d(&consensus, 0.95)?;
-    let amp = c_q95.f_sub(&c_q05)?;                      // scalar
+    let amp = c_q95.f_sub(&c_q05)?; // scalar
 
     // s = thickness / (amp + eps)#[cfg(test)]
     let denom = amp.f_add_scalar(eps)?;
-    let s = thickness.f_div(&denom)?;                    // scalar
+    let s = thickness.f_div(&denom)?; // scalar
 
     debug!("norm_thickness: s=\n{s}");
 
@@ -189,17 +188,16 @@ pub fn norm_thickness<ID:Debug>(id:&ID, x: &Tensor, eps: f64) -> Result<Tensor, 
     // one.f_div(&denom)
 }
 
-
 /// Helper: per-occurrence RMS residual to a consensus (both aligned in time).
 /// x: [N, L], consensus: [L] -> resid: [N]
 fn f_rms_residuals(x: &Tensor, consensus: &Tensor) -> Result<Tensor, TchError> {
     let sz = x.size();
     let l = sz[1];
 
-    let diff = x.f_sub(consensus)?;       // [N,L] (broadcast)
-    let diff2 = diff.f_mul(&diff)?;       // [N,L]
+    let diff = x.f_sub(consensus)?; // [N,L] (broadcast)
+    let diff2 = diff.f_mul(&diff)?; // [N,L]
     let sum = diff2.f_sum_dim_intlist(1, false, x.kind())?; // [N]
-    let mse = sum.f_div_scalar(l as f64)?;    // [N]
+    let mse = sum.f_div_scalar(l as f64)?; // [N]
     mse.f_sqrt()
 }
 
@@ -231,12 +229,11 @@ pub fn inlier_ratio(x: &Tensor, k: f64, eps: f64) -> Result<Tensor, TchError> {
     let abs_dev = resid.f_sub(&med)?.f_abs()?; // [N]
     let mad = f_quantile_1d(&abs_dev, 0.50)?; // scalar
 
-    let thr = med.f_add(&mad.f_mul_scalar(k)?)?
-        .f_add_scalar(eps)?; // scalar
+    let thr = med.f_add(&mad.f_mul_scalar(k)?)?.f_add_scalar(eps)?; // scalar
 
-    let inlier_mask = resid.f_le_tensor(&thr)?;          // [N] bool
-    let inlier_f = inlier_mask.f_to_kind(Kind::Float)?;  // [N]
-    let inlier_sum = inlier_f.f_sum(Kind::Float)?;       // scalar
+    let inlier_mask = resid.f_le_tensor(&thr)?; // [N] bool
+    let inlier_f = inlier_mask.f_to_kind(Kind::Float)?; // [N]
+    let inlier_sum = inlier_f.f_sum(Kind::Float)?; // scalar
     inlier_sum.f_div(&Tensor::from(n as f64).to_device(x.device()))
 }
 
@@ -258,7 +255,7 @@ pub fn coherence(x: &Tensor, iters: i64, eps: f64) -> Result<Tensor, TchError> {
 
     // center by column mean: mean over N (dim=0)
     let mean = x.f_mean_dim(0, true, x.kind())?; // [1,L]
-    let xc = x.f_sub(&mean)?;                // [N,L]
+    let xc = x.f_sub(&mean)?; // [N,L]
 
     // G = Xc * Xc^T : [N,N]
     let g = xc.f_matmul(&xc.f_transpose(0, 1)?)?;
@@ -270,11 +267,11 @@ pub fn coherence(x: &Tensor, iters: i64, eps: f64) -> Result<Tensor, TchError> {
     // power iteration for top eigenvalue
     let mut v = Tensor::randn(&[n, 1], (x.kind(), x.device()));
     for _ in 0..iters {
-        let gv = g.f_matmul(&v)?;                 // [N,1]
-        let gv2 = gv.f_mul(&gv)?;          // [N,1]
-        let norm2 = gv2.f_sum(x.kind())?;         // scalar
+        let gv = g.f_matmul(&v)?; // [N,1]
+        let gv2 = gv.f_mul(&gv)?; // [N,1]
+        let norm2 = gv2.f_sum(x.kind())?; // scalar
         let norm = norm2.f_add_scalar(eps)?.f_sqrt()?; // scalar
-        v = gv.f_div(&norm)?;              // [N,1]
+        v = gv.f_div(&norm)?; // [N,1]
     }
 
     // Rayleigh quotient λ = v^T G v
@@ -286,9 +283,6 @@ pub fn coherence(x: &Tensor, iters: i64, eps: f64) -> Result<Tensor, TchError> {
     // coherence = lambda / (trace + eps)
     lambda.f_div(&trace.f_add_scalar(eps)?)
 }
-
-
-
 
 fn scalar_like(x: &Tensor, v: f64) -> Tensor {
     Tensor::from(v).to_device(x.device()).to_kind(x.kind())
@@ -304,8 +298,8 @@ fn consensus_median(x: &Tensor) -> Result<Tensor, TchError> {
 /// Higher is "more interesting" (bigger signal).
 pub fn interesting_amp_consensus(
     x: &Tensor,
-    q_lo: f64,   // e.g. 0.05
-    q_hi: f64,   // e.g. 0.95
+    q_lo: f64, // e.g. 0.05
+    q_hi: f64, // e.g. 0.95
 ) -> Result<Tensor, TchError> {
     let sz = x.size();
     assert_eq!(sz.len(), 2, "expected [N,L]");
@@ -332,10 +326,10 @@ pub fn interesting_tv_norm(
 
     let c = consensus_median(x)?; // [L]
 
-    let c1 = c.f_narrow(0, 1, l - 1)?;     // [L-1]
-    let c0 = c.f_narrow(0, 0, l - 1)?;     // [L-1]
-    let dv = c1.f_sub(&c0)?.f_abs()?;      // [L-1]
-    let tv = dv.f_sum(x.kind())?;          // scalar
+    let c1 = c.f_narrow(0, 1, l - 1)?; // [L-1]
+    let c0 = c.f_narrow(0, 0, l - 1)?; // [L-1]
+    let dv = c1.f_sub(&c0)?.f_abs()?; // [L-1]
+    let tv = dv.f_sum(x.kind())?; // scalar
 
     let amp = interesting_amp_consensus(x, amp_q_lo, amp_q_hi)?; // scalar
     tv.f_div(&amp.f_add_scalar(eps)?) // scalar
@@ -364,7 +358,7 @@ pub fn interesting_curvature_norm(
 
     let two = scalar_like(&c, 2.0);
     let d2 = cp.f_sub(&cc.f_mul(&two)?)?.f_add(&cm)?; // [L-2]
-    let curv = d2.f_abs()?.f_sum(x.kind())?;          // scalar
+    let curv = d2.f_abs()?.f_sum(x.kind())?; // scalar
 
     let amp = interesting_amp_consensus(x, amp_q_lo, amp_q_hi)?; // scalar
     curv.f_div(&amp.f_add_scalar(eps)?) // scalar
@@ -384,16 +378,14 @@ pub fn interesting_turning_points_ratio(x: &Tensor) -> Result<Tensor, TchError> 
     let c = consensus_median(x)?; // [L]
 
     // d[t] = c[t+1]-c[t], length L-1
-    let d = c
-        .f_narrow(0, 1, l - 1)?
-        .f_sub(&c.f_narrow(0, 0, l - 1)?)?; // [L-1]
+    let d = c.f_narrow(0, 1, l - 1)?.f_sub(&c.f_narrow(0, 0, l - 1)?)?; // [L-1]
 
     let s = d.f_sign()?; // [-1,0,1], [L-1]
 
     // sign change when s[t]*s[t+1] < 0
     let s0 = s.f_narrow(0, 0, l - 2)?; // [L-2]
     let s1 = s.f_narrow(0, 1, l - 2)?; // [L-2]
-    let prod = s0.f_mul(&s1)?;         // [L-2]
+    let prod = s0.f_mul(&s1)?; // [L-2]
     let ch = prod.f_lt(0.0)?.f_to_kind(Kind::Float)?; // [L-2] float mask
     let count = ch.f_sum(Kind::Float)?; // scalar
 
@@ -401,7 +393,6 @@ pub fn interesting_turning_points_ratio(x: &Tensor) -> Result<Tensor, TchError> 
 
     count.f_div_scalar((l - 2) as f64)
 }
-
 
 /// Turning-points score with a "peak" turn count.
 ///
@@ -415,8 +406,8 @@ pub fn interesting_turning_points_ratio(x: &Tensor) -> Result<Tensor, TchError> 
 ///
 /// Output: scalar Tensor in [0,1], where 1 is "best" (at peak_turns).
 pub fn interesting_turning_points_ratio_peaked_01(
-    x: &Tensor,        // [N, L]
-    peak_turns: u32,   // P > 0
+    x: &Tensor,      // [N, L]
+    peak_turns: u32, // P > 0
 ) -> Result<Tensor, TchError> {
     let sz = x.size();
     assert_eq!(sz.len(), 2, "expected [N,L]");
@@ -428,9 +419,7 @@ pub fn interesting_turning_points_ratio_peaked_01(
     let c = f_quantile_dim0(x, 0.50)?; // [L]
 
     // d[t] = c[t+1]-c[t], length L-1
-    let d = c
-        .f_narrow(0, 1, l - 1)?
-        .f_sub(&c.f_narrow(0, 0, l - 1)?)?; // [L-1]
+    let d = c.f_narrow(0, 1, l - 1)?.f_sub(&c.f_narrow(0, 0, l - 1)?)?; // [L-1]
 
     // s[t] in {-1,0,1}
     let s = d.f_sign()?; // [L-1]
@@ -438,11 +427,9 @@ pub fn interesting_turning_points_ratio_peaked_01(
     // sign change when s[t]*s[t+1] < 0
     let s0 = s.f_narrow(0, 0, l - 2)?; // [L-2]
     let s1 = s.f_narrow(0, 1, l - 2)?; // [L-2]
-    let prod = s0.f_mul(&s1)?;         // [L-2]
-    let turns_mask = prod.f_lt(0.0)?;  // [L-2] bool
-    let turns = turns_mask
-        .f_to_kind(Kind::Float)?
-        .f_sum(Kind::Float)?;          // scalar (float)
+    let prod = s0.f_mul(&s1)?; // [L-2]
+    let turns_mask = prod.f_lt(0.0)?; // [L-2] bool
+    let turns = turns_mask.f_to_kind(Kind::Float)?.f_sum(Kind::Float)?; // scalar (float)
 
     // Triangular score around peak_turns
     let p = peak_turns as f64;
@@ -452,14 +439,11 @@ pub fn interesting_turning_points_ratio_peaked_01(
     let p_k = scalar_like(x, p);
     let p2_k = scalar_like(x, p2);
 
-    let score_left = turns_k.f_div(&p_k)?;                // T / P
+    let score_left = turns_k.f_div(&p_k)?; // T / P
     let score_right = p2_k.f_sub(&turns_k)?.f_div(&p_k)?; // (2P - T) / P
 
     let m_left = turns_k.f_le_tensor(&p_k)?.f_to_kind(x.kind())?; // 1 if T<=P else 0
-    let m_mid = turns_k
-        .f_gt_tensor(&p_k)?
-        .f_bitwise_and_tensor(&turns_k.f_lt_tensor(&p2_k)?)?
-        .f_to_kind(x.kind())?; // 1 if P<T<2P else 0
+    let m_mid = turns_k.f_gt_tensor(&p_k)?.f_bitwise_and_tensor(&turns_k.f_lt_tensor(&p2_k)?)?.f_to_kind(x.kind())?; // 1 if P<T<2P else 0
 
     // score = m_left*score_left + m_mid*score_right (else 0)
     let s_left = m_left.f_mul(&score_left)?;
@@ -480,7 +464,7 @@ pub fn interesting_turning_points_ratio_peaked_01(
 /// Example: a=2,b=3,c=5,d=7 gives:
 ///   T=2.5 -> 0.5,  T in [3,5] -> 1,  T=6 -> 0.5
 pub fn interesting_turning_points_ratio_trapezoid_01(
-    x: &Tensor,  // [N, L]
+    x: &Tensor, // [N, L]
     a: i64,
     b: i64,
     c: i64,
@@ -496,9 +480,7 @@ pub fn interesting_turning_points_ratio_trapezoid_01(
     let cns = f_quantile_dim0(x, 0.50)?; // [L]
 
     // d[t] = c[t+1] - c[t], length L-1
-    let d1 = cns
-        .f_narrow(0, 1, l - 1)?
-        .f_sub(&cns.f_narrow(0, 0, l - 1)?)?; // [L-1]
+    let d1 = cns.f_narrow(0, 1, l - 1)?.f_sub(&cns.f_narrow(0, 0, l - 1)?)?; // [L-1]
 
     // sign in {-1,0,1}
     let s = d1.f_sign()?; // [L-1]
@@ -506,11 +488,11 @@ pub fn interesting_turning_points_ratio_trapezoid_01(
     // turn when s[t]*s[t+1] < 0
     let s0 = s.f_narrow(0, 0, l - 2)?; // [L-2]
     let s1 = s.f_narrow(0, 1, l - 2)?; // [L-2]
-    let prod = s0.f_mul(&s1)?;         // [L-2]
+    let prod = s0.f_mul(&s1)?; // [L-2]
     let turns = prod
-        .f_lt(0.0)?                    // bool [L-2]
-        .f_to_kind(Kind::Float)?       // float mask
-        .f_sum(Kind::Float)?;          // scalar (float)
+        .f_lt(0.0)? // bool [L-2]
+        .f_to_kind(Kind::Float)? // float mask
+        .f_sum(Kind::Float)?; // scalar (float)
 
     let t = turns.f_to_kind(x.kind())?; // scalar in x.kind()
 
@@ -524,30 +506,17 @@ pub fn interesting_turning_points_ratio_trapezoid_01(
     let zero = scalar_like(x, 0.0);
 
     // rise: (t-a)/(b-a)
-    let rise = t
-        .f_sub(&a_k)?
-        .f_div(&b_k.f_sub(&a_k)?)?;
+    let rise = t.f_sub(&a_k)?.f_div(&b_k.f_sub(&a_k)?)?;
 
     // fall: (d-t)/(d-c)
-    let fall = d_k
-        .f_sub(&t)?
-        .f_div(&d_k.f_sub(&c_k)?)?;
+    let fall = d_k.f_sub(&t)?.f_div(&d_k.f_sub(&c_k)?)?;
 
     // masks
-    let m_rise = t
-        .f_gt_tensor(&a_k)?
-        .f_bitwise_and_tensor(&t.f_lt_tensor(&b_k)?)?
-        .f_to_kind(x.kind())?;
+    let m_rise = t.f_gt_tensor(&a_k)?.f_bitwise_and_tensor(&t.f_lt_tensor(&b_k)?)?.f_to_kind(x.kind())?;
 
-    let m_flat = t
-        .f_ge_tensor(&b_k)?
-        .f_bitwise_and_tensor(&t.f_le_tensor(&c_k)?)?
-        .f_to_kind(x.kind())?;
+    let m_flat = t.f_ge_tensor(&b_k)?.f_bitwise_and_tensor(&t.f_le_tensor(&c_k)?)?.f_to_kind(x.kind())?;
 
-    let m_fall = t
-        .f_gt_tensor(&c_k)?
-        .f_bitwise_and_tensor(&t.f_lt_tensor(&d_k)?)?
-        .f_to_kind(x.kind())?;
+    let m_fall = t.f_gt_tensor(&c_k)?.f_bitwise_and_tensor(&t.f_lt_tensor(&d_k)?)?.f_to_kind(x.kind())?;
 
     // score = m_rise*rise + m_flat*1 + m_fall*fall
     let s_r = m_rise.f_mul(&rise)?;
@@ -572,31 +541,22 @@ fn consensus_power_rfft(c: &Tensor) -> Result<Tensor, TchError> {
 /// Excludes DC from denominator.
 /// Higher => more high-frequency / fast structure.
 /// Needs sample rate to map Hz->bins.
-pub fn interesting_band_energy_ratio(
-    x: &Tensor,
-    fs: f64,
-    f_lo: f64,
-    f_hi: f64,
-    eps: f64,
-) -> Result<Tensor, TchError> {
+pub fn interesting_band_energy_ratio(x: &Tensor, fs: f64, f_lo: f64, f_hi: f64, eps: f64) -> Result<Tensor, TchError> {
     let sz = x.size();
     assert_eq!(sz.len(), 2, "expected [N,L]");
     let l = sz[1];
     assert!(l >= 2, "need L>=2");
     assert!(fs > 0.0, "fs must be > 0");
 
-    let c = consensus_median(x)?;     // [L]
+    let c = consensus_median(x)?; // [L]
     let p = consensus_power_rfft(&c)?; // [F]
-    let f_bins = p.size()[0];         // F = L/2+1
+    let f_bins = p.size()[0]; // F = L/2+1
 
     // denom: sum over bins 1..F-1 (exclude DC)
     if f_bins <= 1 {
         return Ok(scalar_like(x, 0.0));
     }
-    let denom = p
-        .f_narrow(0, 1, f_bins - 1)?
-        .f_sum(x.kind())?
-        .f_add_scalar(eps)?; // scalar
+    let denom = p.f_narrow(0, 1, f_bins - 1)?.f_sum(x.kind())?.f_add_scalar(eps)?; // scalar
 
     // map Hz -> bin index k ~= f * L / fs, clamp to [1, F-1]
     let lo_hz = f_lo.max(0.0);
@@ -609,8 +569,12 @@ pub fn interesting_band_energy_ratio(
 
     let k_min = 1i64;
     let k_max = (f_bins - 1) as i64;
-    if k_lo < k_min { k_lo = k_min; }
-    if k_hi > k_max { k_hi = k_max; }
+    if k_lo < k_min {
+        k_lo = k_min;
+    }
+    if k_hi > k_max {
+        k_hi = k_max;
+    }
 
     if k_hi < k_lo {
         return Ok(scalar_like(x, 0.0));
@@ -631,10 +595,7 @@ pub fn interesting_band_energy_ratio(
 /// - ~0 : very tonal / narrowband / simple
 /// - ~1 : very flat / noise-like
 /// Often "interesting but structured" is somewhere in the middle.
-pub fn interesting_spectral_entropy(
-    x: &Tensor,
-    eps: f64,
-) -> Result<Tensor, TchError> {
+pub fn interesting_spectral_entropy(x: &Tensor, eps: f64) -> Result<Tensor, TchError> {
     let sz = x.size();
     assert_eq!(sz.len(), 2, "expected [N,L]");
     let l = sz[1];
@@ -655,14 +616,13 @@ pub fn interesting_spectral_entropy(
 
     // H = -sum p log p
     let logp = prob.f_add_scalar(eps)?.f_log()?; // [K]
-    let plogp = prob.f_mul(&logp)?;              // [K]
-    let h = plogp.f_sum(x.kind())?.f_neg()?;     // scalar
+    let plogp = prob.f_mul(&logp)?; // [K]
+    let h = plogp.f_sum(x.kind())?.f_neg()?; // scalar
 
     let k = (f_bins - 1) as f64;
     let logk = k.ln().max(eps);
     h.f_div_scalar(logk) // scalar in ~[0,1]
 }
-
 
 /// Map s>=0 to [0,1): q = s / (s + s0)
 /// If s0 is small, q saturates fast; if large, q is conservative.
@@ -675,12 +635,12 @@ fn squash_pos_to_01(s: &Tensor, s0: f64, eps: f64) -> Result<Tensor, TchError> {
 /// 0..1, 1 good: high consensus amplitude is good.
 pub fn interesting_amp_01(
     x: &Tensor,
-    q_lo: f64,   // e.g. 0.05
-    q_hi: f64,   // e.g. 0.95
-    a0: f64,     // scale (amp == a0 => 0.5)
+    q_lo: f64, // e.g. 0.05
+    q_hi: f64, // e.g. 0.95
+    a0: f64,   // scale (amp == a0 => 0.5)
     eps: f64,
 ) -> Result<Tensor, TchError> {
-    let a = interesting_amp_consensus(x, q_lo, q_hi)?;  // scalar >=0
+    let a = interesting_amp_consensus(x, q_lo, q_hi)?; // scalar >=0
     squash_pos_to_01(&a, a0, eps)
 }
 
@@ -689,7 +649,7 @@ pub fn interesting_tv_norm_01(
     x: &Tensor,
     amp_q_lo: f64,
     amp_q_hi: f64,
-    tv0: f64,   // scale (tv_norm == tv0 => 0.5)
+    tv0: f64, // scale (tv_norm == tv0 => 0.5)
     eps: f64,
 ) -> Result<Tensor, TchError> {
     let tvn = interesting_tv_norm(x, amp_q_lo, amp_q_hi, eps)?; // scalar >=0
@@ -709,13 +669,7 @@ pub fn interesting_curvature_norm_01(
 }
 
 /// Already in [0,1], higher => more energy in the chosen band.
-pub fn interesting_band_energy_ratio_01(
-    x: &Tensor,
-    fs: f64,
-    f_lo: f64,
-    f_hi: f64,
-    eps: f64,
-) -> Result<Tensor, TchError> {
+pub fn interesting_band_energy_ratio_01(x: &Tensor, fs: f64, f_lo: f64, f_hi: f64, eps: f64) -> Result<Tensor, TchError> {
     interesting_band_energy_ratio(x, fs, f_lo, f_hi, eps)
 }
 
@@ -723,29 +677,24 @@ pub fn interesting_band_energy_ratio_01(
 /// Smooth "1 good" mapping: peak at h0 with width sigma.
 pub fn interesting_entropy_gauss_01(
     x: &Tensor,
-    h0: f64,     // preferred entropy (e.g. 0.5..0.7)
-    sigma: f64,  // width (e.g. 0.10..0.25)
+    h0: f64,    // preferred entropy (e.g. 0.5..0.7)
+    sigma: f64, // width (e.g. 0.10..0.25)
     eps: f64,
 ) -> Result<Tensor, TchError> {
     assert!(sigma > 0.0, "sigma must be > 0");
     let h = interesting_spectral_entropy(x, eps)?; // scalar ~[0,1]
 
     let z = h.f_sub_scalar(h0)?.f_div_scalar(sigma)?; // (h-h0)/sigma
-    let z2 = z.f_mul(&z)?;                             // z^2
+    let z2 = z.f_mul(&z)?; // z^2
     // q = exp(-0.5*z^2)
     let neg_half = scalar_like(x, -0.5);
-    let arg = z2.f_mul(&neg_half)?;                    // -0.5*z^2
+    let arg = z2.f_mul(&neg_half)?; // -0.5*z^2
     arg.f_exp()
 }
 
 /// Hard band-pass on entropy: 1 if H in [h_min, h_max], else 0.
 /// Useful to reject "too tonal" (low H) and "too noisy" (high H).
-pub fn interesting_entropy_band_01(
-    x: &Tensor,
-    h_min: f64,
-    h_max: f64,
-    eps: f64,
-) -> Result<Tensor, TchError> {
+pub fn interesting_entropy_band_01(x: &Tensor, h_min: f64, h_max: f64, eps: f64) -> Result<Tensor, TchError> {
     let (h_min, h_max) = if h_min <= h_max { (h_min, h_max) } else { (h_max, h_min) };
     let h = interesting_spectral_entropy(x, eps)?; // scalar
     let ge = h.f_ge(h_min)?.f_to_kind(Kind::Float)?; // scalar float mask {0,1}
@@ -754,10 +703,10 @@ pub fn interesting_entropy_band_01(
 }
 
 pub fn periodicity_acf_01_frac(
-    x: &Tensor,            // [N, L]
-    struct_frac: f64,      // e.g. 1.0/64.0
-    lag_min_frac: f64,     // e.g. 1.0/32.0
-    lag_max_frac: f64,     // e.g. 0.5
+    x: &Tensor,        // [N, L]
+    struct_frac: f64,  // e.g. 1.0/64.0
+    lag_min_frac: f64, // e.g. 1.0/32.0
+    lag_max_frac: f64, // e.g. 0.5
     struct0: f64,
     peak_good: f64,
     peak_bad: f64,
@@ -780,10 +729,18 @@ pub fn periodicity_acf_01_frac(
     let mut lag_max = (lag_max_frac * lf).round() as i64;
 
     // clamp to valid ranges
-    if struct_lag_max < 1 { struct_lag_max = 1; }
-    if lag_min < 1 { lag_min = 1; }
-    if lag_max < lag_min { lag_max = lag_min; }
-    if lag_max > l - 1 { lag_max = l - 1; }
+    if struct_lag_max < 1 {
+        struct_lag_max = 1;
+    }
+    if lag_min < 1 {
+        lag_min = 1;
+    }
+    if lag_max < lag_min {
+        lag_max = lag_min;
+    }
+    if lag_max > l - 1 {
+        lag_max = l - 1;
+    }
 
     // ensure periodicity window starts after structure window
     if lag_min <= struct_lag_max {
@@ -796,16 +753,7 @@ pub fn periodicity_acf_01_frac(
 
     // If after adjustments the window is degenerate, you can return "not periodic" or error.
     // Here we keep it valid and call the integer version.
-    periodicity_acf_01(
-        x,
-        struct_lag_max,
-        lag_min,
-        lag_max,
-        struct0,
-        peak_good,
-        peak_bad,
-        eps,
-    )
+    periodicity_acf_01(x, struct_lag_max, lag_min, lag_max, struct0, peak_good, peak_bad, eps)
 }
 
 /// Score in [0,1], where:
@@ -826,7 +774,7 @@ pub fn periodicity_acf_01_frac(
 ///
 /// eps: small number for stability
 pub fn periodicity_acf_01(
-    x: &Tensor,         // [N, L]
+    x: &Tensor, // [N, L]
     struct_lag_max: i64,
     lag_min: i64,
     lag_max: i64,
@@ -851,13 +799,10 @@ pub fn periodicity_acf_01(
 
     // center: c0 = c - mean(c)
     let mean = c.f_mean_dim(0, false, x.kind())?; // scalar
-    let c0 = c.f_sub(&mean)?;                        // [L]
+    let c0 = c.f_sub(&mean)?; // [L]
 
     // energy = sum c0^2
-    let energy = c0
-        .f_mul(&c0)?
-        .f_sum(x.kind())?
-        .f_add_scalar(eps)?; // scalar
+    let energy = c0.f_mul(&c0)?.f_sum(x.kind())?.f_add_scalar(eps)?; // scalar
 
     // rho_raw[tau] for tau=1..=lag_max  (NO abs here)
     let mut rhos: Vec<Tensor> = Vec::with_capacity(lag_max as usize);
@@ -866,7 +811,7 @@ pub fn periodicity_acf_01(
         let a = c0.f_narrow(0, 0, len)?;
         let b = c0.f_narrow(0, tau, len)?;
         let dot = a.f_mul(&b)?.f_sum(x.kind())?; // scalar
-        let rho = dot.f_div(&energy)?;           // scalar (signed)
+        let rho = dot.f_div(&energy)?; // scalar (signed)
         rhos.push(rho);
     }
     let rho_raw = Tensor::stack(&rhos, 0); // [lag_max], index i => tau=i+1
@@ -893,11 +838,9 @@ pub fn periodicity_acf_01(
     let last_slot = {
         // boundary tau=lag_max: accept if rho[lag_max] > rho[lag_max-1] and >0
         if lag_max >= 2 {
-            let last = rho_raw.f_select(0, lag_max - 1)?;     // scalar
-            let prev = rho_raw.f_select(0, lag_max - 2)?;     // scalar
-            let m = last.f_gt_tensor(&prev)?
-                .f_bitwise_and_tensor(&last.f_gt(0.0)?)?
-                .f_to_kind(x.kind())?;
+            let last = rho_raw.f_select(0, lag_max - 1)?; // scalar
+            let prev = rho_raw.f_select(0, lag_max - 2)?; // scalar
+            let m = last.f_gt_tensor(&prev)?.f_bitwise_and_tensor(&last.f_gt(0.0)?)?.f_to_kind(x.kind())?;
             // make it shape [1]
             last.f_mul(&m)?.f_unsqueeze(0)?
         } else {
@@ -907,7 +850,7 @@ pub fn periodicity_acf_01(
 
     let peaks_full = if lag_max >= 3 {
         let r_prev = rho_raw.f_narrow(0, 0, lag_max - 2)?; // tau=1..lag_max-2
-        let r_mid  = rho_raw.f_narrow(0, 1, lag_max - 2)?; // tau=2..lag_max-1
+        let r_mid = rho_raw.f_narrow(0, 1, lag_max - 2)?; // tau=2..lag_max-1
         let r_next = rho_raw.f_narrow(0, 2, lag_max - 2)?; // tau=3..lag_max
 
         let m1 = r_mid.f_gt_tensor(&r_prev)?;
@@ -945,15 +888,12 @@ pub fn periodicity_acf_01(
         let pb = scalar_like(x, peak_bad);
 
         let m_good = peak.f_le_tensor(&pg)?.f_to_kind(x.kind())?;
-        let m_bad  = peak.f_ge_tensor(&pb)?.f_to_kind(x.kind())?;
-        let m_mid  = one.f_sub(&m_good)?.f_sub(&m_bad)?;
+        let m_bad = peak.f_ge_tensor(&pb)?.f_to_kind(x.kind())?;
+        let m_mid = one.f_sub(&m_good)?.f_sub(&m_bad)?;
 
         let mid = pb.f_sub(&peak)?.f_div(&pb.f_sub(&pg)?)?;
 
-        m_good.f_mul(&one)?
-            .f_add(&m_mid.f_mul(&mid)?)?
-            .f_maximum(&zero)?
-            .f_minimum(&one)?
+        m_good.f_mul(&one)?.f_add(&m_mid.f_mul(&mid)?)?.f_maximum(&zero)?.f_minimum(&one)?
     };
 
     let score = structure01.f_mul(&anti_period01)?;
@@ -963,45 +903,33 @@ pub fn periodicity_acf_01(
 }
 #[cfg(test)]
 mod tests {
+    use crate::criteria::{interesting_turning_points_ratio, interesting_turning_points_ratio_trapezoid_01, periodicity_acf_01};
     use tch::{Device, Kind, Tensor};
-    use tracing::debug;
     use thoosa_common::transforms::utils::sin_t;
     use thoosa_common::utils;
-    use crate::criteria::{interesting_turning_points_ratio, interesting_turning_points_ratio_trapezoid_01, periodicity_acf_01};
+    use tracing::debug;
 
     #[cfg(test)]
     mod tests {
         use super::*;
+        use crate::criteria::{coherence, inlier_ratio, interesting_turning_points_ratio_peaked_01, norm_thickness};
         use tch::{TchError, Tensor};
         use thoosa_common::utils::debug_plot_impl;
-        use crate::criteria::{coherence, inlier_ratio, interesting_turning_points_ratio_peaked_01, norm_thickness};
 
         fn f64_of_scalar(t: &Tensor) -> f64 {
-            assert!(
-                t.size().is_empty(),
-                "expected scalar tensor, got size={:?}",
-                t.size()
-            );
+            assert!(t.size().is_empty(), "expected scalar tensor, got size={:?}", t.size());
             t.double_value(&[])
         }
 
         fn assert_close(got: f64, expected: f64, tol: f64) {
             let diff = (got - expected).abs();
-            assert!(
-                diff <= tol,
-                "got={got:.12}, expected={expected:.12}, diff={diff:.12}, tol={tol}",
-            );
+            assert!(diff <= tol, "got={got:.12}, expected={expected:.12}, diff={diff:.12}, tol={tol}",);
         }
 
         #[test]
         fn test_norm_thickness_identical_is_zero() -> Result<(), TchError> {
             // 3 identical occurrences => envelope thickness = 0 => score = 0
-            let x = Tensor::from_slice(&[
-                0.0f32, 1.0, 2.0, 1.0,
-                0.0,    1.0, 2.0, 1.0,
-                0.0,    1.0, 2.0, 1.0,
-            ])
-                .view([3, 4]);
+            let x = Tensor::from_slice(&[0.0f32, 1.0, 2.0, 1.0, 0.0, 1.0, 2.0, 1.0, 0.0, 1.0, 2.0, 1.0]).view([3, 4]);
 
             let s = norm_thickness(&"identical", &x, 1e-8)?;
             assert_close(f64_of_scalar(&s), 1.0, 1e-12);
@@ -1021,12 +949,7 @@ mod tests {
             // amp = q95-q05 over time = 2-0 = 2
             // s = thickness / amp = 0.1/2 = 0.05
             // with k=5 => score = 1 / (1 + 5*s) = 1 / 1.25 = 0.8
-            let x = Tensor::from_slice(&[
-                0.0f32, 1.0, 2.0, 1.0,
-                0.0,    1.1, 1.9, 1.0,
-                0.0,    0.9, 2.1, 1.0,
-            ])
-            .view([3, 4]);
+            let x = Tensor::from_slice(&[0.0f32, 1.0, 2.0, 1.0, 0.0, 1.1, 1.9, 1.0, 0.0, 0.9, 2.1, 1.0]).view([3, 4]);
 
             let s = norm_thickness(&"known_value_n3_rounding", &x, 1e-8)?;
             assert_close(f64_of_scalar(&s), 0.952381014824, 1e-6);
@@ -1035,13 +958,7 @@ mod tests {
 
         #[test]
         fn test_inlier_ratio_all_inliers_is_one() -> Result<(), TchError> {
-            let x = Tensor::from_slice(&[
-                0.0f32, 1.0, 2.0, 1.0,
-                0.0,    1.0, 2.0, 1.0,
-                0.0,    1.0, 2.0, 1.0,
-                0.0,    1.0, 2.0, 1.0,
-            ])
-                .view([4, 4]);
+            let x = Tensor::from_slice(&[0.0f32, 1.0, 2.0, 1.0, 0.0, 1.0, 2.0, 1.0, 0.0, 1.0, 2.0, 1.0, 0.0, 1.0, 2.0, 1.0]).view([4, 4]);
 
             let r = inlier_ratio(&x, 3.0, 1e-8)?;
             assert_close(f64_of_scalar(&r), 1.0, 1e-12);
@@ -1053,14 +970,7 @@ mod tests {
             // 4 good occurrences + 1 stray far away
             // consensus (median per t) == good motif, residuals good = 0
             // threshold ~= eps, so only good are inliers => 4/5 = 0.8
-            let x = Tensor::from_slice(&[
-                0.0f32, 1.0, 2.0, 1.0,
-                0.0,    1.0, 2.0, 1.0,
-                0.0,    1.0, 2.0, 1.0,
-                0.0,    1.0, 2.0, 1.0,
-                10.0,  10.0,10.0,10.0,
-            ])
-                .view([5, 4]);
+            let x = Tensor::from_slice(&[0.0f32, 1.0, 2.0, 1.0, 0.0, 1.0, 2.0, 1.0, 0.0, 1.0, 2.0, 1.0, 0.0, 1.0, 2.0, 1.0, 10.0, 10.0, 10.0, 10.0]).view([5, 4]);
 
             let r = inlier_ratio(&x, 3.0, 1e-8)?;
             assert_close(f64_of_scalar(&r), 0.8, 1e-6);
@@ -1087,10 +997,7 @@ mod tests {
             let c = coherence(&x, 30, 1e-8)?;
             let cv = f64_of_scalar(&c);
             assert!(cv.is_finite());
-            assert!(
-                cv > 0.999,
-                "expected coherence close to 1 for rank-1 data, got {cv}"
-            );
+            assert!(cv > 0.999, "expected coherence close to 1 for rank-1 data, got {cv}");
             Ok(())
         }
 
@@ -1123,15 +1030,12 @@ mod tests {
             assert!(cv.is_finite());
 
             // Should be substantially lower than 1
-            assert!(
-                (0.70..0.85).contains(&cv),
-                "expected coherence in ~[0.70,0.85], got {cv}"
-            );
+            assert!((0.70..0.85).contains(&cv), "expected coherence in ~[0.70,0.85], got {cv}");
             Ok(())
         }
 
         #[test]
-        fn test_interesting_turning_points_ratio() -> anyhow::Result<()>{
+        fn test_interesting_turning_points_ratio() -> anyhow::Result<()> {
             let t = Tensor::arange(1000, (Kind::Float, Device::Cpu)) / 200;
             let t_sin = sin_t(&t, 1.).view((1, -1));
 
@@ -1146,7 +1050,7 @@ mod tests {
         }
 
         #[test]
-        fn test_interesting_turning_points_ratio_peaked() -> anyhow::Result<()>{
+        fn test_interesting_turning_points_ratio_peaked() -> anyhow::Result<()> {
             let t = Tensor::arange(1000, (Kind::Float, Device::Cpu)) / 200;
             let t_sin = sin_t(&t, 1.).view((1, -1));
 
@@ -1163,10 +1067,7 @@ mod tests {
 
             Ok(())
         }
-
-
     }
-
 
     fn f64_of_scalar(t: &Tensor) -> f64 {
         assert!(t.size().is_empty(), "expected scalar, got {:?}", t.size());
@@ -1175,10 +1076,7 @@ mod tests {
 
     fn assert_close(got: f64, expected: f64, tol: f64) {
         let diff = (got - expected).abs();
-        assert!(
-            diff <= tol,
-            "got={got:.12}, expected={expected:.12}, diff={diff:.12}, tol={tol}"
-        );
+        assert!(diff <= tol, "got={got:.12}, expected={expected:.12}, diff={diff:.12}, tol={tol}");
     }
 
     fn make_batch_from_consensus(c: &[f32], n: i64) -> Tensor {
@@ -1192,7 +1090,7 @@ mod tests {
     }
 
     fn make_entropy_signal(width: u32, periods: u32) -> Tensor {
-        let wave_length = width/periods;
+        let wave_length = width / periods;
         let t = Tensor::arange(width as i64, (Kind::Float, Device::Cpu)) / wave_length as i64;
         (sin_t(&t, 1.) + sin_t(&t, 3.) * 0.35 + sin_t(&t, 7.) * 0.15).view((1, -1))
     }
@@ -1200,7 +1098,7 @@ mod tests {
     #[test]
     fn test_interesting_entropy_gauss_01_matches_spectral_entropy_gaussian() -> anyhow::Result<()> {
         for i in 1..=8 {
-            let signal = make_entropy_signal(2048, i);//3 frequencies
+            let signal = make_entropy_signal(2048, i); //3 frequencies
             // thoosa_common::utils::debug_plot_impl(&signal, &format!("entropy_gauss_signal_{i}"), 0)?;
 
             let eps = 1e-8;
@@ -1243,7 +1141,7 @@ mod tests {
             let score_f64_outside = f64_of_scalar(&outside);
             assert_close(score_f64_outside, 0.0, 1e-12);
 
-            debug!("i={i} score_f64_inside={score_f64_inside} score_f64_outside={score_f64_outside} h={h:?}");//always 1.0 - 0.0
+            debug!("i={i} score_f64_inside={score_f64_inside} score_f64_outside={score_f64_outside} h={h:?}"); //always 1.0 - 0.0
         }
         Ok(())
     }
@@ -1273,7 +1171,6 @@ mod tests {
         Ok(())
     }
 
-
     #[test]
     fn test_periodicity_acf_01_varies_with_periods_and_penalizes_noise() -> anyhow::Result<()> {
         let width: i64 = 2048;
@@ -1284,7 +1181,7 @@ mod tests {
         let lag_max = 1024;
         let struct0 = 0.20;
         let peak_good = 0.25;
-        let peak_bad  = 0.65;
+        let peak_bad = 0.65;
         let eps = 1e-8;
 
         // Evaluate periodic signals with different repeats.
@@ -1293,16 +1190,7 @@ mod tests {
             let x = utils::make_periodic_signal(width, periods);
             // thoosa_common::utils::debug_plot_impl(&x, &format!("periodic_signal_{periods}"), 0)?;
 
-            let s = periodicity_acf_01(
-                &x,
-                struct_lag_max,
-                lag_min,
-                lag_max,
-                struct0,
-                peak_good,
-                peak_bad,
-                eps,
-            )?;
+            let s = periodicity_acf_01(&x, struct_lag_max, lag_min, lag_max, struct0, peak_good, peak_bad, eps)?;
             let sf = f64_of_scalar(&s);
             debug!("test_periodicity_acf_01_varies_with_periods_and_penalizes_noise: periods={periods} sf={sf}");
             assert!((0.0..=1.0).contains(&sf), "score must be in [0,1], got {sf}");
@@ -1318,37 +1206,17 @@ mod tests {
         // Should not be (almost) constant.
         let min_s = scores.iter().cloned().fold(f64::INFINITY, f64::min);
         let max_s = scores.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-        assert!(
-            (max_s - min_s) > 0.20,
-            "expected noticeable spread across periods, got min={min_s:.4} max={max_s:.4} scores={scores:?}"
-        );
+        assert!((max_s - min_s) > 0.20, "expected noticeable spread across periods, got min={min_s:.4} max={max_s:.4} scores={scores:?}");
 
         // Stronger repetition should look "more periodic" => lower score.
-        assert!(
-            scores[0] > scores[7],
-            "expected periods=1 score > periods=8 score, got s1={:.4}, s8={:.4}, scores={scores:?}",
-            scores[0],
-            scores[7]
-        );
+        assert!(scores[0] > scores[7], "expected periods=1 score > periods=8 score, got s1={:.4}, s8={:.4}, scores={scores:?}", scores[0], scores[7]);
 
         // Noise should score low (unstructured).
         tch::manual_seed(0);
         let noise = Tensor::randn(&[1, width], (Kind::Float, Device::Cpu));
-        let s_noise = periodicity_acf_01(
-            &noise,
-            struct_lag_max,
-            lag_min,
-            lag_max,
-            struct0,
-            peak_good,
-            peak_bad,
-            eps,
-        )?;
+        let s_noise = periodicity_acf_01(&noise, struct_lag_max, lag_min, lag_max, struct0, peak_good, peak_bad, eps)?;
         let sn = f64_of_scalar(&s_noise);
-        assert!(
-            sn < 0.25,
-            "expected noise to get low score, got {sn:.4}"
-        );
+        assert!(sn < 0.25, "expected noise to get low score, got {sn:.4}");
 
         Ok(())
     }

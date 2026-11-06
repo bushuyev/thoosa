@@ -1,19 +1,19 @@
 use interprocess::local_socket::{
-    tokio::{prelude::*, Stream},
     GenericFilePath, GenericNamespaced, ListenerOptions, Name, ToFsName, ToNsName,
+    tokio::{Stream, prelude::*},
 };
 use log::{debug, warn};
 use std::io;
 use std::time::Duration;
-use thoosa_shared::collect_futures_eta::{collect_eta_set_device_stats, collect_eta_subscribe_progress, CollectEtaProgressState, COLLECT_ETA_PROGRESS_SOCKET_ID};
+use thoosa_shared::collect_futures_eta::{COLLECT_ETA_PROGRESS_SOCKET_ID, CollectEtaProgressState, collect_eta_set_device_stats, collect_eta_subscribe_progress};
 use thoosa_shared::device_stats::ThoDeviceStats;
+use thoosa_shared::tracked_await::t;
 use thoosa_shims::device_stats::get_device_stats;
-use torch_sys::cuda::atc_cuda_device_count;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::watch;
 use tokio::task::{JoinHandle, JoinSet};
+use torch_sys::cuda::atc_cuda_device_count;
 use tracing::Instrument;
-use thoosa_shared::tracked_await::t;
 
 type SocketResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
@@ -32,10 +32,7 @@ impl CollectEtaProgressSocketServer {
         Ok(server)
     }
 
-    fn start_with_socket_id(
-        socket_id: &str,
-        snapshot_rx: watch::Receiver<CollectEtaProgressState>,
-    ) -> io::Result<Self> {
+    fn start_with_socket_id(socket_id: &str, snapshot_rx: watch::Receiver<CollectEtaProgressState>) -> io::Result<Self> {
         let mut last_err = None;
         for name in socket_names(socket_id)? {
             match Self::start_with_name(name.clone(), snapshot_rx.clone()) {
@@ -51,94 +48,76 @@ impl CollectEtaProgressSocketServer {
         Err(last_err.unwrap_or_else(|| io::Error::other("no local socket names available")))
     }
 
-    fn start_with_name(
-        name: Name<'static>,
-        snapshot_rx: watch::Receiver<CollectEtaProgressState>,
-    ) -> io::Result<Self> {
-        let listener = ListenerOptions::new()
-            .name(name.clone())
-            .try_overwrite(true)
-            .max_spin_time(Duration::from_millis(100))
-            .create_tokio()?;
+    fn start_with_name(name: Name<'static>, snapshot_rx: watch::Receiver<CollectEtaProgressState>) -> io::Result<Self> {
+        let listener = ListenerOptions::new().name(name.clone()).try_overwrite(true).max_spin_time(Duration::from_millis(100)).create_tokio()?;
         let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
-        let task = tokio::spawn(async move {
-            // Listener ownership also owns client lifetime, including blocked writes.
-            let mut clients = JoinSet::new();
-            loop {
-                tokio::select! {
-                    changed = shutdown_rx.changed() => {
-                        if changed.is_err() || *shutdown_rx.borrow() {
-                            break;
-                        }
-                    }
-                    result = clients.join_next(), if !clients.is_empty() => {
-                        if let Some(Err(error)) = result { warn!("collect ETA socket client task failed: {error}"); }
-                    }
-                    accepted = listener.accept() => {
-                        match accepted {
-                            Ok(stream) => {
-                                let rx = snapshot_rx.clone();
-                                clients.spawn(async move {
-                                    if let Err(err) = serve_one_client(stream, rx).instrument(tracing::debug_span!("start_with_name/1", file = file!(), line = line!())).await {
-                                        debug!("collect ETA socket client disconnected: {err}");
-                                    }
-                                }.instrument(tracing::info_span!(
-                                    "progress_socket::client",
-                                    kind = "spawn",
-                                    file = file!(),
-                                    line = line!(),
-                                    task = "serve collect ETA progress socket client",
-                                )));
-                            }
-                            Err(err) => {
-                                warn!("collect ETA socket accept failed: {err}");
+        let task = tokio::spawn(
+            async move {
+                // Listener ownership also owns client lifetime, including blocked writes.
+                let mut clients = JoinSet::new();
+                loop {
+                    tokio::select! {
+                        changed = shutdown_rx.changed() => {
+                            if changed.is_err() || *shutdown_rx.borrow() {
                                 break;
+                            }
+                        }
+                        result = clients.join_next(), if !clients.is_empty() => {
+                            if let Some(Err(error)) = result { warn!("collect ETA socket client task failed: {error}"); }
+                        }
+                        accepted = listener.accept() => {
+                            match accepted {
+                                Ok(stream) => {
+                                    let rx = snapshot_rx.clone();
+                                    clients.spawn(async move {
+                                        if let Err(err) = serve_one_client(stream, rx).instrument(tracing::debug_span!("start_with_name/1", file = file!(), line = line!())).await {
+                                            debug!("collect ETA socket client disconnected: {err}");
+                                        }
+                                    }.instrument(tracing::info_span!(
+                                        "progress_socket::client",
+                                        kind = "spawn",
+                                        file = file!(),
+                                        line = line!(),
+                                        task = "serve collect ETA progress socket client",
+                                    )));
+                                }
+                                Err(err) => {
+                                    warn!("collect ETA socket accept failed: {err}");
+                                    break;
+                                }
                             }
                         }
                     }
                 }
+                // Abort interrupts both snapshot waits and socket writes; joining makes
+                // shutdown completion mean every accepted client has released its stream.
+                clients.abort_all();
+                while clients.join_next().await.is_some() {}
             }
-            // Abort interrupts both snapshot waits and socket writes; joining makes
-            // shutdown completion mean every accepted client has released its stream.
-            clients.abort_all();
-            while clients.join_next().await.is_some() {}
-        }.instrument(tracing::info_span!(
-            "progress_socket::server",
-            kind = "spawn",
-            file = file!(),
-            line = line!(),
-            task = "accept collect ETA progress socket clients",
-        )));
+            .instrument(tracing::info_span!("progress_socket::server", kind = "spawn", file = file!(), line = line!(), task = "accept collect ETA progress socket clients",)),
+        );
 
-        Ok(Self {
-            name,
-            shutdown_tx,
-            task: Some(task),
-            stats_task: None,
-        })
+        Ok(Self { name, shutdown_tx, task: Some(task), stats_task: None })
     }
 
     fn spawn_device_stats_task(&self) -> JoinHandle<()> {
         let mut shutdown_rx = self.shutdown_tx.subscribe();
-        tokio::spawn(async move {
-            loop {
-                collect_eta_set_device_stats(read_device_stats_snapshot());
-                tokio::select! {
-                    changed = shutdown_rx.changed() => {
-                        if changed.is_err() || *shutdown_rx.borrow() {
-                            break;
+        tokio::spawn(
+            async move {
+                loop {
+                    collect_eta_set_device_stats(read_device_stats_snapshot());
+                    tokio::select! {
+                        changed = shutdown_rx.changed() => {
+                            if changed.is_err() || *shutdown_rx.borrow() {
+                                break;
+                            }
                         }
+                        _ = tokio::time::sleep(Duration::from_secs(1)) => {}
                     }
-                    _ = tokio::time::sleep(Duration::from_secs(1)) => {}
                 }
             }
-        }.instrument(tracing::info_span!(
-            "progress_socket::device_stats",
-            kind = "spawn",
-            file = file!(),
-            line = line!(),
-            task = "publish device stats snapshots",
-        )))
+            .instrument(tracing::info_span!("progress_socket::device_stats", kind = "spawn", file = file!(), line = line!(), task = "publish device stats snapshots",)),
+        )
     }
 
     #[cfg(test)]
@@ -208,10 +187,7 @@ fn should_try_fallback(err: &io::Error) -> bool {
     matches!(err.kind(), io::ErrorKind::PermissionDenied | io::ErrorKind::AddrNotAvailable | io::ErrorKind::InvalidInput)
 }
 
-async fn serve_one_client(
-    stream: Stream,
-    mut rx: watch::Receiver<CollectEtaProgressState>,
-) -> SocketResult<()> {
+async fn serve_one_client(stream: Stream, mut rx: watch::Receiver<CollectEtaProgressState>) -> SocketResult<()> {
     let mut writer = &stream;
     let first = rx.borrow_and_update().clone();
     t!(send_snapshot(&mut writer, &first)).await?;
@@ -242,12 +218,12 @@ where
 #[cfg(test)]
 mod tests {
     use super::{CollectEtaProgressSocketServer, SocketResult};
-    use interprocess::local_socket::tokio::{prelude::*, Stream};
+    use interprocess::local_socket::tokio::{Stream, prelude::*};
     use std::process;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::Duration;
-    use thoosa_shared::futures_limits::{ENTRY, FutureLimitProgressEntry};
     use thoosa_shared::collect_futures_eta::{CollectEtaProgressInvocation, CollectEtaProgressState};
+    use thoosa_shared::futures_limits::{ENTRY, FutureLimitProgressEntry};
     use tokio::io::{AsyncBufReadExt, BufReader};
     use tokio::sync::watch;
     use tokio::time::timeout;
@@ -276,13 +252,20 @@ mod tests {
     #[tokio::test]
     async fn test_shutdown_releases_clients_that_do_not_read() -> SocketResult<()> {
         let mut snapshot = CollectEtaProgressState::default();
-        snapshot.invocations.push(CollectEtaProgressInvocation { descr: "x".repeat(8 * 1024 * 1024), total: 1, completed: 0 });
+        snapshot.invocations.push(CollectEtaProgressInvocation {
+            descr: "x".repeat(8 * 1024 * 1024),
+            total: 1,
+            completed: 0,
+        });
         let (snapshot_tx, snapshot_rx) = watch::channel(snapshot);
         let server = CollectEtaProgressSocketServer::start_with_socket_id(&next_test_socket_id(), snapshot_rx)?;
         let _stream = Stream::connect(server.name()).await?;
         timeout(Duration::from_secs(5), async {
-            while snapshot_tx.receiver_count() < 2 { tokio::task::yield_now().await; }
-        }).await?;
+            while snapshot_tx.receiver_count() < 2 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
         // A snapshot larger than the socket buffer blocks write_all without a reader.
         tokio::task::yield_now().await;
         timeout(Duration::from_secs(5), server.shutdown()).await?;
@@ -331,12 +314,15 @@ mod tests {
         );
         assert_eq!(second.started_at_unix_ms, 111);
         assert_eq!(second.oom_all_failed, 1);
-        assert_eq!(second.futures_limits, vec![FutureLimitProgressEntry {
-            descr: ENTRY.to_string(),
-            limit: 4,
-            registrations: 1,
-            weight: 1,
-        }]);
+        assert_eq!(
+            second.futures_limits,
+            vec![FutureLimitProgressEntry {
+                descr: ENTRY.to_string(),
+                limit: 4,
+                registrations: 1,
+                weight: 1,
+            }]
+        );
 
         snapshot_tx.send(CollectEtaProgressState {
             invocations: vec![
@@ -345,11 +331,7 @@ mod tests {
                     total: 10,
                     completed: 7,
                 },
-                CollectEtaProgressInvocation {
-                    descr: "train_net".to_string(),
-                    total: 4,
-                    completed: 1,
-                },
+                CollectEtaProgressInvocation { descr: "train_net".to_string(), total: 4, completed: 1 },
             ],
             started_at_unix_ms: 222,
             oom_all_failed: 2,
@@ -368,11 +350,7 @@ mod tests {
                     total: 10,
                     completed: 7,
                 },
-                CollectEtaProgressInvocation {
-                    descr: "train_net".to_string(),
-                    total: 4,
-                    completed: 1,
-                },
+                CollectEtaProgressInvocation { descr: "train_net".to_string(), total: 4, completed: 1 },
             ]
         );
         assert_eq!(third.started_at_unix_ms, 222);

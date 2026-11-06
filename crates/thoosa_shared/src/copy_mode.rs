@@ -1,23 +1,21 @@
-use std::marker::PhantomData;
 use crate::CopyToDevice;
 use crate::traits::Data;
+use std::marker::PhantomData;
 
 pub trait CopyMode {}
 
 #[derive(Debug)]
-pub struct CpuOnly<O>//TODO rename to MonoDevice - it's used also for structs having refs to  Tensors like CrossInput
+pub struct CpuOnly<O>
+//TODO rename to MonoDevice - it's used also for structs having refs to  Tensors like CrossInput
 {
-    pd:PhantomData<O>
+    pd: PhantomData<O>,
 }
 
-impl<O> CopyMode for CpuOnly<O>
-where
-    O:Data
-{}
+impl<O> CopyMode for CpuOnly<O> where O: Data {}
 
 impl<O> CpuOnly<O>
 where
-    O:Data
+    O: Data,
 {
     pub fn new() -> Self {
         Self { pd: PhantomData }
@@ -25,12 +23,10 @@ where
 }
 
 #[derive(Debug)]
-pub struct CpuOrGpu<O>//TODO remove
+pub struct CpuOrGpu<O>
+//TODO remove
 {
-    pd:PhantomData<O>
+    pd: PhantomData<O>,
 }
 
-impl<O> CopyMode for CpuOrGpu<O>
-where
-    O:Data + CopyToDevice
-{}
+impl<O> CopyMode for CpuOrGpu<O> where O: Data + CopyToDevice {}

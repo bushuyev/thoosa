@@ -19,5 +19,4 @@ pub const EXTEND_MOTIFS: u32 = 16;
 
 pub const STFT: u32 = 17;
 
-
 pub const APPLY_LABEL_NET: u32 = 18;
