@@ -20,6 +20,7 @@ retries = 0
 [profile.ipc]
 test-threads = 1
 default-filter = 'test(/_ipc$/) & not test(/::heavy[^:]*$/)'
+slow-timeout = { period = "1m", terminate-after = 3, grace-period = "5s" }
 retries = 0
 
 
@@ -42,6 +43,7 @@ run-wrapper = 'passthrough'
 
 [profile.heavy]
 default-filter = 'test(/::heavy[^:]*$/)'
+slow-timeout = { period = "10m", terminate-after = 30, grace-period = "5s" }
 retries = 0
 
 [[profile.heavy.overrides]]

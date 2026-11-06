@@ -108,8 +108,11 @@ where
 }
 
 async fn collect_outcomes<T, F>(
-    futures: impl Iterator<Item = F>, len: usize, buffer_limit: Arc<watch::Receiver<usize>>,
-    buffering: FuturesOrdering, descr: &str,
+    futures: impl Iterator<Item = F>,
+    len: usize,
+    buffer_limit: Arc<watch::Receiver<usize>>,
+    buffering: FuturesOrdering,
+    descr: &str,
 ) -> Vec<(usize, Result<T, ThoError>)>
 where
     T: Debug + Send + 'static,

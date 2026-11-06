@@ -483,7 +483,9 @@ impl SyncStageRunner {
         queue_capacity: usize,
         recovery: Arc<CudaRecoveryCoordinator>,
     ) -> Self {
-        Self::new_inner_with_buffer_limits(queue_capacity, recovery.gate().device_idx(), Some(recovery), Arc::clone(futures_limits()))
+        Self::new_inner_with_buffer_limits(
+            queue_capacity, recovery.gate().device_idx(), Some(recovery), Arc::clone(futures_limits())
+        )
     }
 
     fn new_inner_with_buffer_limits(

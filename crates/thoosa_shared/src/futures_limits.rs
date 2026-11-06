@@ -1,6 +1,6 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, LazyLock};
-
+use log::info;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
@@ -17,7 +17,7 @@ const ENTRY_FUTURE_WEIGHT: usize = 3;
 const DEFAULT_FUTURE_WEIGHT: usize = 1;
 // Increase only after a clean success streak; one OOM per 16 completed sync jobs is excessive.
 const SUCCESSFUL_EXECUTIONS_PER_INCREASE: usize = 4;
-const OOM_RATE_MIN_EXECUTIONS: usize = 8;
+const OOM_RATE_MIN_EXECUTIONS: usize = 4;
 const OOM_RATE_DENOMINATOR: usize = 16;
 const FEEDBACK_WINDOW_CAPACITY: usize = 64;
 
@@ -322,6 +322,8 @@ impl FuturesLimits {
     }
 
     pub fn on_oom(&self) {
+        debug!("FuturesLimits::on_oom");
+
         let mut state = self.state.lock();
         state.consecutive_ok = 0;
         state.increase_blocked_for = OOM_RATE_MIN_EXECUTIONS;
@@ -332,15 +334,15 @@ impl FuturesLimits {
 
     pub fn on_ok(&self) {
         let mut state = self.state.lock();
+        debug!("FuturesLimits::on_ok");
+
         Self::push_feedback(&mut state, false);
+        state.consecutive_ok += 1;
 
         if state.increase_blocked_for > 0 {
             state.increase_blocked_for -= 1;
-            state.consecutive_ok = 0;
             return;
         }
-
-        state.consecutive_ok += 1;
 
         if state.consecutive_ok >= SUCCESSFUL_EXECUTIONS_PER_INCREASE {
             state.consecutive_ok = 0;
@@ -380,6 +382,8 @@ impl FuturesLimits {
     }
 
     fn decrease_if_oom_rate_high(&self, state: &mut FuturesLimitsState) -> bool {
+        debug!("FuturesLimits::decrease_if_oom_rate_high: 0. state={state:?}");
+
         if state.feedback_window.len() < OOM_RATE_MIN_EXECUTIONS
             || state.feedback_window_ooms.saturating_mul(OOM_RATE_DENOMINATOR) < state.feedback_window.len()
         {
@@ -391,11 +395,13 @@ impl FuturesLimits {
         state.feedback_window_ooms = 0;
         state.consecutive_ok = 0;
         self.rebalance_future_limits(state);
+
         debug!(old_limit, new_limit, "decreased adaptive parallelism after frequent OOMs");
         true
     }
 
     fn rebalance_future_limits(&self, state: &FuturesLimitsState) {
+        debug!("FuturesLimits::rebalance_future_limits: 0. state={state:?}");
         if state.active_registrations == 0 {
             self.publish_future_limits(Vec::new());
             return;
@@ -410,6 +416,8 @@ impl FuturesLimits {
             let collector_limit = (self.sync_execution_limiter.limit().saturating_mul(entry.weight) / total_weight).max(1);
             entry.limit.set(collector_limit);
         }
+        debug!("FuturesLimits::rebalance_future_limits: 1. state={state:?}");
+
         self.publish_future_limits(Self::future_limits_snapshot(state));
     }
 
@@ -454,6 +462,7 @@ pub fn futures_limits() -> &'static Arc<FuturesLimits> {
 
 #[cfg(test)]
 mod tests {
+    use log::debug;
     use super::{FuturesLimits, COPY_D2H, OOM_RATE_MIN_EXECUTIONS, SUCCESSFUL_EXECUTIONS_PER_INCREASE};
 
     #[test]
@@ -526,14 +535,29 @@ mod tests {
     fn test_successful_execution_streak_increases_limits() {
         let limits = FuturesLimits::new_with_parallelism(8, 32);
         let initial_limit = limits.max_parallel_jobs();
-        let collector = limits.register("collector");
+        let collector_0 = limits.register("collector_0");
+        let collector_1 = limits.register("collector_1");
 
-        for _ in 0..SUCCESSFUL_EXECUTIONS_PER_INCREASE {
+
+        let limit_00 = *collector_0.receiver().borrow();
+        let limit_01 = *collector_1.receiver().borrow();
+
+
+        for _ in 0..SUCCESSFUL_EXECUTIONS_PER_INCREASE * 2 {
             limits.on_ok();
         }
 
-        assert_eq!(limits.max_parallel_jobs(), initial_limit + 1);
-        assert_eq!(*collector.receiver().borrow(), initial_limit + 1);
+        for _ in 0..SUCCESSFUL_EXECUTIONS_PER_INCREASE * 2 {
+            limits.on_oom();
+        }
+
+        for _ in 0..SUCCESSFUL_EXECUTIONS_PER_INCREASE * 5 {
+            limits.on_ok();
+        }
+
+        assert_eq!(limits.max_parallel_jobs(), initial_limit + 4);
+        assert_eq!(*collector_0.receiver().borrow(), limit_00 + 2);
+        assert_eq!(*collector_1.receiver().borrow(), limit_01 + 2);
     }
 
     #[test]
