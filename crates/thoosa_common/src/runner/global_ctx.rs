@@ -2,7 +2,7 @@ use crate::runner::purge::CachePurger;
 use log::{debug, error, info, warn};
 #[allow(unused_imports)]
 use mockall::automock;
-use crate::copy_ctx::{ CudaActorHandle, CudaLocalActorHandle};
+use crate::cuda_copier::{CudaActorHandle, CudaLocalActorHandle};
 use crate::ipc::cuda_process::CudaIPCActorHandle;
 use crate::runner::syn_stage_runner::SyncStageRunner;
 use crate::runner::cuda_recovery::CudaRecoveryCoordinator;

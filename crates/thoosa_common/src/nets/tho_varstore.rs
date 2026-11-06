@@ -3,7 +3,7 @@ use anyhow::Context as _;
 use crate::dims::{Batch, Dims};
 #[cfg(test)]
 use crate::dims::AnyDims;
-use crate::copy_ctx::{complete_cuda_stream, finish_cuda_run};
+use crate::cuda_copier::{complete_cuda_stream, finish_cuda_run};
 #[cfg(test)]
 use crate::nets::builder::{Node, SeqBuilder};
 use crate::nets::nodes::ThoModule;
@@ -428,7 +428,7 @@ where
         // The execution stream is set either in `impl dyn CudaActorHandle::run_stage/consume_stage` in Local Mode or in thoosa_common::ipc::wraps::run_worker_stage(_with_state) in IPC mode.
         // this does not fit the usual approach of setting/synching stream outside SyncStages
         let stream = match Device::from(self.opt_state.device()) {
-            Device::Cuda(index) => Some(ThoCudaStream::current(index as i32)?),//steam from StreamGuard returned from thoosa_common::copy_ctx::HandleCtx::sync_ctx
+            Device::Cuda(index) => Some(ThoCudaStream::current(index as i32)?),//steam from StreamGuard returned from thoosa_common::cuda_copier::HandleCtx::sync_ctx
             _ => None,
         };
         self.training_transaction_with(run, |module| {

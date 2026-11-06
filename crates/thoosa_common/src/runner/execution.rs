@@ -2,7 +2,7 @@
 //! Kernel traits never advertise remote or consuming operations they cannot run.
 use std::{borrow::Borrow, fmt::Debug, future::Future, sync::Arc};
 use thoosa_shared::{ThoError, traits::{Stage, ThoSelector}};
-use crate::copy_ctx::{HandleCtx, LocalCudaExecution, run_cuda_stage, finish_cuda_panic, finish_cuda_run, finish_cuda_error};
+use crate::cuda_copier::{HandleCtx, LocalCudaExecution, run_cuda_stage, finish_cuda_panic, finish_cuda_run, finish_cuda_error};
 use crate::runner::{common::cachable::{BorrowRef, ConsumeData, SelectRef}, global_ctx::{CudaActorHandleEnum, DeviceExecutionCtx}, sync_stage::{SyncStage, ConsumingStage, StageWithState, ConsumeResult}};
 
 pub trait StageExecution: Stage + Send + Sync {

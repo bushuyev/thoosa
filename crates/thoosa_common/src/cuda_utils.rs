@@ -269,7 +269,7 @@ struct CopyCompletion<T> {
 }
 
 impl<T> CopyCompletion<T> {
-    fn finish(&mut self, completion: crate::copy_ctx::StreamCompletion) -> Result<(), ThoError> {
+    fn finish(&mut self, completion: crate::cuda_copier::StreamCompletion) -> Result<(), ThoError> {
         self.submitted = false;
         if !completion.confirmed {
             self.pool.fail(completion.result.as_ref().unwrap_err().clone());
@@ -284,7 +284,7 @@ impl<T> CopyCompletion<T> {
 impl<T> Drop for CopyCompletion<T> {
     fn drop(&mut self) {
         if self.submitted {
-            let completion = crate::copy_ctx::complete_cuda_stream(self.stream.synchronize(), || self.stream.synchronize());
+            let completion = crate::cuda_copier::complete_cuda_stream(self.stream.synchronize(), || self.stream.synchronize());
             if let Err(error) = self.finish(completion) { log::debug!("CUDA copy unwind synchronization failed: {error:#}"); }
         }
     }
@@ -383,16 +383,16 @@ async fn copy_d2h_transfers(gate: &Arc<thoosa_shared::CudaActivityGate>, transfe
                             // Drain all submitted slices once, also after a partial
                             // submission failure. Failed batches never publish a snapshot.
                             let sync = if completion.submitted {
-                                completion.finish(crate::copy_ctx::complete_cuda_stream(stream.synchronize(), || stream.synchronize()))
+                                completion.finish(crate::cuda_copier::complete_cuda_stream(stream.synchronize(), || stream.synchronize()))
                             } else { Ok(()) };
-                            crate::copy_ctx::finish_cuda_run(submitted, sync)?;
+                            crate::cuda_copier::finish_cuda_run(submitted, sync)?;
                             for slice in &batch {
                                 let destination = transfers[slice.tensor].0.destination.address + slice.offset;
                                 unsafe { std::ptr::copy_nonoverlapping(pinned.add(slice.pinned_offset), destination as *mut u8, slice.len); }
                             }
                             Ok(())
                         }).await;
-                        crate::copy_ctx::finish_cuda_run(joined_copy_result(result), pool.check())
+                        crate::cuda_copier::finish_cuda_run(joined_copy_result(result), pool.check())
                     }
                 }), count, FuturesOrdering::Unordered,
                                       thoosa_shared::CollectionErrorPolicy::Propagate, COPY_D2H).await.map(|_| ())
@@ -474,8 +474,8 @@ async fn copy_transfer(
                             };
                             // Drain even after a failed submission. Preserve the original
                             // CUDA action when a second synchronization establishes completion.
-                            let sync = completion.finish(crate::copy_ctx::complete_cuda_stream(stream.synchronize(), || stream.synchronize()));
-                            crate::copy_ctx::finish_cuda_run(check_cuda_status(submitted, "CUDA copy submission"), sync)?;
+                            let sync = completion.finish(crate::cuda_copier::complete_cuda_stream(stream.synchronize(), || stream.synchronize()));
+                            crate::cuda_copier::finish_cuda_run(check_cuda_status(submitted, "CUDA copy submission"), sync)?;
                             if matches!(direction, CopyDirection::ToCpu) {
                                 unsafe { std::ptr::copy_nonoverlapping(pinned, destination as *mut u8, chunk.len); }
                             }
@@ -483,7 +483,7 @@ async fn copy_transfer(
                         }).await;
                         // The collector drains all chunks and prioritizes fatal failures,
                         // including a task panic alongside a failed stream completion.
-                        crate::copy_ctx::finish_cuda_run(joined_copy_result(result), pool.check())
+                        crate::cuda_copier::finish_cuda_run(joined_copy_result(result), pool.check())
                     }
                 }), count, FuturesOrdering::Unordered,
                                       thoosa_shared::CollectionErrorPolicy::Propagate, label).await.map(|_| ())
@@ -682,7 +682,7 @@ pub fn fail_with_unrecoverable_error(){
 #[allow(unused_imports, unused_variables, dead_code)]
 mod tests {
     use crate::tch_error::tch_result;
-    use crate::copy_ctx::CopyCtx;
+    use crate::cuda_copier::CudaCopier;
     use crate::cuda_utils::{
         PinnedHostBuffer, copy_d2h, copy_h2d, cuda_mem, equal_bytes, pack_bits_bool, speed_gb_per_s, unpack_bits_u8,
     };
@@ -733,12 +733,12 @@ mod tests {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
 
-            let mut ctx: Option<UnsafeCell<crate::copy_ctx::CopyCtx>> = None;
+            let mut ctx: Option<UnsafeCell<crate::cuda_copier::CudaCopier>> = None;
 
             for mem_k in [0.1, 0.2, 0.4, 0.6, 0.8, 1.0, 2.] {
                 for buffs in [2, 4, 8, 16, 32, 64] {
                     if ctx.is_none() {
-                        ctx = Some(UnsafeCell::new(CopyCtx::make_instance_for_cuda_device(0, mem_k, buffs)?));
+                        ctx = Some(UnsafeCell::new(CudaCopier::make_instance_for_cuda_device(0, mem_k, buffs)?));
                     } else {
                         ctx.as_mut().unwrap().get_mut().rebuild(mem_k, buffs)?
                     }
@@ -761,7 +761,7 @@ mod tests {
         futures_limits().force(COPY_H2D, 10);
         futures_limits().force(COPY_D2H, 10);
 
-        let ctx:&'static CopyCtx = Box::leak(Box::new(CopyCtx::make_instance_for_cuda_device(0, 0.2, 16)?));
+        let ctx:&'static CudaCopier = Box::leak(Box::new(CudaCopier::make_instance_for_cuda_device(0, 0.2, 16)?));
 
         let (d2h, h2d) = run_test_copy_from_ptr(ctx, 3, 10).await;
         info!("\n Copy d2h speed: {d2h:#2} GB/s, h2d speed {h2d:#2} GB/s");
@@ -771,7 +771,7 @@ mod tests {
     }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="run_test_copy_from_ptr"))]
-    async fn run_test_copy_from_ptr(ctx: &'static CopyCtx, threads: u8, runs: u8) -> (f64, f64) {
+    async fn run_test_copy_from_ptr(ctx: &'static CudaCopier, threads: u8, runs: u8) -> (f64, f64) {
         let (_free_mem, total_mem) = cuda_mem();
 
         let init_type = Float;
@@ -823,7 +823,7 @@ mod tests {
 
         d2h_time: Arc<AtomicU64>,
         h2d_time: Arc<AtomicU64>,
-        ctx: &CopyCtx,
+        ctx: &CudaCopier,
     ) -> Result<(), ThoError> {
 
         for _t in 0..runs {
@@ -1036,7 +1036,7 @@ mod tests {
 
         for mem_k in [0.1, 0.5, 1.] {
             for buffs in [2, 4, 8, 16, 32] {
-                let copy_ctx = CopyCtx::make_instance_for_cuda_device(0, mem_k, buffs)?;
+                let cuda_copier = CudaCopier::make_instance_for_cuda_device(0, mem_k, buffs)?;
 
                 let mut copy_unfold_time = 0;
                 let mut unfold_copy_time = 0;
@@ -1049,7 +1049,7 @@ mod tests {
                     if i % 2 == 0 {
                         let t_0 = Instant::now();
 
-                        let cuda_t = copy_ctx
+                        let cuda_t = cuda_copier
                             .copy(tch_result(t.f_alias())?, 1)
                             .await?;
                         let unfolded = cuda_t.unfold(1, 100, 10).contiguous();
@@ -1059,7 +1059,7 @@ mod tests {
                         let t_0 = Instant::now();
                         let t = t.unfold(1, 100, 10).contiguous();
 
-                        let cuda_t = copy_ctx
+                        let cuda_t = cuda_copier
                             .copy(tch_result(t.f_alias())?, 1)
                             .await;
 
@@ -1353,7 +1353,7 @@ mod transfer_lifetime_tests {
         let mut completion = CopyCompletion { resources: Some((transfer, buffer)), submitted: true, pool: Arc::clone(&pool), stream };
         // Both drain attempts fail without a fatal code. Do not invent one, but
         // still retain potentially live storage and reject ordinary reuse.
-        let drained = crate::copy_ctx::complete_cuda_stream(Err(ThoError::oom()), || Err(ThoError::oom()));
+        let drained = crate::cuda_copier::complete_cuda_stream(Err(ThoError::oom()), || Err(ThoError::oom()));
         let error = completion.finish(drained).unwrap_err();
         assert!(error.is_cuda_recovery_failed() && !error.needs_cuda_recovery());
         drop(completion);

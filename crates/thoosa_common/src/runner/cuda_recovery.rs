@@ -287,7 +287,7 @@ mod tests {
         let gate = Arc::new(CudaActivityGate::new(1));
         let (failure_tx, mut failure_rx) = tokio::sync::mpsc::unbounded_channel();
         let coordinator = CudaRecoveryCoordinator::with_backend(Arc::clone(&gate), Arc::new(|_| panic!("uncertain local completion must not reset live LibTorch")), None, Some(Arc::new(move |failure| { failure_tx.send(failure).unwrap(); })));
-        let failure = crate::copy_ctx::complete_cuda_stream(Err(ThoError::oom()), || Err(ThoError::oom())).result.unwrap_err();
+        let failure = crate::cuda_copier::complete_cuda_stream(Err(ThoError::oom()), || Err(ThoError::oom())).result.unwrap_err();
         assert!(!failure.needs_cuda_recovery());
         let error = coordinator.request(gate.device_generation(), failure, drained).unwrap_err();
         assert!(error.is_cuda_recovery_failed());

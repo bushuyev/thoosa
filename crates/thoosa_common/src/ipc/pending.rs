@@ -231,7 +231,7 @@ mod tests {
         pending.enqueue(tx.reserve().await.unwrap(), CudaWorkerMsgIn::new(worker(), 1, Operation::Debug), reply, Some(Box::new(storage)), false).unwrap();
         // A failed drain is the last-resort transport failure, even though both
         // underlying errors are recoverable in isolation. DMA may still be live.
-        let error = crate::copy_ctx::complete_cuda_stream(Err(ThoError::oom()), || Err(ThoError::oom())).result.unwrap_err();
+        let error = crate::cuda_copier::complete_cuda_stream(Err(ThoError::oom()), || Err(ThoError::oom())).result.unwrap_err();
         pending.complete(CudaWorkerMsgOut { worker_id: worker(), request_id: 1, status: error.into() }).unwrap();
         assert!(matches!(response.await.unwrap().unwrap().status, OpResult::Failed(_)));
         assert!(pending.failed.is_cancelled());
