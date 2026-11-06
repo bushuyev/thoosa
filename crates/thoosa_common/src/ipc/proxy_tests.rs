@@ -20,7 +20,7 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use thoosa_shared::applicables_runner::{Input, Output};
-use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::tracked_await::t;
 use thoosa_shared::traits::{MaxParallelCtx, Named, RunCtx, Stage, WithId};
 use thoosa_common::runner::sync_stage::SyncStage;
 use thoosa_shared::{CopyToDevice, ThoError};
@@ -78,7 +78,7 @@ impl<'a> BorrowRef for TestInputA<'a> {
                 Ok(ThoDataRef::Borrowed(self))
             } else {
                 Ok(ThoDataRef::Owned(TestInputA {
-                    value: track_await!(self.value.copy_to_device(to_tho_device_idx)).await?,
+                    value: t!(self.value.copy_to_device(to_tho_device_idx)).await?,
                     fail_with_oom: self.fail_with_oom,
                     // Own the copied field so the returned value does not borrow from this temporary operation.
                     name: Cow::Owned(self.name.to_string()),

@@ -7,7 +7,7 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::ops::{AddAssign, DivAssign, Range};
 use thoosa_shared::ThoError;
-use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::tracked_await::t;
 use thoosa_shared::traits::Stage;
 use thoosa_shared::traits::{Adjustable, Data, Metrics};
 
@@ -138,7 +138,7 @@ where
 {
     async fn add_partial_output(&mut self, o: R::Out) -> Result<(), ThoError> {
         // Commit split progress only after assembly succeeds.
-        track_await!(self.output_builder.add_partial_output(o)).await?;
+        t!(self.output_builder.add_partial_output(o)).await?;
 
         self.done_to += self.split_len.clone();
 
@@ -152,7 +152,7 @@ where
 
 
     async fn build_final_output(self) -> Result<R::Out, ThoError> {
-        track_await!(self.output_builder.build()).await
+        t!(self.output_builder.build()).await
     }
 }
 

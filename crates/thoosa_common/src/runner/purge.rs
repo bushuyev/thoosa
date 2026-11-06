@@ -20,7 +20,7 @@ use thoosa_shared::traits::{CachableIdTr};
 #[cfg(test)]
 use thoosa_shared::traits::Data;
 use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
-use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::tracked_await::t;
 
 pub const PURGE_GPU_CONCURRENCY_LIMIT: usize = 10;
 
@@ -42,21 +42,21 @@ where
 {
     async fn has_gpu_data(&self, device_idx: usize) -> bool {
         match self.map.upgrade() {
-            Some(map) => track_await!(map.has_gpu_data(device_idx)).await,
+            Some(map) => t!(map.has_gpu_data(device_idx)).await,
             None => false,
         }
     }
 
     async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize, name: &str) -> Result<(), ThoError> {
         match self.map.upgrade() {
-            Some(map) => track_await!(map.purge_gpu(ids_to_keep, device_idx, name)).await,
+            Some(map) => t!(map.purge_gpu(ids_to_keep, device_idx, name)).await,
             None => Ok(()),
         }
     }
 
     async fn drop_gpu(&self, device_idx: usize, name: &str) -> Result<(), ThoError> {
         match self.map.upgrade() {
-            Some(map) => track_await!(map.drop_gpu(device_idx, name)).await,
+            Some(map) => t!(map.drop_gpu(device_idx, name)).await,
             None => Ok(()),
         }
     }
@@ -64,14 +64,14 @@ where
     // #[cfg(any(debug_assertions, tho_debug))]
     async fn debug_gpu(&self, device_idx: usize) -> Result<u64, ThoError> {
         match self.map.upgrade() {
-            Some(map) => track_await!(map.debug_gpu(device_idx)).await,
+            Some(map) => t!(map.debug_gpu(device_idx)).await,
             None => Ok(0),
         }
     }
 
     async fn purge_cpu(&self, purge_until: u64) -> usize {
         match self.map.upgrade() {
-            Some(map) => track_await!(map.purge_cpu(purge_until)).await,
+            Some(map) => t!(map.purge_cpu(purge_until)).await,
             None => 0,
         }
     }
@@ -189,12 +189,12 @@ where
 
         let dump_eta_guard = CollectEtaInvocationGuard::new(&format!("purge_gpu_{:?}", name), self.len(), 1);
         let dump_eta_guard_id = dump_eta_guard.id();
-        track_await!(stream::iter(items)
+        t!(stream::iter(items)
 
             .for_each_concurrent(PURGE_GPU_CONCURRENCY_LIMIT, move |(key, fut)| async move {
-                match track_await!(fut).await {
+                match t!(fut).await {
                     Ok(v) => {
-                        if let Err(e) = track_await!(v.dump_to_cpu(device_idx)).await {
+                        if let Err(e) = t!(v.dump_to_cpu(device_idx)).await {
                             warn!("purge_gpu failed: key={key:?} err={e:?}");
                         } else {
                             debug!("purge_gpu ok: key={key:?}");

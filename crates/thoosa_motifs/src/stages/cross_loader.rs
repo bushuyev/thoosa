@@ -50,7 +50,7 @@ use thoosa_shared::collect_futures_eta::{CollectEtaInvocationGuard, collect_eta_
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::mono_key;
 use thoosa_shared::run_configs::RunConfigId;
-use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::tracked_await::t;
 use thoosa_shared::traits::{Adjustable, Data, MaxParallelCtx, OutId, RunCtx, ThoSelector, WithId};
 use thoosa_shared::traits::{AsyncStage, Stage};
 use thoosa_common::runner::sync_stage::ConsumeResult;
@@ -95,7 +95,7 @@ where
                 let iter_1 = o.iter_1();
                 let clc_result = o.clc_result();
                 // Copy packed masks to CPU before any merge to avoid GPU OOM.
-                let clc_result = track_await!(clc_result.to_cpu()).await?;
+                let clc_result = t!(clc_result.to_cpu()).await?;
                 self.partials.push(CrossUnfoldClcOutput::new(clc_result, iter_0, iter_1, mono_key!("CrossUnfoldClcOutput", "stage").into()));//TODO key
             }
         }
@@ -265,7 +265,7 @@ where
         // Both batches and any prepared outer batch are reused after an OOM.
         let input = Arc::new(input);
 
-        match track_await!(OOMHandler::<'_, '_, _, NoStageAdjuster, _, CrossInputSelector>::new(
+        match t!(OOMHandler::<'_, '_, _, NoStageAdjuster, _, CrossInputSelector>::new(
             vec![
                 Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(
                     *MaxParallelStep::FAST,
@@ -296,7 +296,7 @@ where
                 if let Some(consumer) = pending_consumer.take() {
                     consumer.await??;
                 }
-                let cross_clc_output = track_await!(cross_clc_output.replace_clc_result(&self.on_batch_done)).await?;
+                let cross_clc_output = t!(cross_clc_output.replace_clc_result(&self.on_batch_done)).await?;
                 let receiver_ctx = ctx.branch(false);
 
                 *pending_consumer = Some(tokio::task::spawn_blocking(move || {
@@ -381,7 +381,7 @@ where
 
                 debug!("CrossLoader::run_inner_batches: i_1={i_1:?} resource_1={resource_1:?} waited");
 
-                let t_1 = match track_await!(Arc::clone(&self.configured_loader).run_cached(Arc::new(resource_1.as_ref().clone()), ctx.branch(false))).await {
+                let t_1 = match t!(Arc::clone(&self.configured_loader).run_cached(Arc::new(resource_1.as_ref().clone()), ctx.branch(false))).await {
                     Ok(v) => v,
                     Err(e) => {
                         let is_resetting = matches!(e,  ThoError::CudaBeingRecovered);
@@ -397,7 +397,7 @@ where
                 if t_1_len > max_batch {
                     if !t_1_batch.is_empty() {
 
-                        track_await!(self.run_loaded_batch(
+                        t!(self.run_loaded_batch(
                             t_0_batch.clone(),
                             t_0_batch_resources.clone(),
                             std::mem::take(&mut t_1_batch),
@@ -411,7 +411,7 @@ where
                         collect_eta_record_completion(cross_loader_inner.id());
                     }
 
-                    track_await!(self.run_loaded_batch(
+                    t!(self.run_loaded_batch(
                         t_0_batch.clone(),
                         t_0_batch_resources.clone(),
                         vec![t_1],
@@ -433,7 +433,7 @@ where
                     continue;
                 }
 
-                track_await!(self.run_loaded_batch(
+                t!(self.run_loaded_batch(
                     t_0_batch.clone(),
                     t_0_batch_resources.clone(),
                     std::mem::take(&mut t_1_batch),
@@ -471,7 +471,7 @@ pub struct ResourcesConfigInput<RC: ResourcesConfig + Debug + Send + Sync + Clon
 
 impl<RC: ResourcesConfig + Debug + Send + Sync + Clone> ResourcesConfigInput<RC> {
     pub async fn check(self, store: &Arc<dyn MotifsStore>) -> Result<Self, ThoError> {
-        track_await!(self.resources_config.check(store)).await?;
+        t!(self.resources_config.check(store)).await?;
 
         Ok(self)
     }
@@ -541,7 +541,7 @@ where
         let max_batch = i64::try_from(self.chunk_size).unwrap_or(i64::MAX);
 
         let resources_config = input.resources_config.clone();
-        let resources = track_await!(resources_config
+        let resources = t!(resources_config
             .to_resources(&self.store)).await?
             .into_iter()
             .filter(|r| r.length() > self.step)
@@ -563,7 +563,7 @@ where
         for (i_0, resource_0) in resources.iter().enumerate() {
             debug!("CrossLoader::run: find_motifs_run_config_id={} on i_0={i_0} resource_0={resource_0:?}", self.find_motifs_run_config_id);
 
-            let t_0 = track_await!(Arc::clone(&self.configured_loader).run_cached(Arc::new(resource_0.as_ref().clone()), ctx.branch(false))).await?;
+            let t_0 = t!(Arc::clone(&self.configured_loader).run_cached(Arc::new(resource_0.as_ref().clone()), ctx.branch(false))).await?;
             let t_0_len = t_0.size().dim_1();
 
             debug!("CrossLoader::run: t_0={t_0:?} loaded, t_0_len={t_0_len}");
@@ -572,7 +572,7 @@ where
                 if !t_0_batch.is_empty() {
                     let pending_last_i = t_0_batch_last_i.expect("CrossLoader::run: missing t_0_batch_last_i for pending batch");
 
-                    track_await!(self.run_inner_batches(
+                    t!(self.run_inner_batches(
                         resources.as_slice(),
                         std::mem::take(&mut t_0_batch),
                         std::mem::take(&mut t_0_batch_resources),
@@ -588,7 +588,7 @@ where
                     collect_eta_record_completion(cross_loader_outer.id());
                 }
 
-                track_await!(self.run_inner_batches(
+                t!(self.run_inner_batches(
                     resources.as_slice(),
                     vec![t_0],
                     vec![Arc::clone(resource_0)],
@@ -612,7 +612,7 @@ where
                 continue;
             }
 
-            track_await!(self.run_inner_batches(
+            t!(self.run_inner_batches(
                 resources.as_slice(),
                 std::mem::take(&mut t_0_batch),
                 std::mem::take(&mut t_0_batch_resources),
@@ -630,7 +630,7 @@ where
             collect_eta_record_completion(cross_loader_outer.id());
         }
 
-        track_await!((self.on_all_done)(&receiver)).await?;
+        t!((self.on_all_done)(&receiver)).await?;
 
         Ok(Arc::new(()))
     }
@@ -710,7 +710,7 @@ where
 
         match adjust_context.batch_1_mode {
             Batch1SplitMode::Range => {
-                let result = track_await!(self.batch_1_adjuster.adjust(0i64..0, adjust_context)).await;
+                let result = t!(self.batch_1_adjuster.adjust(0i64..0, adjust_context)).await;
                 debug!("CrossLoaderAdjuster::adjust: adjust_context={adjust_context:?} result={result:?}");
                 match result {
                     Ok(range) => {
@@ -724,7 +724,7 @@ where
                 }
             }
             Batch1SplitMode::Slice => {
-                let result = track_await!(self.batch_1_slice_adjuster.adjust(0i64..0, &mut adjust_context.slice_ctx)).await;
+                let result = t!(self.batch_1_slice_adjuster.adjust(0i64..0, &mut adjust_context.slice_ctx)).await;
                 debug!("CrossLoaderAdjuster::adjust: slice adjust_context={adjust_context:?} result={result:?}");
                 match result {
                     Ok(range) => {
@@ -934,7 +934,7 @@ where
     async fn add_partial_output(&mut self, out: ST::Out) -> Result<(), ThoError> {
         debug!("CrossSplitterContext::add_partial_output: out={out:?}");
         // Do not advance either split cursor until assembly has completed.
-        track_await!(self.output_builder.add_partial_output(out)).await?;
+        t!(self.output_builder.add_partial_output(out)).await?;
         match self.batch_1_mode {
             Batch1SplitMode::Range => {
                 self.done_to += self.split_len;
@@ -954,7 +954,7 @@ where
     }
 
     async fn build_final_output(self) -> Result<ST::Out, ThoError> {
-        track_await!(self.output_builder.build()).await
+        t!(self.output_builder.build()).await
     }
 }
 
@@ -977,21 +977,21 @@ impl RangeOrSlice {
             Self::Full => {
                 let mut loaded = Vec::with_capacity(batch.len());
                 for tensor in batch {
-                    loaded.push(ThoDataRef::ReadLocked(track_await!(tensor.load_from_any_device_(to_device_idx)).await?));
+                    loaded.push(ThoDataRef::ReadLocked(t!(tensor.load_from_any_device_(to_device_idx)).await?));
                 }
                 Ok(loaded)
             }
             Self::Range(range) => {
                 let mut loaded = Vec::with_capacity((range.end - range.start) as usize);
                 for tensor in &batch[range.start as usize..range.end as usize] {
-                    loaded.push(ThoDataRef::ReadLocked(track_await!(tensor.load_from_any_device_(to_device_idx)).await?));
+                    loaded.push(ThoDataRef::ReadLocked(t!(tensor.load_from_any_device_(to_device_idx)).await?));
                 }
                 Ok(loaded)
             }
             Self::Slice((i, range)) => {
                 let channels = batch[*i].size().dim_0();
                 let selector = ChannelsDataSelector([0, range.start].into()..[channels, range.end].into());
-                Ok(vec![track_await!(SelectRef::select_ref(&batch[*i], to_device_idx, Some(selector))).await?])
+                Ok(vec![t!(SelectRef::select_ref(&batch[*i], to_device_idx, Some(selector))).await?])
             }
         }
     }
@@ -1056,9 +1056,9 @@ impl  SelectRef<CrossInputSelector> for CrossInputSelectorWrap {
                 None
             };
             let mut tensors = if prepared.is_some() { vec![] } else {
-                track_await!(selector.batch_0_selector.borrow_to(&self.batch_0, to_tho_device_idx)).await?
+                t!(selector.batch_0_selector.borrow_to(&self.batch_0, to_tho_device_idx)).await?
             };
-            tensors.extend(track_await!(selector.batch_1_selector.borrow_to(&self.batch_1, to_tho_device_idx)).await?);
+            tensors.extend(t!(selector.batch_1_selector.borrow_to(&self.batch_1, to_tho_device_idx)).await?);
             Ok(CrossInput::from_data_refs(
                 tensors,
                 selector.batch_0_selector.select_resources(&self.resources_0),

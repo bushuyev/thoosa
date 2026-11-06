@@ -20,7 +20,7 @@ use thoosa_common::runner::sync_stage::{SyncStage};
 use thoosa_shared::{ThoError, mono_key};
 
 use crate::stages::stage_ids::STFT;
-use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::tracked_await::t;
 
 #[derive(Debug, cached_derive::Cached, Named)]
 #[cache_name = "Stft"]
@@ -101,7 +101,7 @@ where
             ],
             None,
         );
-        let output = track_await!(oom_handler
+        let output = t!(oom_handler
             .run(
                 &self.sync_stft,
                 Arc::clone(&input),

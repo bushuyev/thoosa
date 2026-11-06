@@ -28,7 +28,7 @@ use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::rayon_pool::rayon_pool;
 use thoosa_shared::run_configs::RunConfigId;
-use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::tracked_await::t;
 use thoosa_common::runner::sync_stage::ConsumeResult;
 use thoosa_shared::traits::Data;
 use thoosa_shared::traits::{RunCtx, Stage};
@@ -913,7 +913,7 @@ fn gather_dists_for_indices(
 impl CrossClcResultMerge for DistsMask {
 
     fn to_cpu(self) -> BoxFuture<'static, Result<Self, ThoError>> {
-        async move { track_await!(DistsMask::to_cpu(self)).await }.boxed()
+        async move { t!(DistsMask::to_cpu(self)).await }.boxed()
     }
 
     //gpt generated
@@ -1534,7 +1534,7 @@ where
                 (tracker.take_dumper()?,tracker.min_slices_counts(), tracker.max_slices_counts())
             };
             // Trackers now consume the motif store directly because both APIs share the same crate boundary.
-            let groups_inserted = track_await!(dumper.load_slices_into_groups(self.store.as_ref(), min_slices_counts, max_slices_counts)).await?;
+            let groups_inserted = t!(dumper.load_slices_into_groups(self.store.as_ref(), min_slices_counts, max_slices_counts)).await?;
             channels_groups.push((channel, groups_inserted));
         }
 

@@ -24,7 +24,7 @@ impl CategoricalParzenEstimator {
         let top = 1.0;
         Self {
             name,
-            top, //TODO The hyperparam of the cateogircal kernel. It defines the prob of the top category. ?
+            top, //TODO The hyperparam of the categorical kernel. It defines the prob of the top category. ?
             bottom: (1. - top) / (n_choices - 1) as f32,
             uniform: 1. / n_choices as f32,
             n_choices,

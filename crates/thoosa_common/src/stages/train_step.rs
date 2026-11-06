@@ -38,7 +38,7 @@ use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::SynKey;
-use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::tracked_await::t;
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, MaxParallelCtx, RunCtx, Stage, ThoSelector, WithId};
 use thoosa_common::runner::sync_stage::{StageWithState};
 use thoosa_shared::{CopyToDevice, MoveToDevice, ThoError, mono_key, panic_to_err};
@@ -635,9 +635,9 @@ impl<DI: Dims, DO: Dims> CopyToDevice for TrainStepInput<DI, DO> {
         if self.command == TrainStepCommand::Checkpoint { return Self::checkpoint(); }
         Ok(TrainStepInput {
             id: self.id.clone(),
-            x: Some(track_await!(self.x_ref()?.copy_to_device(dst_device)).await?),
+            x: Some(t!(self.x_ref()?.copy_to_device(dst_device)).await?),
             lengths: self.lengths.clone(),
-            expected_y: Some(track_await!(self.expected_y_ref()?.copy_to_device(dst_device)).await?),
+            expected_y: Some(t!(self.expected_y_ref()?.copy_to_device(dst_device)).await?),
             command: self.command,
             request_id: self.request_id,
             microbatch_size: self.microbatch_size,
@@ -658,7 +658,7 @@ impl<DI: Dims, DO: Dims> BorrowRef for TrainStepInput<DI, DO> {
             if self.tho_device_idx() == to_tho_device_idx {
                 Ok(ThoDataRef::Borrowed(self))
             } else {
-                Ok(ThoDataRef::Owned(track_await!(self.copy_to_device(to_tho_device_idx)).await?))
+                Ok(ThoDataRef::Owned(t!(self.copy_to_device(to_tho_device_idx)).await?))
             }
         }
     }
@@ -725,7 +725,7 @@ impl<DI: Dims, DO: Dims> SelectRef<TrainStepInputSelector> for TrainStepInputWra
             if selected.tho_device_idx() == to_tho_device_idx {
                 Ok(ThoDataRef::Owned(selected))
             } else {
-                Ok(ThoDataRef::Owned(track_await!(selected.copy_to_device(to_tho_device_idx)).await?))
+                Ok(ThoDataRef::Owned(t!(selected.copy_to_device(to_tho_device_idx)).await?))
             }
         }
     }

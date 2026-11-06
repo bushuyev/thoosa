@@ -17,7 +17,7 @@ use thoosa_cpu_data_derive::CpuData;
 use thoosa_named_derive::Named;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::{ElvVal, MonoKey, SynKey};
-use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::tracked_await::t;
 use thoosa_shared::traits::{AsyncStage, Data, OutId, RangeSelector, Select, Stage, WithId};
 use thoosa_shared::{ThoError, mono_key};
 
@@ -150,7 +150,7 @@ impl thoosa_shared::CopyToDevice for AStageOutput {
     async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoError> {
         Ok(Self {
             id: self.id.clone(),
-            value: track_await!(self.value.copy_to_device(dst_device)).await?,
+            value: t!(self.value.copy_to_device(dst_device)).await?,
         })
     }
 }

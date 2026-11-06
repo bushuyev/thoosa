@@ -24,7 +24,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tch::Kind::Int64;
 use tch::{Kind, Tensor};
-use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::tracked_await::t;
 #[cfg(test)]
 use thoosa_common::runner::sync_stage::ConsumeResult;
 #[cfg(test)]
@@ -483,11 +483,6 @@ impl CudaActorHandle for CudaLocalActorHandle {
     async fn restart_backend(&self, authority: thoosa_shared::CudaActivityPauseTicket) -> Result<(), ThoError> {
         Ok(self.restart_inner(authority).await?)
     }
-
-
-
-
-
 }
 
 
@@ -505,10 +500,9 @@ pub struct CopyCtx {
 impl Debug for CopyCtx {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CopyCtx")
-            // .field("cu_ctx", &self.cu_ctx)
             .field("buffs", &self.buffs)
             .field("buf_size", &self.buf_size)
-                .field("bufs_pool.remaining_capacity", &self.bufs_pool_h2d.remaining_capacity())
+            .field("bufs_pool.remaining_capacity", &self.bufs_pool_h2d.remaining_capacity())
             .finish()
     }
 }
@@ -568,10 +562,6 @@ impl CopyCtx {
     #[allow(dead_code)]
     pub fn rebuild(&mut self, mem_k: f64, buffs: usize) -> Result<(), ThoError> {
         assert_eq!(self.bufs_pool_h2d.as_ref().remaining_capacity(), self.buffs);
-        // self
-            // .cu_ctx
-            // .bind_to_thread()
-            // .expect("failed to bind CUDA context to thread");
 
         drop(Arc::into_inner(std::mem::replace(
             &mut self.bufs_pool_h2d,
@@ -588,7 +578,7 @@ impl CopyCtx {
     }
 
     pub async fn acquire_exec_stream(&self) -> Result<ExecutionStream, ThoError> {
-        track_await!(self.exec_stream_pool.acquire()).await
+        t!(self.exec_stream_pool.acquire()).await
     }
 
     pub fn restart(&mut self) -> Result<(), ThoError> {

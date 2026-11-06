@@ -28,7 +28,7 @@ use std::sync::Arc;
 use tch::Kind::Int;
 use tch::Tensor;
 use thoosa_shared::applicables_runner::{Input, Output};
-use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::tracked_await::t;
 use thoosa_shared::traits::{MaxParallelCtx, Named, RunCtx, Stage, WithId};
 use thoosa_common::runner::sync_stage::{StageWithState};
 use thoosa_common::ipc::state_transfer::StageStateInfo;
@@ -87,7 +87,7 @@ impl BorrowRef for TestInputB {
                 Ok(ThoDataRef::Borrowed(self))
             } else {
                 Ok(ThoDataRef::Owned(TestInputB {
-                    value: track_await!(self.value.copy_to_device(to_tho_device_idx)).await?,
+                    value: t!(self.value.copy_to_device(to_tho_device_idx)).await?,
                 }))
             }
         }

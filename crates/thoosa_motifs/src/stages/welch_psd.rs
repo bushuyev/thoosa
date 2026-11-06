@@ -27,7 +27,7 @@ use thoosa_common::dims::ChannelsData;
 use crate::stages::cross_loader::ResourcesConfigInput;
 use crate::stages::motif_stats::RANDOM_STATS_GROUP;
 use crate::stages::stage_ids::{WELCH_PSD, WELCH_PSD_PER_RESOURCE};
-use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::tracked_await::t;
 
 #[derive(Clone, Debug)]
 pub struct WelchInputChannels;
@@ -258,9 +258,9 @@ where
 
     async fn load_resources_for_input(&self, resources_config: Option<RC>) -> anyhow::Result<Vec<Resource>> {
         match resources_config {
-            Some(resources_config) => track_await!(resources_config.to_resources(&self.store)).await,
+            Some(resources_config) => t!(resources_config.to_resources(&self.store)).await,
             None => {
-                let resources = track_await!(self.store.list_resources_not_in_group(RANDOM_STATS_GROUP, u32::MAX)).await?;
+                let resources = t!(self.store.list_resources_not_in_group(RANDOM_STATS_GROUP, u32::MAX)).await?;
                 if resources.is_empty() {
                     warn!("WelchPSD::load_resources_for_input: no resources found outside group={RANDOM_STATS_GROUP}");
                 }
@@ -316,7 +316,7 @@ where
         let sample_rate = thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(self.ws))
         .sample_rate() as f64;
 
-        let resources = track_await!(self.load_resources_for_input(resources_config)).await?;
+        let resources = t!(self.load_resources_for_input(resources_config)).await?;
         if resources.is_empty() {
             return Err(ThoError::new("WelchPSD: no resources to process"));
         }
@@ -333,7 +333,7 @@ where
                 )));
             }
 
-            let loaded = track_await!(Arc::clone(&self.loader)
+            let loaded = t!(Arc::clone(&self.loader)
                 .run_cached(
                     Arc::new(resource.clone()),
                     ctx.branch(false),
@@ -351,7 +351,7 @@ where
 
             debug!("WelchPSD::run: resource_id={} welch_input_size={welch_input_size:?} nperseg={nperseg} noverlap={noverlap}", resource.id());
 
-            let resource_psd = track_await!(OOMHandler::<'_, '_, _, NoStageAdjuster, NoRunCtxAdjuster, WelchChannelsSelector>::new(
+            let resource_psd = t!(OOMHandler::<'_, '_, _, NoStageAdjuster, NoRunCtxAdjuster, WelchChannelsSelector>::new(
                 vec![Adjusters::Input(input_adjuster(SplitsAdjuster::<WelchChannelsSelector, MonoMetrics<0, 2>>::new([1, 0].into())))],
                 None,
             )

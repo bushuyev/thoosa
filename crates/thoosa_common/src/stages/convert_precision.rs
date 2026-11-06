@@ -14,7 +14,7 @@ use tch::{Device, Kind, Tensor};
 use thoosa_cpu_data_derive::CpuData;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::run_configs::RunConfigId;
-use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::tracked_await::t;
 use thoosa_shared::traits::{AsyncStage, RunCtx, Stage};
 use thoosa_shared::{FuturesOrdering, ThoError, collect_futures_with_progress, recurse_files};
 
@@ -231,7 +231,7 @@ where
         let target_precision = self.args.target_precision();
         let futures = entries.into_iter().map(move |entry| {
             async move {
-                Ok::<_, ThoError>(track_await!(tokio::task::spawn_blocking(move || {
+                Ok::<_, ThoError>(t!(tokio::task::spawn_blocking(move || {
                     tracing::info_span!(
                         "convert_precision::convert_entry",
                         kind = "spawn_blocking",
@@ -243,7 +243,7 @@ where
             }
         });
 
-        let converted = track_await!(collect_futures_with_progress(
+        let converted = t!(collect_futures_with_progress(
             futures,
             entries_len,
             FuturesOrdering::Unordered,
@@ -410,31 +410,6 @@ where
         Some(NetEntry { net_type, weights_path: nets[0].0.clone() })
     }
 
-}
-
-fn net_files_from_base(base_path: &Path) -> (PathBuf, PathBuf) {
-    let file_name = base_path.file_name().and_then(|v| v.to_str());
-    if file_name == Some(NET_WEIGHTS_FILE) {
-        let base_dir = base_path.parent().unwrap_or(base_path);
-        return (base_path.to_path_buf(), base_dir.join(NET_PARAMS_FILE));
-    }
-    if file_name == Some(NET_PARAMS_FILE) {
-        let base_dir = base_path.parent().unwrap_or(base_path);
-        return (base_dir.join(NET_WEIGHTS_FILE), base_path.to_path_buf());
-    }
-    match base_path.extension().and_then(|ext| ext.to_str()) {
-        Some("safetensors") => {
-            let base_buf = base_path.to_path_buf();
-            let (_, params_path) = thoosa_shared::replace_extension(&base_buf, "json");
-            (base_buf, params_path)
-        }
-        Some("json") => {
-            let base_buf = base_path.to_path_buf();
-            let (_, weights_path) = thoosa_shared::replace_extension(&base_buf, "safetensors");
-            (weights_path, base_buf)
-        }
-        _ => (base_path.join(NET_WEIGHTS_FILE), base_path.join(NET_PARAMS_FILE)),
-    }
 }
 
 fn convert_entry<N>(entry: NetEntry<N>, target_precision: ConvertPrecisionTarget) -> anyhow::Result<ConvertedNet<N>>

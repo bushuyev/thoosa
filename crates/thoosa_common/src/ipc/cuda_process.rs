@@ -1594,7 +1594,7 @@ mod tests {
     use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
     use tch::{Kind, Tensor};
     use thoosa_shared::perf_logging::{PERF, format_perf_map};
-    use thoosa_shared::tracked_await::track_await;
+    use thoosa_shared::tracked_await::t;
     use thoosa_shared::ThoError;
     use tokio::sync::mpsc;
     use tokio::task::JoinSet;
@@ -1995,11 +1995,11 @@ mod tests {
 
         for _ in 0..runs {
             let inst_0 = Instant::now();
-            let cuda_ref = track_await!(cuda_actor.copy(src_t.into(), 1.into())).await?;
+            let cuda_ref = t!(cuda_actor.copy(src_t.into(), 1.into())).await?;
             h2d_time.fetch_add(inst_0.elapsed().as_millis() as u64, Relaxed);
 
             let inst_0 = Instant::now();
-            let cpu_tensor = track_await!(cuda_actor.copy(cuda_ref, 0.into())).await?;
+            let cpu_tensor = t!(cuda_actor.copy(cuda_ref, 0.into())).await?;
             d2h_time.fetch_add(inst_0.elapsed().as_millis() as u64, Relaxed);
 
             let tensor = cpu_tensor.into_local()?;
@@ -2035,7 +2035,7 @@ mod tests {
 
             let copy_result = tokio::time::timeout(
                 std::time::Duration::from_secs(600),
-                track_await!(cuda_actor.copy(too_large_tensor.into(), tho_device_idx.into())),
+                t!(cuda_actor.copy(too_large_tensor.into(), tho_device_idx.into())),
             ).await.context("timed out waiting for worker IPC oversized H2D copy to fail")?;
 
             debug!("test_copy_ipc_cuda_worker_propagates_oom: copy_result={copy_result:?}");
@@ -2111,7 +2111,7 @@ mod tests {
 
 
             let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
-            let cuda_ref = track_await!(cuda_actor.copy(
+            let cuda_ref = t!(cuda_actor.copy(
                 main_process_cpu_tensor.into(),
                 tho_device_idx.into(),//Cuda
             )).await?;
@@ -2120,7 +2120,7 @@ mod tests {
 
             let reff = cuda_ref.ref_key().unwrap();
 
-            let cpu_tensor = track_await!(cuda_actor.copy(
+            let cpu_tensor = t!(cuda_actor.copy(
                 cuda_ref.clone_ref()?,//otherwise cuda_ref gets dropped and deleted from worker
                 0.into(),//Cpu
             )).await?;
@@ -2139,7 +2139,7 @@ mod tests {
 
             debug!("run_main: drop ok");
 
-            let r = track_await!(cuda_actor.copy(
+            let r = t!(cuda_actor.copy(
                 ThoTensor::new_ref((), reff, vec![1000, 10000], tch::Kind::Float, None, cuda_ref.ref_worker_id().unwrap()),
                 0.into(), //Cpu
             )).await;

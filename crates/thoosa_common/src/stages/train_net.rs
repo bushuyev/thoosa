@@ -29,7 +29,7 @@ use thoosa_shared::collect_futures_eta::{CollectEtaInvocationGuard, collect_eta_
 use thoosa_shared::hyperparameter::FieldName;
 use thoosa_shared::run_configs::RunConfig;
 use thoosa_shared::tmp_file::TmpFile;
-use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::tracked_await::t;
 use thoosa_shared::traits::{Adjustable, AsyncStage, RunCtx, Stage};
 use thoosa_shared::val::NamedVal;
 use thoosa_shared::ThoError;
@@ -234,7 +234,7 @@ where
             std::fs::create_dir_all("/tmp/thoosa")?;
             let best_checkpoint_path = PathBuf::from("/tmp/thoosa").join(format!("thoosa_train_net_best_{}_{}.safetensors", now_ms(), random::<u64>()));
             let best_checkpoint = TmpFile::new(best_checkpoint_path.clone());
-            let (train_step, params) = track_await!(self.train_step_factory.new_step(run_config.clone(), ctx.branch(false), best_checkpoint_path.clone())).await?;
+            let (train_step, params) = t!(self.train_step_factory.new_step(run_config.clone(), ctx.branch(false), best_checkpoint_path.clone())).await?;
             let train_step = Arc::new(train_step);
 
             let _cache_guard = TrainStepCacheGuard(GlobalCtx::global().register_cache((train_step.stage_id(), Arc::clone(&train_step) as Arc<dyn CachePurger>)));
@@ -387,7 +387,7 @@ where
 
             let descr = self.descr.clone();
             let validation_step = self.validation_step;
-            let (var_store_path, node_params, run_config, loss) = track_await!(opt_train::<_, _, _, NP, TmpFile>(
+            let (var_store_path, node_params, run_config, loss) = t!(opt_train::<_, _, _, NP, TmpFile>(
                 Arc::clone(&self.opt_config),
                 move |run_config: RC, _listener: &mut (dyn TrainListener + '_)| {
                     debug!("TrainNet::run, about to call run_inner: descr={descr:?} run_config={:?}", run_config);
