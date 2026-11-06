@@ -2,7 +2,7 @@
 
 ## Design Goals and Constraints
 
-This project is intended for **machine-learning experiments on a local workstation**, where GPU resources are limited and CUDA OOM conditions are expected.
+This project is intended for running **machine-learning experiments on a local workstation**, where GPU resources are limited and CUDA OOM conditions are expected.
 
 It is built directly on **LibTorch**. Supporting other ML runtimes or GPU backends is not a goal.
 
