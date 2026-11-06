@@ -1,6 +1,6 @@
 # OOM handling
 
-`OOMHandler` retries GPU work after a recoverable out-of-memory (OOM) error. It can reduce parallel work, free GPU memory, or process input in smaller chunks, depending on the adjusters supplied by the caller. The same retry loop supports shared input (`run`), owned input (`consume`), and stage construction (`new_stage`).
+`OOMHandler` retries SyncStage execution after a recoverable out-of-memory (OOM) error. It can reduce parallel work, free GPU memory, or process input in smaller chunks, depending on the adjusters supplied by the caller. The same retry loop supports shared input (`run`), owned input (`consume`), and stage construction (`new_stage`).
 
 The [activity diagram](diagrams/oom_handler.svg) shows the main steps in [`run_with_runner_impl`](../crates/thoosa_common/src/runner/oom_handler.rs):
 

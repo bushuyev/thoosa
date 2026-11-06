@@ -65,9 +65,9 @@ For a faster compile check, use `cargo check --workspace --all-targets` from `cr
 
 Asynchronous stages coordinate tensor work, while synchronous stages perform the computations on CPU or GPU. The runner controls GPU concurrency and retries work under memory pressure; managed tensor storage allows cached data to move between GPU and CPU. GPU execution can run locally or in a separate IPC worker process.
 
-See the [architecture overview](docs/overview.md) for the main entities and how they fit together.
-
-- [OOM Handling](docs/oom.md)
+- [Overview](docs/overview.md)
+- [OOM Handling of the AsyncStage execution](docs/async_oom.md)
+- [OOM Handling of the SyncStage execution](docs/sync_oom.md)
 - [IPC subsystem](docs/ipc.md) 
 
 ## Run
