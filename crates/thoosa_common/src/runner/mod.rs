@@ -19,3 +19,5 @@ pub mod sync_stage;
 pub mod stage_install;
 
 pub mod execution;
+
+pub mod residency;

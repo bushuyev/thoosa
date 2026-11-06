@@ -9,7 +9,7 @@ use crate::runner::cuda_recovery::CudaRecoveryCoordinator;
 use crate::runner::purger::Purger;
 use crate::tho_device::ThoDevice;
 use futures_util::future::BoxFuture;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::any::{Any, TypeId};
 use mockall::Any as _;
 use crate::runner::common::cachable::{CachedPurgeOutput, StageCache};
@@ -21,7 +21,6 @@ use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Arc, OnceLock};
 use thoosa_shared::collect_futures_eta::{CollectEtaInvocationGuard, collect_eta_record_completion};
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::CachableIdTr;
 use thoosa_shared::{CudaActivityGate, ThoError, async_perf_log, async_read_owned_lock, async_write_owned_lock, perf_log, sync_write_lock};
 use tokio::sync::RwLock as AsyncRwLock;
 use thoosa_shims::arena::{shared_arena_dup_fd, shared_arena_init};
@@ -46,6 +45,7 @@ pub struct Runtime {
 #[derive(Debug)]
 pub struct ResidencyService {
     caches: Arc<CacheRegistry>,
+    managed: Arc<super::residency::ManagedResidency>,
     is_all_on_cpu: Vec<AtomicBool>,
     cache_time: AtomicU64,
     purger: Arc<Purger>,
@@ -255,8 +255,9 @@ impl Runtime {
 
 impl ResidencyService {
     fn new(num_devices: usize, is_ipc: bool, gate: Option<Arc<CudaActivityGate>>) -> Self {
-        Self { caches: Arc::new(CacheRegistry::default()), is_all_on_cpu: (0..num_devices).map(|_| AtomicBool::new(false)).collect(), cache_time: AtomicU64::new(0), purger: Arc::new(Purger::new(gate)), is_ipc }
+        Self { managed: super::residency::ManagedResidency::new(num_devices), caches: Arc::new(CacheRegistry::default()), is_all_on_cpu: (0..num_devices).map(|_| AtomicBool::new(false)).collect(), cache_time: AtomicU64::new(0), purger: Arc::new(Purger::new(gate)), is_ipc }
     }
+    pub fn managed(&self) -> Arc<super::residency::ManagedResidency> { Arc::clone(&self.managed) }
     pub(crate) fn cleanup(&self) -> Arc<Purger> { Arc::clone(&self.purger) }
     pub fn cache_registry(&self) -> Arc<CacheRegistry> {
         Arc::clone(&self.caches)
@@ -331,18 +332,17 @@ impl ResidencyService {
     }
     pub async fn dump_all_to_cpu<'a>(
         &'a self,
-        required_ids: &HashMap<CacheKey, &'a HashSet<&'a dyn CachableIdTr>>,
         tho_device_idx: usize,
         descr: &str,
     ) -> Result<(), ThoError> {
         assert_ne!(tho_device_idx, 0);
 
-        debug!("ResidencyService::dump_all_to_cpu: tho_device_idx={tho_device_idx} required_ids={required_ids:?} descr={descr}");
+        debug!("ResidencyService::dump_all_to_cpu: tho_device_idx={tho_device_idx} descr={descr}");
 
         let maps = self.caches_snapshot("GlobalCtx::dump_all_to_cpu: timed out waiting for caches read lock");
         let dump_eta_guard = CollectEtaInvocationGuard::new(&format!("dump_all_to_cpu_{descr}"), maps.len(), 1);
 
-        for (cache_key, entry) in maps.iter() {
+        for (_cache_key, entry) in maps.iter() {
             let type_name = entry.name.as_ref();
             let _cache_guard = track_await!(Self::lock_cache_shared(entry, "GlobalCtx::dump_all_to_cpu: timed out waiting for cache gate read lock")).await;
             if !track_await!(entry.purger.has_gpu_data(tho_device_idx)).await {
@@ -352,13 +352,16 @@ impl ResidencyService {
             }
 
             debug!("ResidencyService::dump_all_to_cpu: type_name={type_name}");
-            track_await!(entry.purger.purge_gpu(required_ids.get(cache_key).map(|v| *v), tho_device_idx, type_name)).await?;
+            track_await!(entry.purger.purge_gpu(None, tho_device_idx, type_name)).await?;
             debug!("ResidencyService::dump_all_to_cpu: type_name={type_name} descr={descr} done");
             collect_eta_record_completion(dump_eta_guard.id());
         }
 
+        self.managed.offload(tho_device_idx).await?;
+        // This existing flag acknowledges the offload pass; protected inputs
+        // may remain on GPU. force_check reports actual residency, including handles.
         self.is_all_on_cpu[tho_device_idx].store(true, Relaxed);
-        debug!("ResidencyService::dump_all_to_cpu: tho_device_idx={tho_device_idx} required_ids={required_ids:?} descr={descr} done");
+        debug!("ResidencyService::dump_all_to_cpu: tho_device_idx={tho_device_idx} descr={descr} done");
 
         #[cfg(tho_debug)]
         {
@@ -400,6 +403,7 @@ impl ResidencyService {
             collect_eta_record_completion(dump_eta_guard.id());
         }
 
+        if let Err(error) = self.managed.drop_device(tho_device_idx).await { failure.get_or_insert(error); }
         if let Some(error) = failure { return Err(error); }
         self.is_all_on_cpu[tho_device_idx].store(true, Relaxed);
         info!("ResidencyService::drop_data_on_device: tho_device_idx={tho_device_idx} descr={descr} done");
@@ -451,8 +455,9 @@ impl ResidencyService {
             }
         }
 
-        self.is_all_on_cpu[device_idx].store(true, Relaxed);
-        true
+        let all_on_cpu = !self.managed.has_gpu_data(device_idx).await;
+        self.is_all_on_cpu[device_idx].store(all_on_cpu, Relaxed);
+        all_on_cpu
     }
     pub fn run_purge_gpu(&self, closures: Vec<Box<dyn Fn()->BoxFuture<'static, Result<(), ThoError>> + Send + Sync>>) ->Result<(), ThoError>{
         self.purger.run_purge_gpu(closures)
@@ -461,8 +466,8 @@ impl ResidencyService {
 
 static GLOBAL_CTX: OnceLock<GlobalCtx> = OnceLock::new();
 
-// Use the same identity for cache lookup and OOM exclusions. Display names do
-// not distinguish generic stage types; owned instance names need no leaks.
+// Display names do not distinguish generic stage types. Cache lookup uses
+// concrete type identity; stateful registrations use owned instance names.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CacheKey {
     Typed(TypeId),
@@ -571,6 +576,7 @@ impl GlobalCtx {
 
 
 
+    pub fn managed_residency(&self) -> Arc<super::residency::ManagedResidency> { self.runtime.residency.managed() }
     pub fn runtime(&self) -> Arc<Runtime> { Arc::clone(&self.runtime) }
     pub fn execution(&self, device: usize) -> DeviceExecutionCtx { self.runtime.execution(device) }
 
@@ -667,10 +673,9 @@ impl GlobalCtx {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="GlobalCtx::dump_all_to_cpu"))]
     pub async fn dump_all_to_cpu<'a>(
         &'a self,
-        required_ids: &HashMap<CacheKey, &'a HashSet<&'a dyn CachableIdTr>>,
         tho_device_idx: usize,
         descr: &str,
-    ) -> Result<(), ThoError> { self.runtime.residency.dump_all_to_cpu(required_ids, tho_device_idx, descr).await }
+    ) -> Result<(), ThoError> { self.runtime.residency.dump_all_to_cpu(tho_device_idx, descr).await }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="GlobalCtx::dump_all_to_cpu"))]
     pub async fn drop_data_on_device<'a>(
@@ -833,6 +838,8 @@ pub mod mock_global_ctx {
         }
 
         pub fn with_device_count(mut self, out: usize) -> Self {
+            let managed = self.real.map(|real| real.managed_residency()).unwrap_or_else(|| super::super::residency::ManagedResidency::new(out));
+            self.mock.expect_managed_residency().returning(move || std::sync::Arc::clone(&managed));
             if let Some(real) = self.real {
                 self.mock.expect_device_count().returning(move || {
                     real.device_count()
@@ -906,9 +913,9 @@ pub mod mock_global_ctx {
         pub fn with_dump_all_to_cpu(mut self) -> Self {
             if let Some(real) = self.real {
                 let _ = self.mock.expect_dump_all_to_cpu().returning({
-                    move |required_ids, device_idx, descr| {
+                    move |device_idx, descr| {
                         block_in_place(|| {
-                            tokio::runtime::Handle::current().block_on(real.dump_all_to_cpu(required_ids, device_idx, descr))
+                            tokio::runtime::Handle::current().block_on(real.dump_all_to_cpu(device_idx, descr))
                         })
                     }
                 });
@@ -1359,10 +1366,9 @@ mod tests {
         Ok(())
     }
 
-    async fn check_cache_key_exclusions() -> Result<(), ThoError> {
+    async fn check_handle_leases() -> Result<(), ThoError> {
         use crate::runner::common::cachable::{Cached, StageCache};
-        use std::collections::HashSet;
-        use thoosa_shared::traits::{CachableIdTr, Named};
+        use thoosa_shared::traits::{Named};
         type First = GenericCacheStage<AnyDims, 0>;
         type Second = GenericCacheStage<AnyDims, 1>;
 
@@ -1375,8 +1381,8 @@ mod tests {
         assert_ne!(First::cache_key(), Second::cache_key());
         assert_ne!(&First::cache_key(), named_handle.key());
 
-        // All three caches deliberately have the same display name and output
-        // ID. The real dump path must exclude only the requested cache's entry.
+        // Equal IDs in different caches are different allocations. Protecting
+        // one handle must retain only that allocation.
         let mut outputs = Vec::new();
         for (index, cache) in [first_cache, second_cache, named_cache].into_iter().enumerate() {
             let output = Arc::new(DevicesWrap::wrap(ThoTensor::<AnyDims, SynKey>::new("same-output".into(), tch_result(Tensor::f_from_slice(&[index as f32, 4.0]))?)?));
@@ -1387,11 +1393,13 @@ mod tests {
             outputs.push(output);
         }
         let id = SynKey::from("same-output");
-        let keep: HashSet<&dyn CachableIdTr> = HashSet::from([&id as &dyn CachableIdTr]);
-        runtime.dump_all_to_cpu(&HashMap::from([(First::cache_key(), &keep)]), 1, "typed cache exclusion").await?;
+        let lease = outputs[0].protect(1);
+        runtime.dump_all_to_cpu(1, "typed cache exclusion").await?;
         assert!(outputs[0].is_on_device(1));
         assert!(!outputs[1].is_on_device(1));
         assert!(!outputs[2].is_on_device(1));
+
+        drop(lease);
 
         // Production loaders chain stages and optionally select a branch. Run
         // those adapters against the populated caches and exclude their actual
@@ -1408,25 +1416,22 @@ mod tests {
         for (loader, expected) in [(single, 0), (chained, 1)] {
             let output = Arc::clone(&loader).run_cached(outputs[0].clone(), ctx.branch(false)).await?;
             assert!(Arc::ptr_eq(&output, &outputs[expected]));
-            assert_eq!(loader.output_cache_key(), if expected == 0 { First::cache_key() } else { Second::cache_key() });
             for output in &outputs { drop(output.load_from_any_device_(1).await?); }
             // Downstream tensor stages only see this wrapper, not its producer.
-            let mut required_inputs = HashMap::new();
-            output.add_required_ids(&mut required_inputs);
-            assert_eq!(required_inputs.len(), 1);
-            assert_eq!(required_inputs[&loader.output_cache_key()], keep);
-            let required_ids = required_inputs.iter().map(|(key, ids)| (key.clone(), ids)).collect();
-            runtime.dump_all_to_cpu(&required_ids, 1, "adapter cache exclusion").await?;
+            let _lease = output.protect(1);
+            runtime.dump_all_to_cpu(1, "adapter cache exclusion").await?;
             for (index, output) in outputs.iter().enumerate() { assert_eq!(output.is_on_device(1), index == expected); }
         }
 
         drop(outputs[1].load_from_any_device_(1).await?);
         drop(outputs[2].load_from_any_device_(1).await?);
-        runtime.dump_all_to_cpu(&HashMap::from([(named_handle.key().clone(), &keep)]), 1, "named cache exclusion").await?;
+        let lease = outputs[2].protect(1);
+        runtime.dump_all_to_cpu(1, "named cache exclusion").await?;
         assert!(!outputs[0].is_on_device(1));
         assert!(!outputs[1].is_on_device(1));
         assert!(outputs[2].is_on_device(1));
-        runtime.dump_all_to_cpu(&HashMap::new(), 1, "no cache exclusions").await?;
+        drop(lease);
+        runtime.dump_all_to_cpu(1, "no cache exclusions").await?;
         for (index, output) in outputs.iter().enumerate() {
             assert!(!output.is_on_device(1));
             let cpu = output.load_from_any_device_(0).await?;
@@ -1439,26 +1444,23 @@ mod tests {
         ready.clone().await?;
         Second::cache().await?.insert(id.clone(), ready.into());
         let alias = Arc::new(GenericCacheStage::<AnyDims, 1>(std::marker::PhantomData)).run_cached(outputs[0].clone(), ctx.branch(false)).await?;
-        let mut required_inputs = HashMap::new();
-        alias.add_required_ids(&mut required_inputs);
-        assert_eq!(required_inputs.len(), 2);
+        let _lease = alias.protect(1);
         drop(alias.load_from_any_device_(1).await?);
-        let required_ids = required_inputs.iter().map(|(key, ids)| (key.clone(), ids)).collect();
-        runtime.dump_all_to_cpu(&required_ids, 1, "aliased cache exclusions").await?;
+        runtime.dump_all_to_cpu(1, "aliased cache exclusions").await?;
         assert!(alias.is_on_device(1));
         Ok(())
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn test_cache_key_exclusions_local() -> Result<(), ThoError> {
+    async fn test_handle_leases_local() -> Result<(), ThoError> {
         GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
-        check_cache_key_exclusions().await
+        check_handle_leases().await
     }
 
     #[test]
-    fn test_cache_key_exclusions_ipc() -> Result<(), ThoError> {
-        run_ipc_test(module_path!(), check_cache_key_exclusions(), async |socket| {
+    fn test_handle_leases_ipc() -> Result<(), ThoError> {
+        run_ipc_test(module_path!(), check_handle_leases(), async |socket| {
             let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)?));
             CudaWorker::run_worker(socket, &ws, HashMap::new(), ThoDevice::from(1usize)).await
         })
@@ -1525,7 +1527,7 @@ mod tests {
         }?;
         debug!("test_device_reset: sum_0={sum_0}");
 
-        GlobalCtx::global().dump_all_to_cpu(&HashMap::new(), 1, "test").await?;
+        GlobalCtx::global().dump_all_to_cpu(1, "test").await?;
 
 
         cuda_actor.restart().await?;

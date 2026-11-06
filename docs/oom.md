@@ -17,6 +17,10 @@ The [simplified class diagram](diagrams/oom_handler_overview.svg) shows how the 
 
 [![OOM handling class overview](diagrams/oom_handler_overview.svg)](diagrams/oom_handler_overview.svg?raw=1)
 
+`DevicesWrap::wrap` registers storage with runtime residency as part of construction; `wrap_in` binds it to an explicit residency registry. Caching and cache-area branches control reuse and eager cleanup, but are no longer required to make a live handle visible to OOM eviction. Temporary collections own the same managed handles.
+
+`BorrowRef::protect` and `ConsumeData::protect` describe each input's managed handles. The runner holds their device-specific `ResidencyLease`s across attempts and adjustments, and releases them on completion or cancellation. Composite inputs combine their members' leases. Consuming retries acquire new leases after restoring the failed input, so neither cache names nor ID snapshots are needed. Device-reset invalidation ignores these leases and removes failed-device replicas while retaining healthy copies. Taking owned data waits for in-flight residency operations before detaching its registration.
+
 Stage construction accepts only run-context adjusters because there is no input or completed stage to adjust yet. CPU `run` and CPU `new_stage` bypass this retry loop.
 
 See the [full class diagram](diagrams/oom_handler_classes.svg) for context wrappers, trait implementations, and generic types. Editable PlantUML sources: [activity](diagrams/oom_handler.puml), [overview](diagrams/oom_handler_overview.puml), and [full classes](diagrams/oom_handler_classes.puml).

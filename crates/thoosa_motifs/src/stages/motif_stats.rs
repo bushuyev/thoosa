@@ -286,6 +286,8 @@ impl MotifStatsCalcInputWrapper {
 }
 
 impl BorrowRef for MotifStatsCalcInputWrapper {
+    fn protect(&self, device: usize) -> thoosa_common::runner::residency::ResidencyLease { match &self.data { MotifStatsCalcInputDataWrapper::Managed(value) => value.protect(device), MotifStatsCalcInputDataWrapper::Motifs(values) => thoosa_common::runner::residency::ResidencyLease::combine(values.iter().map(|value| value.protect(device))) } }
+
     type Out<'a> = MotifStatsCalcInput<'a> where Self: 'a;
 
     fn borrow_ref<'a>(&'a self, to_device_idx: usize) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
@@ -413,6 +415,8 @@ impl MotifStatsTmpCachedChannelsInput {
 }
 
 impl ConsumeData for MotifStatsTmpCachedChannelsInput {
+    fn protect(&self, device: usize) -> thoosa_common::runner::residency::ResidencyLease { self.channels_motifs_slices.protect(device) }
+
     type O = MotifStatsLoadedChannelsInput;
 
     fn consume<R: Send, F, P>(
@@ -1205,9 +1209,7 @@ where
                 debug!("MotifStats::run: motif={motif:?}");
                 let clc_stats_run = MotifStatsSyncStage::<C>::new(ctx.tho_device_idx()).await?;
                 // Statistics retries need the loaded motif, not the output statistics ID.
-                let mut required_inputs = HashMap::new();
-                motif.add_required_ids(&mut required_inputs);
-                let required_ids = required_inputs.iter().map(|(key, ids)| (key.clone(), ids)).collect();
+
                 let clc_input = Arc::new(MotifStatsCalcInputWrapper::from_managed(input_id.clone(), Arc::clone(&motif), metrics.clone(), quantiles.clone()));
                 let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(
                     vec![
@@ -1223,7 +1225,7 @@ where
                     WithRunCtxContext::new(
                         MaxParallelAndDumpToCpuAdjustableContex::new(
                             MaxParallelAdjustContextImpl::new(),
-                            DumpToCpuContextImpl::new(&required_ids),
+                            DumpToCpuContextImpl::new(),
                         ),
                     ),
                 )).await?
@@ -1267,9 +1269,7 @@ where
 
                 let clc_stats_run = MotifStatsSyncStage::<C>::new(ctx.tho_device_idx()).await?;
                 // Merged statistics read every loaded motif during each attempt.
-                let mut required_inputs = HashMap::new();
-                for motif in &motifs { motif.add_required_ids(&mut required_inputs); }
-                let required_ids = required_inputs.iter().map(|(key, ids)| (key.clone(), ids)).collect();
+
                 let clc_input = Arc::new(MotifStatsCalcInputWrapper::from_motifs(input_id.clone(), motifs.clone(), metrics.clone(), quantiles.clone()));
                 let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(
                     vec![
@@ -1285,7 +1285,7 @@ where
                     WithRunCtxContext::new(
                         MaxParallelAndDumpToCpuAdjustableContex::new(
                             MaxParallelAdjustContextImpl::new(),
-                            DumpToCpuContextImpl::new(&required_ids),
+                            DumpToCpuContextImpl::new(),
                         ),
                     ),
                 )).await?
@@ -1322,12 +1322,11 @@ where
 
                 debug!("MotifStats::run: MotifStatsSource::Random  channels_slices={channels_slices:?}");
                 let clc_stats_consume = MotifStatsConsumeStage::<C>::new(ctx.tho_device_idx()).await?;
-                // The consuming stage owns the cache, so retain an independent snapshot of its IDs.
-                let channel_slice_ids = channels_slices.ids();
-                let tmp_cache_key = channels_slices.cache_key().clone();
+
+
                 let clc_input = MotifStatsTmpCachedChannelsInput::new(input_id.clone(), channels_slices, metrics.clone(), quantiles.clone());
-                let required_tmp_cache_ids = channel_slice_ids.iter().map(|id| id as &dyn thoosa_shared::traits::CachableIdTr).collect();
-                let required_ids = HashMap::from([(tmp_cache_key, &required_tmp_cache_ids)]);
+
+
                 let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(
                     vec![
                         Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(*MaxParallelStep::FAST))),
@@ -1342,7 +1341,7 @@ where
                     WithRunCtxContext::new(
                         MaxParallelAndDumpToCpuAdjustableContex::new(
                             MaxParallelAdjustContextImpl::new(),
-                            DumpToCpuContextImpl::new(&required_ids),
+                            DumpToCpuContextImpl::new(),
                         ),
                     ),
                 )).await?

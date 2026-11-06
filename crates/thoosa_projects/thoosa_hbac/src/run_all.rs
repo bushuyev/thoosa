@@ -296,8 +296,7 @@ pub(crate) async fn run_all(
     assert!(!train_label_nets_run_config_ids.is_empty(), "No trained label nets");
 
     ////////////////////////
-    let map = HashMap::new();
-    GlobalCtx::global().dump_all_to_cpu(&map, 1, "before final").await?;
+    root_ctx.offload_idle("before final").await?;
 
     //gpt Pre-create context and shared handles for final-net stage construction.
     let init_ctx_in_train_final = root_ctx.branch(true);
@@ -1036,6 +1035,8 @@ mod tests {
     }
 
     impl BorrowRef for PrepareRunAllDataInput {
+        fn protect(&self, _device: usize) -> thoosa_common::runner::residency::ResidencyLease { thoosa_common::runner::residency::ResidencyLease::default() }
+
         type Out<'a> = Self where Self: 'a;
 
         fn borrow_ref<'a>(&'a self, _to_tho_device_idx: usize) -> impl std::future::Future<Output = Result<Self::Out<'a>, ThoError>> + Send where Self: 'a {

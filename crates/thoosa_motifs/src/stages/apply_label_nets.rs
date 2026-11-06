@@ -35,7 +35,6 @@ use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImp
 use thoosa_common::runner::common::cachable::{BorrowRef, ConsumeData, DevicesWrap, ThoDataRef};
 #[cfg(test)]
 use thoosa_common::runner::common::cachable::SelectRef;
-use thoosa_common::runner::global_ctx::CacheKey;
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::oom_handler::{Adjusters, NoInputAdjuster, NoStageAdjuster, OOMHandler, SyncStageInit, WithRunCtxContext, run_ctx_adjuster};
 #[cfg(test)]
@@ -298,7 +297,7 @@ where
         debug!("ApplyLabelNets::run: input={input:?} self.apply_nets.len={} label_nets={:?}", self.apply_nets.len(), self.apply_nets);
 
         let tmp_cache = track_await!(TmpCached::new("tmp_stack_applied_label_nets")).await;
-        let tmp_cache_key = tmp_cache.cache_key().clone();
+
         let tmp_cache: Arc<Mutex<TmpCached<ThoTensor<Batch<LabelProbability>, SynKey>>>> = Arc::new(Mutex::new(tmp_cache));
         let label_output_order = Arc::new(Mutex::new(vec![None; self.apply_nets.len()]));
 
@@ -340,9 +339,7 @@ where
 
                     //Each label net runs independently; ordering is preserved by buffer mode below - (relevant for final net training, if final inference done per label it doesn't matter).
                     // Preserve the actual cache owners when the motif stage returns cached probabilities.
-                    let mut required_inputs = HashMap::new();
-                    motif_probs.add_required_ids(&mut required_inputs);
-                    let required_ids = required_inputs.iter().map(|(key, ids)| (key.clone(), ids)).collect();
+
                     let input = Arc::new(ApplyLabelNetInputWrapper::new(Arc::clone(&motif_probs)));
 
                     let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(vec![
@@ -353,7 +350,7 @@ where
                         &apply_label_net,
                         input,
                         ctx.branch(false),
-                         WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new(&required_ids))),)
+                         WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new())),)
                     ).await?.into_inner();
 
                     debug!("ApplyLabelNets::run: result={result:?}");
@@ -391,11 +388,11 @@ where
             .into_iter()
             .collect::<Option<Vec<_>>>()
             .ok_or_else(|| ThoError::new("ApplyLabelNets::run: missing label output id"))?;
-        // Keep every label probability resident while the consuming stack stage retries.
-        let required_tmp_cache_ids = label_output_order.iter().map(|id| id as &dyn CachableIdTr).collect();
+
+
         let order = label_output_order.iter().cloned().enumerate().map(|(idx, id)| (id, idx)).collect();
         let stack_input = StackAppliedLabelNetsInputWrapper::new(self.out_id(&input_id), order, Arc::into_inner(tmp_cache).expect("ApplyLabelNets::run: tmp_cache still shared").into_inner());
-        let required_ids = HashMap::from([(tmp_cache_key, &required_tmp_cache_ids)]);
+
         let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(
             vec![
                 Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(*MaxParallelStep::FAST))),
@@ -410,7 +407,7 @@ where
             WithRunCtxContext::new(
                 MaxParallelAndDumpToCpuAdjustableContex::new(
                     MaxParallelAdjustContextImpl::new(),
-                    DumpToCpuContextImpl::new(&required_ids),
+                    DumpToCpuContextImpl::new(),
                 ),
             ),
         )).await?.into_inner();
@@ -512,6 +509,8 @@ impl StackAppliedLabelNetsInputWrapper {
 }
 
 impl ConsumeData for StackAppliedLabelNetsInputWrapper {
+    fn protect(&self, device: usize) -> thoosa_common::runner::residency::ResidencyLease { self.tmp_cache.protect(device) }
+
     type O = StackAppliedLabelNetsInput;
 
     fn consume<R: Send, F, P>(
@@ -729,6 +728,8 @@ impl ApplyLabelNetInputWrapper {
 }
 
 impl BorrowRef for ApplyLabelNetInputWrapper {
+    fn protect(&self, device: usize) -> thoosa_common::runner::residency::ResidencyLease { self.input.protect(device) }
+
     type Out<'a> = ApplyLabelNetInput<'a> where Self: 'a;
 
     fn borrow_ref<'a>(&'a self, to_device_idx: usize) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
@@ -873,7 +874,7 @@ where
         let ws = Arc::clone(ws);
         APPLY_LABEL_NET_INSTANCES.get_or_try_insert_recreatable_with::<C, _, _, _, _>(run_context.tho_device_idx(), GlobalCtx::global().cuda_activity_gate(run_context.tho_device_idx()), GlobalCtx::global().is_ipc(), sync_init.trained_net_id, move || async move {
             // Construction has no input tensors that must remain on this device, so an OOM retry may dump every cached tensor.
-            let required_ids: HashMap<CacheKey, &HashSet<&dyn CachableIdTr>> = HashMap::new();
+
 
             let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(
                 vec![
@@ -885,7 +886,7 @@ where
             let stage = oom_handler.new_stage(
                 sync_init,
                 run_context,
-                WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new(&required_ids))),
+                WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new())),
                 &ws,
             ).await?;
 

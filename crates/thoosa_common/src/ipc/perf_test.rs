@@ -39,6 +39,8 @@ struct SimpInput {
 impl Input for SimpInput {}
 
 impl BorrowRef for SimpInput {
+    fn protect(&self, _device: usize) -> thoosa_common::runner::residency::ResidencyLease { thoosa_common::runner::residency::ResidencyLease::default() }
+
     type Out<'a> = ThoDataRef<'a, Self> where Self: 'a;
 
     fn borrow_ref<'a>(&'a self, _to_tho_device_idx: usize) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send

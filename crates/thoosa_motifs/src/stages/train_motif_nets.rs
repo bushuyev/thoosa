@@ -425,7 +425,7 @@ where
         )).await?;
     let specs = Arc::into_inner(specs)
         .ok_or_else(|| ThoError::new("run_stft_as_motif_slices: stft output should not be shared"))?
-        .take_data(device_idx)?;
+        .take_data(device_idx).await?;
     ThoTensor::new(out_id, specs.into_local()?)
 }
 
@@ -792,6 +792,8 @@ impl SyncMotifBatchInputWrapper {
 }
 
 impl thoosa_common::runner::common::cachable::BorrowRef for SyncMotifBatchInputWrapper {
+    fn protect(&self, device: usize) -> thoosa_common::runner::residency::ResidencyLease { thoosa_common::runner::residency::ResidencyLease::combine([self.motifs.protect(device), self.random_slices.protect(device)]) }
+
     type Out<'a> = SyncMotifBatchInput<'a> where Self: 'a;
 
     fn borrow_ref<'a>(&'a self, to_device_idx: usize) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
@@ -1066,6 +1068,8 @@ impl SplitMotifIntoTrainValidInputWrapper {
 }
 
 impl thoosa_common::runner::common::cachable::BorrowRef for SplitMotifIntoTrainValidInputWrapper {
+    fn protect(&self, device: usize) -> thoosa_common::runner::residency::ResidencyLease { self.motif.protect(device) }
+
     type Out<'a> = SplitMotifIntoTrainValidInput<'a> where Self: 'a;
 
     fn borrow_ref<'a>(&'a self, to_device_idx: usize) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send

@@ -122,7 +122,7 @@ async fn prepared_batch_round_trips() -> Result<(), ThoError> {
     let wrapped = cache.get(&id).ok_or_else(|| ThoError::new("queued batch missing"))?;
     let cache_alive = Arc::downgrade(&cache);
     drop(cache);
-    GlobalCtx::global().dump_all_to_cpu(&HashMap::new(), 1, "queued batch test").await?;
+    GlobalCtx::global().dump_all_to_cpu(1, "queued batch test").await?;
     assert!(wrapped.is_all_on_cpu().await, "queued batch must be visible to OOM offload");
     drop(wrapped);
     let actual = pipeline.run_once(entry, ctx.branch(false), 0).await?.loss;

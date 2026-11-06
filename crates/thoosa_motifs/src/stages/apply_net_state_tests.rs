@@ -119,9 +119,9 @@ async fn round_trips() -> Result<(), ThoError> {
         motif.purge_gpu(None, 2, "wrong device").await?;
         label.purge_gpu(None, 2, "wrong device").await?;
         assert!(motif.has_gpu_data(1).await && label.has_gpu_data(1).await);
-        global.dump_all_to_cpu(&HashMap::new(), 1, "inference state").await?;
+        global.dump_all_to_cpu(1, "inference state").await?;
         assert!(!motif.has_gpu_data(1).await && !label.has_gpu_data(1).await);
-        global.dump_all_to_cpu(&HashMap::new(), 1, "repeated inference purge").await?;
+        global.dump_all_to_cpu(1, "repeated inference purge").await?;
         motif.purge_gpu(None, 1, "repeat").await?;
         label.purge_gpu(None, 1, "repeat").await?;
         if global.is_ipc() {

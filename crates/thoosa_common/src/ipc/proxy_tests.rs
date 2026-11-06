@@ -64,6 +64,8 @@ impl<'a> WithId for TestInputA<'a> {
 impl WorkerInput for TestInputA<'static> {}
 
 impl<'a> BorrowRef for TestInputA<'a> {
+    fn protect(&self, _device: usize) -> thoosa_common::runner::residency::ResidencyLease { thoosa_common::runner::residency::ResidencyLease::default() }
+
     // Rebind the input's borrowed field to the output borrow so it matches Stage::In<'o> for every caller lifetime.
     type Out<'o> = ThoDataRef<'o, TestInputA<'o>> where Self: 'o;
 

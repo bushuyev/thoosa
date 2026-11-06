@@ -322,6 +322,8 @@ mod tests {
     }
 
     impl ConsumeData for ConsumeTestInput {
+        fn protect(&self, _device: usize) -> thoosa_common::runner::residency::ResidencyLease { thoosa_common::runner::residency::ResidencyLease::default() }
+
         type O = ThoTensor<LoadedTensor, SynKey>;
 
         fn consume<R: Send, F, P>(self, _to_device_idx: usize, run_ctx: P, do_run: F) -> impl Future<Output=ConsumeResult<Self::O, R>> + Send
