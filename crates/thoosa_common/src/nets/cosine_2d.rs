@@ -17,14 +17,14 @@ pub struct CosineConv2dBankConfig {
 
     /// If true, subtract mean from every kernel during forward.
     ///
-    /// For exact equivalence with your old MyCosineConv2d, keep this false.
+    /// For exact equivalence with your old ThoCosineConv2d, keep this false.
     pub center_kernel_forward: bool,
 
     /// If true, input patch norm is computed as:
     ///
     /// sqrt(sum((x_patch - mean(x_patch))^2))
     ///
-    /// For exact equivalence with your old MyCosineConv2d, keep this false.
+    /// For exact equivalence with your old ThoCosineConv2d, keep this false.
     pub center_input_norm: bool,
 
     pub eps: f64,
@@ -228,7 +228,7 @@ impl ThoCosineConv2d {
         a: f64,
         b: f64,
     ) -> anyhow::Result<Self> {
-        debug!("MyCosineConv2d::new: init_patches={init_patches:?} kh={kh} kw={kw} a={a} b={b}");
+        debug!("ThoCosineConv2d::new: init_patches={init_patches:?} kh={kh} kw={kw} a={a} b={b}");
         // Rebuilding over a copied VarStore must retain its kernel rather than
         // creating and initializing a second tensor under a suffixed name.
         let kernel = if vs.get("kernel").is_some() {
@@ -249,7 +249,7 @@ impl ThoCosineConv2d {
                     }
                     let kh_freq = psz[2];//frequencies
                     let kw_time = psz[3];//time
-                    debug!("MyCosineConv2d::new: kh_freq={kh_freq:?} kw_time={kw_time:?}");
+                    debug!("ThoCosineConv2d::new: kh_freq={kh_freq:?} kw_time={kw_time:?}");
 
                     // TODO add  / Median / TrimmedMean / CenteredL2NormalizedMean.
                     let proto = patches.f_mean_dim(&[0i64][..], false, Kind::Float)?;
@@ -265,7 +265,7 @@ impl ThoCosineConv2d {
                         Ok(())
                     })?;
 
-                    debug!("MyCosineConv2d::new: kernel={kernel:?}  kernel.isnan().any={}", kernel.isnan().any());
+                    debug!("ThoCosineConv2d::new: kernel={kernel:?}  kernel.isnan().any={}", kernel.isnan().any());
 
                     kernel
                 }
@@ -382,14 +382,14 @@ impl ThoCosineConv2d {
     /// Returns:
     ///     [B,1]
     pub fn forward(&self, x: &Tensor) -> anyhow::Result<Tensor> {
-        debug!("MyCosineConv2d::forward: x={x:?}");
+        debug!("ThoCosineConv2d::forward: x={x:?}");
         let y = self.forward_map(x)?; // [B,1,H_out,W_out]
-        debug!("MyCosineConv2d::forward: y={y:?}");
+        debug!("ThoCosineConv2d::forward: y={y:?}");
 
         let sz = y.size();
 
         if sz[2] != 1 || sz[3] != 1 {
-            return Err(anyhow::anyhow!("MyCosineConv2d::forward expects full-size match with output [B,1,1,1], got {sz:?}. Use forward_map or forward_anywhere instead."));
+            return Err(anyhow::anyhow!("ThoCosineConv2d::forward expects full-size match with output [B,1,1,1], got {sz:?}. Use forward_map or forward_anywhere instead."));
         }
 
         Ok(y.view((x.size()[0], -1))) // [B,1]
@@ -418,10 +418,10 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for ThoCosineConv2d {
     /// For full-size matching where input H/W equals kernel H/W.
     /// Returns [B,1].
     fn tho_forward(&self, x_in: &ThoTensor<DI, DebugId>, _lengths: Option<&mut BatchLengths>, _train: bool) -> anyhow::Result<ThoTensor<DO, DebugId>> {
-        debug!("MyCosineConv2d::tho_forward: x_in={x_in:?}");
+        debug!("ThoCosineConv2d::tho_forward: x_in={x_in:?}");
 
         let y = self.forward_anywhere(&*x_in.local()?)?; // [B,1,1,1] if full match
-        debug!("MyCosineConv2d::tho_forward: y={y:?}");
+        debug!("ThoCosineConv2d::tho_forward: y={y:?}");
 
         Ok(y.into()) //.f_squeeze_dim(3)?.f_squeeze_dim(2)?.into())
     }

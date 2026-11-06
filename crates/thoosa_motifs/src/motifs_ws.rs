@@ -15,7 +15,7 @@ use thoosa_common::ws::{generation_weights, FsWorkspace, VarStoreOrPath, Workspa
 use thoosa_shared::resource::{Resource, ResourceStats};
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::traits::ToJsonFile;
-use thoosa_shared::{cdt_for_dir, mono_key, recurse_files};
+use thoosa_shared::{cdt_for_dir, mono_key};
 
 const MOTIFS_MODELS: &str = "motifs";
 const LABELS_MODELS: &str = "labels";

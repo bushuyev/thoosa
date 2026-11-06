@@ -7,7 +7,7 @@ use tch::{Tensor, nn, no_grad};
 use crate::dims::{AnyDims, Dims};
 use crate::nets::batches::BatchLengths;
 use crate::nets::cosine_2d::ThoCosineConv2d;
-use crate::nets::nodes::{AdaptiveAvgPool1d, AdaptiveMaxPool1d, BinaryHead, BinaryHeadPool, Fp, InitMode, SelfAttention, Split1, ThoAttnPool1d, ThoAvgPool1d, ThoBatchNorm1d, ThoClosureModule, ThoConv, ThoCosineConv1d, ThoDropout, ThoFuncModule, ThoMaxPool1d, ThoModule, ThoParallel, ThoSequential, ThoSharpeningHead1d, conv1d_from_path, conv2d_from_path, my_linear};
+use crate::nets::nodes::{AdaptiveAvgPool1d, AdaptiveMaxPool1d, BinaryHead, BinaryHeadPool, Fp, InitMode, SelfAttention, Split, ThoAttnPool1d, ThoAvgPool1d, ThoBatchNorm1d, ThoClosureModule, ThoConv, ThoCosineConv1d, ThoDropout, ThoFuncModule, ThoMaxPool1d, ThoModule, ThoParallel, ThoSequential, ThoSharpeningHead1d, conv1d_from_path, conv2d_from_path, my_linear};
 use crate::tho_tensor::{TensorInitRef, ThoTensor};
 use thoosa_shared::ThoError;
 use thoosa_shared::comp_id::SynKey;
@@ -238,7 +238,7 @@ impl Node {
             }
 
             Node::Split1 { node, split, join } => {
-                Box::new(Split1::new(
+                Box::new(Split::new(
                     node.build_tch_module(&(vs / "split_1"))?,//TODO name
                     split,
                     join

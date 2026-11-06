@@ -2536,7 +2536,7 @@ impl SqlStore {
     }
 
     pub fn _motif_meta(motif_id: u32, conn: &Connection) -> anyhow::Result<(i64, RunConfigId)> {
-        // Pre-load the motif metadata to identify its channel and run.
+        // Preload the motif metadata to identify its channel and run.
         let (channel, run_config_id): (i64, RunConfigId) = conn.query_row(
             "SELECT channel_id, run_config_id FROM motifs WHERE id=?",
             [motif_id],

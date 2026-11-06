@@ -51,7 +51,7 @@ impl<DI: Dims, DO: Dims> ThoSequential<DI, DO> {
     }
 
     fn run_layers(&self, t: &ThoTensor<DI, DebugId>, mut lengths: Option<&mut BatchLengths>, train: bool) -> anyhow::Result<ThoTensor<DO, DebugId>> {
-        debug!("MySequential::run_layers: t.size={:?} device={:?} self.layers[0]={:?}", t.size(), t.tho_device_idx(), self.layers[0]);
+        debug!("ThoSequential::run_layers: t.size={:?} device={:?} self.layers[0]={:?}", t.size(), t.tho_device_idx(), self.layers[0]);
 
         let output_t = self.layers[0].tho_forward(&t.local()?.f_alias()?.into(), lengths.as_deref_mut(), train)?;
 
@@ -60,7 +60,7 @@ impl<DI: Dims, DO: Dims> ThoSequential<DI, DO> {
             .skip(1)
             .enumerate()
             .try_fold(output_t, |output_t, (i, layer)| {
-                debug!("MySequential::run_layers={i} output_t.size={:?} output_t.device={:?} layer={:?}", output_t.size(), output_t.tho_device_idx(), layer);
+                debug!("ThoSequential::run_layers={i} output_t.size={:?} output_t.device={:?} layer={:?}", output_t.size(), output_t.tho_device_idx(), layer);
 
                 layer.tho_forward(&output_t, lengths.as_deref_mut(), train)
             })?
@@ -84,7 +84,7 @@ impl<DI: Dims + Send + Sync + 'static, DO: Dims + Send + Sync + 'static> ThoModu
                 None => self.run_layers(t, lengths.as_deref_mut(), train),
                 Some((dim, num_features)) => {
                     let splits = t.local()?.f_split(num_features, dim)?;
-                    debug!("MySequential::tho_forward splits.sizes={:?} num_features={num_features} dim={dim}",splits.iter().map(|t| t.size()).collect::<Vec<_>>());
+                    debug!("ThoSequential::tho_forward splits.sizes={:?} num_features={num_features} dim={dim}",splits.iter().map(|t| t.size()).collect::<Vec<_>>());
 
                     let original_lengths = lengths.as_deref().cloned();
                     let mut updated_lengths: Option<BatchLengths> = None;
@@ -95,19 +95,19 @@ impl<DI: Dims + Send + Sync + 'static, DO: Dims + Send + Sync + 'static> ThoModu
                             .enumerate()
                             .map(|(i, split)| {
                                 if split.size()[dim as usize] == num_features {
-                                    debug!("MySequential::tho_forward i={i} split={:?}",split.size());
+                                    debug!("ThoSequential::tho_forward i={i} split={:?}",split.size());
 
                                     let mut lengths_run = original_lengths.as_ref().map(|vals| vals.clone());
                                     let r = self.run_layers(&split.into(), lengths_run.as_mut(), train)?;
                                     if updated_lengths.is_none() {
                                         updated_lengths = lengths_run;
                                     }
-                                    debug!("MySequential::tho_forward i={i} r.size()={:?}",r.size());
+                                    debug!("ThoSequential::tho_forward i={i} r.size()={:?}",r.size());
 
                                     Ok(r.into_local()?)
                                 } else {
                                     //TODO ok skipping?
-                                    debug!("MySequential::tho_forward skipping i={i} split.size={:?}",split.size());
+                                    debug!("ThoSequential::tho_forward skipping i={i} split.size={:?}",split.size());
 
                                     Err(anyhow::anyhow!("Unexpected split size: {:?} dim={dim}", split.size()))
                                 }
@@ -123,7 +123,7 @@ impl<DI: Dims + Send + Sync + 'static, DO: Dims + Send + Sync + 'static> ThoModu
 
                     let mean_r = split_r.f_mean_dim(1, false, None)?.f_unsqueeze(1)?;//TODO why mean?
 
-                    debug!("MySequential::tho_forward split_r.size()={:?} mean_r.size()={:?}",split_r.size(),mean_r.size());
+                    debug!("ThoSequential::tho_forward split_r.size()={:?} mean_r.size()={:?}",split_r.size(),mean_r.size());
 
                     Ok(mean_r.into())
                 }
@@ -174,7 +174,7 @@ impl<DI: Dims + 'static, DO: Dims + 'static> ThoModule<DI, DO> for ThoParallel<D
     }
 
     fn tho_forward(&self, t: &ThoTensor<DI, DebugId>, mut lengths: Option<&mut BatchLengths>, train: bool) -> anyhow::Result<ThoTensor<DO, DebugId>> {
-        debug!("MyParallel::forward: xs={:?}", t.size());
+        debug!("ThoParallel::forward: xs={:?}", t.size());
         let original_lengths = lengths.as_deref().cloned();
         let mut updated_lengths: Option<BatchLengths> = None;
         let t = (self.join)(
@@ -196,25 +196,25 @@ impl<DI: Dims + 'static, DO: Dims + 'static> ThoModule<DI, DO> for ThoParallel<D
             *lengths_out = updated;
         }
 
-        debug!("MyParallel::forward: t={:?}", t.size());
+        debug!("ThoParallel::forward: t={:?}", t.size());
 
         Ok(t.into())
     }
 }
 /////
-pub struct Split1<DI: Dims, DO: Dims> {
+pub struct Split<DI: Dims, DO: Dims> {
     layer: Box<dyn ThoModule<DI, DO>>,
     split: Arc<dyn Fn(&Tensor) -> anyhow::Result<Vec<Tensor>> + Send + Sync>,
     join: Arc<dyn Fn(Vec<Tensor>) -> anyhow::Result<Tensor> + Send + Sync>,
 }
 
-impl<DI: Dims, DO: Dims> Debug for Split1<DI, DO> {
+impl<DI: Dims, DO: Dims> Debug for Split<DI, DO> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("MySeq").finish()//TODO
+        f.debug_struct("Split").finish()
     }
 }
 
-impl<DI: Dims, DO: Dims> Split1<DI, DO> {
+impl<DI: Dims, DO: Dims> Split<DI, DO> {
     pub fn new(
         layer: Box<dyn ThoModule<DI, DO>>,
         split: Arc<dyn Fn(&Tensor) -> anyhow::Result<Vec<Tensor>> + Send + Sync>,
@@ -229,13 +229,13 @@ impl<DI: Dims, DO: Dims> Split1<DI, DO> {
     }
 }
 
-impl<DI: Dims + 'static, DO: Dims + 'static> ThoModule<DI, DO> for Split1<DI, DO> {
+impl<DI: Dims + 'static, DO: Dims + 'static> ThoModule<DI, DO> for Split<DI, DO> {
     fn debug(&self) {
        self.layer.debug()
     }
 
     fn tho_forward(&self, t: &ThoTensor<DI, DebugId>, mut lengths: Option<&mut BatchLengths>, train: bool) -> anyhow::Result<ThoTensor<DO, DebugId>> {
-        debug!("MyParallel::forward: xs={:?}", t.size());
+        debug!("ThoParallel::forward: xs={:?}", t.size());
         let original_lengths = lengths.as_deref().cloned();
         let mut updated_lengths: Option<BatchLengths> = None;
         let t = (self.join)(
@@ -256,7 +256,7 @@ impl<DI: Dims + 'static, DO: Dims + 'static> ThoModule<DI, DO> for Split1<DI, DO
             *lengths_out = updated;
         }
 
-        debug!("MyParallel::forward: t={:?}", t.size());
+        debug!("ThoParallel::forward: t={:?}", t.size());
 
         Ok(t.into())
     }
@@ -300,7 +300,7 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for ThoMaxPool1d {
         if let Some(lengths) = lengths.as_deref_mut() {
             for len in lengths.as_mut_slice().iter_mut() {
                 if *len < 0 {
-                    return Err(anyhow::anyhow!("MyMaxPool1d::tho_forward length must be >= 0, got {len}"));
+                    return Err(anyhow::anyhow!("ThoMaxPool1d::tho_forward length must be >= 0, got {len}"));
                 }
                 *len = clc_max_pool1d_out(*len as u32, self.kernel_size as u32, self.padding as u32, self.dilation as u32, self.stride as u32)? as i64;
             }
@@ -467,7 +467,7 @@ impl ThoBatchNorm1d {
         num_features: u32,
         config: BatchNormConfig,
     ) -> anyhow::Result<Self> {
-        debug!("MyBatchNorm1d::tho_forward: path={:?} num_features={num_features}", path.borrow());
+        debug!("ThoBatchNorm1d::tho_forward: path={:?} num_features={num_features}", path.borrow());
 
         Ok(Self {
             batch_norm: batch_norm1d_from_path(path.borrow(), num_features as i64, config)?,
@@ -477,7 +477,7 @@ impl ThoBatchNorm1d {
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for ThoBatchNorm1d {
     fn tho_forward(&self, t: &ThoTensor<DI, DebugId>, _lengths: Option<&mut BatchLengths>, train: bool) -> anyhow::Result<ThoTensor<DO, DebugId>> {
-        debug!("MyBatchNorm1d::tho_forward: t.size={:?}", t.size());
+        debug!("ThoBatchNorm1d::tho_forward: t.size={:?}", t.size());
         Ok(self.batch_norm.forward_t(&*t.local()?, train).into())
     }
 }
@@ -498,16 +498,16 @@ impl<ND> ThoConv<ND> {
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for ThoConv<[i64; 1]> {
     fn tho_forward(&self, t: &ThoTensor<DI, DebugId>, mut lengths: Option<&mut BatchLengths>, train: bool) -> anyhow::Result<ThoTensor<DO, DebugId>> {
-        debug!("MyConv::tho_forward: lengths={lengths:?}");
+        debug!("ThoConv::tho_forward: lengths={lengths:?}");
         if let Some(lengths) = lengths.as_deref_mut() {
             for len in lengths.as_mut_slice().iter_mut() {
                 if *len < 0 {
-                    return Err(anyhow::anyhow!("MyConv::tho_forward length must be >= 0, got {len}"));
+                    return Err(anyhow::anyhow!("ThoConv::tho_forward length must be >= 0, got {len}"));
                 }
                 *len = clc_conv1d_out(*len as u32, self.kernel, self.config, "")? as i64;
             }
         }
-        debug!("MyConv::tho_forward lengths={lengths:?}");
+        debug!("ThoConv::tho_forward lengths={lengths:?}");
         Ok(panic_to_err!(Ok::<_, ThoError>(self.conv.forward_t(&*t.local()?, train).into()))?)//TODO custom conv for errors
     }
 }
@@ -582,7 +582,7 @@ impl ThoCosineConv1d {
         a: f64,
         b: f64,
     ) -> anyhow::Result<Self> {
-        debug!("MyCosineConv1d::new: l={l}, init_mode={init_mode:?} init={init:?}");
+        debug!("ThoCosineConv1d::new: l={l}, init_mode={init_mode:?} init={init:?}");
 
         // A copied VarStore already owns the initialized kernel; rebuilding
         // the module must bind to it without applying initialization again.
@@ -596,7 +596,7 @@ impl ThoCosineConv1d {
                 }
                 Some(init_slices) => {
                     let init_slices = init_slices.local()?; // [N, L]
-                    debug!("MyCosineConv1d::new: init_slices={init_slices:?} init_slices.isnan={:?}", init_slices.isnan().any());
+                    debug!("ThoCosineConv1d::new: init_slices={init_slices:?} init_slices.isnan={:?}", init_slices.isnan().any());
 
                     let sz = init_slices.size();
                     if sz.len() != 2 {
@@ -605,11 +605,11 @@ impl ThoCosineConv1d {
 
                     let init_len = sz[1];
                     if init_len != l {
-                        return Err(anyhow::anyhow!("MyCosineConv1d::new: provided l={} but init_slices width={}", l, init_len));
+                        return Err(anyhow::anyhow!("ThoCosineConv1d::new: provided l={} but init_slices width={}", l, init_len));
                     }
 
                     let proto = Self::build_prototype(&init_slices, init_mode)?;
-                    debug!("MyCosineConv1d::new: proto={proto:?}");
+                    debug!("ThoCosineConv1d::new: proto={proto:?}");
 
                     // Final normalization for cosine matching:
                     // zero-mean + unit-L2, then reshape to [1,1,L]
@@ -622,7 +622,7 @@ impl ThoCosineConv1d {
                         Ok(())
                     })?;
 
-                    debug!("MyCosineConv1d::new: kernel={kernel:?} kernel.isnan={:?}", kernel.isnan().any());
+                    debug!("ThoCosineConv1d::new: kernel={kernel:?} kernel.isnan={:?}", kernel.isnan().any());
                     kernel
                 }
             }
@@ -652,17 +652,17 @@ impl ThoCosineConv1d {
     /// x: [B, L] or [B,1,L]
     /// returns logits: [B, 1]
     pub fn forward(&self, x: &Tensor) -> anyhow::Result<Tensor> {
-        debug!("MyCosineConv1d::forward: x={x:?}");
-        trace!("MyCosineConv1d::forward: x=\n{x}");
+        debug!("ThoCosineConv1d::forward: x={x:?}");
+        trace!("ThoCosineConv1d::forward: x=\n{x}");
 
         let x = Self::ensure_3d(&x)?;
         let sz = x.size();
 
         if sz[2] != self.l {
-            return Err(anyhow::anyhow!("MyCosineConv1d::forward: expected input width {}, got {}", self.l, sz[2]));
+            return Err(anyhow::anyhow!("ThoCosineConv1d::forward: expected input width {}, got {}", self.l, sz[2]));
         }
 
-        debug!("MyCosineConv1d::forward: self.kernel={:?} self.kernel.isnan={}", self.kernel,  self.kernel.isnan().any());
+        debug!("ThoCosineConv1d::forward: self.kernel={:?} self.kernel.isnan={}", self.kernel,  self.kernel.isnan().any());
 
         // Normalize kernel each forward: [1,1,L] / ||kernel||
         let k_sq = self.kernel.f_mul(&self.kernel)?;
@@ -670,11 +670,11 @@ impl ThoCosineConv1d {
             .f_sum_dim_intlist(&[1i64, 2i64][..], true, Kind::Float)?
             .f_sqrt()?
             .f_clamp_min(1e-12)?;
-        debug!("MyCosineConv1d::forward: k_norm={k_norm:?} k_norm.isnan={}", k_norm.isnan().any());
+        debug!("ThoCosineConv1d::forward: k_norm={k_norm:?} k_norm.isnan={}", k_norm.isnan().any());
 
         let k_unit = self.kernel.f_div(&k_norm)?;
 
-        debug!("MyCosineConv1d::forward: k_unit={k_unit:?} k_unit.isnan={}", k_unit.isnan().any());
+        debug!("ThoCosineConv1d::forward: k_unit={k_unit:?} k_unit.isnan={}", k_unit.isnan().any());
 
         // Full-width conv -> [B,1,1]
         let num = x.f_conv1d(
@@ -685,7 +685,7 @@ impl ThoCosineConv1d {
             [1],
             1,
         )?;
-        debug!("MyCosineConv1d::forward: num={num:?} num.isnan={}", num.isnan().any());
+        debug!("ThoCosineConv1d::forward: num={num:?} num.isnan={}", num.isnan().any());
 
         // ||x|| over channel+time -> [B,1,1]
         let x_sq = x.f_mul(&x)?;
@@ -693,11 +693,11 @@ impl ThoCosineConv1d {
             .f_sum_dim_intlist(&[1i64, 2i64][..], true, Kind::Float)?
             .f_sqrt()?
             .f_clamp_min(1e-12)?;
-        debug!("MyCosineConv1d::forward: x_norm={x_norm:?} x_norm.isnan={}", x_norm.isnan().any());
+        debug!("ThoCosineConv1d::forward: x_norm={x_norm:?} x_norm.isnan={}", x_norm.isnan().any());
 
         // cosine similarity in [-1, 1]
         let score = num.f_div(&x_norm)?; // [B,1,1]
-        debug!("MyCosineConv1d::forward: score={score:?} score.isnan={}", score.isnan().any());
+        debug!("ThoCosineConv1d::forward: score={score:?} score.isnan={}", score.isnan().any());
 
         // logit = alpha * score + beta
         Ok(score
@@ -903,22 +903,22 @@ pub struct ThoSharpeningHead1d {
 impl ThoSharpeningHead1d {
     pub fn new(vs: &nn::Path, in_channels: i64, out_channels: i64, k_mu: i64, k_hat: i64, p: f64, temperature: f64) -> anyhow::Result<Self> {
         if in_channels <= 0 {
-            return Err(anyhow::anyhow!("MySharpeningHead1d::new in_channels must be > 0, got {in_channels}"));
+            return Err(anyhow::anyhow!("ThoSharpeningHead1d::new in_channels must be > 0, got {in_channels}"));
         }
         if out_channels <= 0 {
-            return Err(anyhow::anyhow!("MySharpeningHead1d::new out_channels must be > 0, got {out_channels}"));
+            return Err(anyhow::anyhow!("ThoSharpeningHead1d::new out_channels must be > 0, got {out_channels}"));
         }
         if k_mu <= 0 || k_mu % 2 == 0 {
-            return Err(anyhow::anyhow!("MySharpeningHead1d::new k_mu must be an odd positive number, got {k_mu}"));
+            return Err(anyhow::anyhow!("ThoSharpeningHead1d::new k_mu must be an odd positive number, got {k_mu}"));
         }
         if k_hat <= 0 || k_hat % 2 == 0 {
-            return Err(anyhow::anyhow!("MySharpeningHead1d::new k_hat must be an odd positive number, got {k_hat}"));
+            return Err(anyhow::anyhow!("ThoSharpeningHead1d::new k_hat must be an odd positive number, got {k_hat}"));
         }
         if p <= 0.0 {
-            return Err(anyhow::anyhow!("MySharpeningHead1d::new p must be > 0, got {p}"));
+            return Err(anyhow::anyhow!("ThoSharpeningHead1d::new p must be > 0, got {p}"));
         }
         if temperature <= 0.0 {
-            return Err(anyhow::anyhow!("MySharpeningHead1d::new temperature must be > 0, got {temperature}"));
+            return Err(anyhow::anyhow!("ThoSharpeningHead1d::new temperature must be > 0, got {temperature}"));
         }
 
         let cfg = ConvConfig { bias: true, ..ConvConfig::default() };
@@ -953,7 +953,7 @@ impl ThoSharpeningHead1d {
     pub fn forward_with_thp(&self, sims: &Tensor) -> anyhow::Result<(Tensor, Tensor)> {
         let sims_shape = sims.size();
         if sims_shape.len() != 3 {
-            return Err(anyhow::anyhow!("MySharpeningHead1d::forward_with_thp expected [B,C,T], got {:?}", sims_shape));
+            return Err(anyhow::anyhow!("ThoSharpeningHead1d::forward_with_thp expected [B,C,T], got {:?}", sims_shape));
         }
 
         let mu = Self::same_avgpool1d(sims, self.k_mu)?;
@@ -1005,7 +1005,7 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for ThoAvgPool1d {
         if let Some(lengths) = lengths.as_deref_mut() {
             for len in lengths.as_mut_slice().iter_mut() {
                 if *len < 0 {
-                    return Err(anyhow::anyhow!("MyAvgPool1d::tho_forward length must be >= 0, got {len}"));
+                    return Err(anyhow::anyhow!("ThoAvgPool1d::tho_forward length must be >= 0, got {len}"));
                 }
                 *len = clc_avg_pool1d_out(*len as u32, self.kernel_size as u32, self.padding as u32, self.stride as u32) as i64;
             }
