@@ -193,7 +193,7 @@ mod tests {
     use tch::kind::FLOAT_CPU;
     use tch::{Device, Tensor};
     use thoosa_shared::comp_id::SynKey;
-    use thoosa_shared::tracked_await::track_await;
+    use thoosa_shared::tracked_await::t;
     use thoosa_common::runner::sync_stage::ConsumeResult;
     use thoosa_shared::traits::{Adjustable, AsyncStage, OutId, RunCtx, Stage, WithId};
     use thoosa_common::runner::sync_stage::{SyncStage};
@@ -613,7 +613,7 @@ mod tests {
                 let self_k = parse_numeric_part(resource).unwrap_or(1.0);
                 let cpu_tensor = lin_for_size(self_k, size, Float, &Device::Cpu)?;
 
-                let worker_ref: ThoTensor<LoadedTensor, SynKey> = track_await!(cuda_actor.copy(cpu_tensor.into(), tho_device_idx.into())).await?.to_types(mono_key!(0u32, "todo").into())?;
+                let worker_ref: ThoTensor<LoadedTensor, SynKey> = t!(cuda_actor.copy(cpu_tensor.into(), tho_device_idx.into())).await?.to_types(mono_key!(0u32, "todo").into())?;
                 debug!("run_load_and_clc_ipc_cuda_worker: worker_ref={worker_ref:?}");
 
                 let loaded = Arc::new(DevicesWrap::wrap(worker_ref));
@@ -727,10 +727,10 @@ mod tests {
 
                 let smoke = lin_for_size(1.0, [3, 10], Float, &Device::Cpu)?;
                 let expected_smoke = smoke.copy();
-                let worker_ref = track_await!(cuda_actor.copy(smoke.into(), tho_device_idx.into())).await?;
+                let worker_ref = t!(cuda_actor.copy(smoke.into(), tho_device_idx.into())).await?;
                 assert!(worker_ref.ref_key().is_some(), "expected IPC H2D copy to return worker tensor ref, got {worker_ref:?}");
 
-                let cpu_copy = track_await!(cuda_actor.copy(worker_ref, 0.into())).await?;
+                let cpu_copy = t!(cuda_actor.copy(worker_ref, 0.into())).await?;
                 assert!(expected_smoke.allclose(&*cpu_copy.local()?, 0.1, 0.1, false), "IPC worker smoke copy changed tensor values");
 
                 Ok(())

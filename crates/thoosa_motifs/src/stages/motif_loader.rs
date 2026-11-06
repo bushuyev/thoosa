@@ -54,7 +54,7 @@ use thoosa_cpu_data_derive::CpuData;
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::ipc_types::WorkerOutput;
 use thoosa_shared::resource::{Resource, ResourceId};
-use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::tracked_await::t;
 use thoosa_shared::traits::Adjustable;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, CpuData)]
@@ -217,7 +217,7 @@ impl thoosa_shared::CopyToDevice for LoadedMotifResource {
             id: self.id.clone(),
             resource_id: self.resource_id,
             slices: self.slices.clone(),
-            raw_tensor: track_await!(self.raw_tensor.copy_to_device(dst_device)).await?,
+            raw_tensor: t!(self.raw_tensor.copy_to_device(dst_device)).await?,
         })
     }
 }
@@ -294,7 +294,7 @@ impl thoosa_shared::CopyToDevice for SyncMotifLoaderInput {
                 id: resource.id.clone(),
                 resource_id: resource.resource_id,
                 slices: resource.slices.clone(),
-                raw_tensor: track_await!(resource.raw_tensor.copy_to_device(dst_device)).await?,
+                raw_tensor: t!(resource.raw_tensor.copy_to_device(dst_device)).await?,
             });
         }
         Ok(Self {
@@ -366,7 +366,7 @@ impl ConsumeData for SyncMotifLoaderInputWrapper {
             } = self;
 
             let cache_name = loaded_resources.name.clone();
-            let loaded_resources = match track_await!(loaded_resources.take_all_recovering(to_device_idx)).await {
+            let loaded_resources = match t!(loaded_resources.take_all_recovering(to_device_idx)).await {
                 Ok(loaded_resources) => loaded_resources,
                 Err(err) => {
                     return ConsumeResult::Failed {
@@ -707,11 +707,11 @@ where
         let motif_id_value = motif_id.vals[0].to_data_id()?;
         let select_motifs_run_config_id_for_key = select_motifs_run_config_id.clone();
         // TODO(perf): cache motif slice lists/resource grouping by motif_id; repeated DB reads dominate MotifLoader elapsed time in traced runs.
-        let (channel, find_motifs_run_config_id, slices, resources_map) = track_await!(self
+        let (channel, find_motifs_run_config_id, slices, resources_map) = t!(self
             .store
             .list_motif_slices(motif_id_value.0, select_motifs_run_config_id, Some(1000), None)).await?;
 
-        let find_motifs_run_config: FindMotifsRunConfig = track_await!(load_run_config(&self.store, find_motifs_run_config_id, FindMotifsRunConfig::type_name())).await?;
+        let find_motifs_run_config: FindMotifsRunConfig = t!(load_run_config(&self.store, find_motifs_run_config_id, FindMotifsRunConfig::type_name())).await?;
         let real_find_motifs_run_config_id = find_motifs_run_config.id.unwrap_or(find_motifs_run_config_id);
 
         debug!("MotifLoader::run: motif_id={motif_id} channel={channel} ctx={ctx:?} find_motifs_run_config_id={real_find_motifs_run_config_id}");
@@ -723,7 +723,7 @@ where
         });
         assert!(!resource_ids_slices.is_empty());
         let configurable_loader = config_to_stage(&self.loader, &find_motifs_run_config, &self.ws, ctx.tho_device_idx()).await?;
-        let loaded_resources = track_await!(load_motif_resource_tensors(
+        let loaded_resources = t!(load_motif_resource_tensors(
             motif_id_value.clone(),
             channel,
             real_find_motifs_run_config_id,
@@ -757,7 +757,7 @@ where
             ],
             None,
         );
-        let motif = track_await!(oom_handler
+        let motif = t!(oom_handler
         .consume(
             &sync_motif_loader,
             sync_input,
@@ -863,9 +863,9 @@ where
 
         let (motif_id, limit) = (input.motif_id.clone(), input.limit);
 
-        let (channel, find_motifs_run_config_id) = track_await!(self.store.get_motif_meta(*motif_id)).await?;
+        let (channel, find_motifs_run_config_id) = t!(self.store.get_motif_meta(*motif_id)).await?;
 
-        let find_motifs_run_config: FindMotifsRunConfig = track_await!(load_run_config(&self.store, find_motifs_run_config_id, FindMotifsRunConfig::type_name())).await?;
+        let find_motifs_run_config: FindMotifsRunConfig = t!(load_run_config(&self.store, find_motifs_run_config_id, FindMotifsRunConfig::type_name())).await?;
 
 
         debug!("RandomSlicesLoader::run: motif_id={motif_id} channel={channel} ctx={ctx:?} find_motifs_run_config_id={find_motifs_run_config_id}");
@@ -873,7 +873,7 @@ where
         let motif_id_value = motif_id.clone().0;
         let input_len_adjuster = find_motifs_run_config.input_len_adjuster();
 
-        let (channel, find_motifs_run_config_id, slices, resources_map) = track_await!(self.store.list_random_slices_out_of_motif(motif_id_value, find_motifs_run_config.window, None, input_len_adjuster, Some(limit as usize))).await?;
+        let (channel, find_motifs_run_config_id, slices, resources_map) = t!(self.store.list_random_slices_out_of_motif(motif_id_value, find_motifs_run_config.window, None, input_len_adjuster, Some(limit as usize))).await?;
 
         // Some motifs leave no eligible negative samples. Return a normal load
         // failure: panicking poisons the cached Shared future, so a later CUDA
@@ -890,7 +890,7 @@ where
         debug!("RandomSlicesLoader::run: motif_id={motif_id} find_motifs_run_config={find_motifs_run_config:?} device_idx={}", ctx.tho_device_idx());
 
         let configurable_loader = config_to_stage(&self.loader, &find_motifs_run_config, &self.ws, ctx.tho_device_idx()).await?;
-        let loaded_resources = track_await!(load_motif_resource_tensors(
+        let loaded_resources = t!(load_motif_resource_tensors(
             motif_id_value.clone(),
             channel,
             find_motifs_run_config_id,
@@ -924,7 +924,7 @@ where
             None,
         );
         debug!("RandomSlicesLoader::run: motif_id={motif_id}: sync_input={sync_input:?}");
-        let motif = track_await!(oom_handler
+        let motif = t!(oom_handler
         .consume(
             &sync_motif_loader,
             sync_input,
@@ -999,7 +999,7 @@ impl BorrowRef for SyncLoadMotifResourcesInputWrapper {
         Self: 'a,
     {
         async move {
-            let raw_tensor = track_await!(BorrowRef::borrow_ref(&self.raw_tensor, to_device_idx)).await?;
+            let raw_tensor = t!(BorrowRef::borrow_ref(&self.raw_tensor, to_device_idx)).await?;
             Ok(SyncLoadMotifResourcesInput {
                 id: self.id.clone(),
                 raw_tensor,
@@ -1278,7 +1278,7 @@ impl BorrowRef for SyncLoadRandomSlicesInputWrapper {
         Self: 'a,
     {
         async move {
-            let raw_tensor = track_await!(BorrowRef::borrow_ref(&self.raw_tensor, to_device_idx)).await?;
+            let raw_tensor = t!(BorrowRef::borrow_ref(&self.raw_tensor, to_device_idx)).await?;
             Ok(SyncLoadRandomSlicesInput {
                 id: self.id.clone(),
                 raw_tensor,
@@ -1512,7 +1512,7 @@ where
     C: 'static + RunCtx + MaxParallelCtx + Adjustable,
     L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=C>,
 {
-    let loaded_resources = track_await!(TmpCached::new(&format!("tmp_loaded_motif_resources_{descr}"))).await;
+    let loaded_resources = t!(TmpCached::new(&format!("tmp_loaded_motif_resources_{descr}"))).await;
     let sync_load_motif_resources = SyncLoadMotifResources::new(ctx.tho_device_idx()).await?;
     let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, NoRunCtxAdjuster, ()> = OOMHandler::new(vec![], None);
     let mut loaded_resources_count = 0usize;
@@ -1522,7 +1522,7 @@ where
         // TODO(perf): load raw resource tensors with bounded concurrency; this loop is sequential and sits under the MotifLoader critical path.
         let resource = resources_map.get(&resource_id).cloned().expect(&format!("no resource with id={resource_id}"));
         let resource_cache = Arc::new(resource);
-        let raw_tensor = track_await!(Arc::clone(&configurable_loader).run_cached(resource_cache, ctx.branch(false))).await?;
+        let raw_tensor = t!(Arc::clone(&configurable_loader).run_cached(resource_cache, ctx.branch(false))).await?;
 
         debug!("load_motif_resource_tensors: motif_id={motif_id} resource_id={resource_id} raw_tensor={raw_tensor:?} descr={descr}");
 
@@ -1536,7 +1536,7 @@ where
             slices.clone(),
             descr.to_string(),
         ));
-        let channel_tensor = track_await!(oom_handler.run(&sync_load_motif_resources, sync_input, ctx.branch(false), NoContexts)).await?.into_inner();
+        let channel_tensor = t!(oom_handler.run(&sync_load_motif_resources, sync_input, ctx.branch(false), NoContexts)).await?.into_inner();
         drop(raw_tensor);
         loaded_resources.insert(LoadedMotifResource {
             id: LoadedMotifResourceId::new(resource_id),
@@ -1607,7 +1607,7 @@ where
     let device_idx = ctx.tho_device_idx();
     debug!("load_random_slices: find_motifs_run_config_id={find_motifs_run_config_id} slices={slices:?} descr={descr}");
 
-    let find_motifs_run_config: FindMotifsRunConfig = track_await!(load_run_config(&store, find_motifs_run_config_id, FindMotifsRunConfig::type_name())).await?;
+    let find_motifs_run_config: FindMotifsRunConfig = t!(load_run_config(&store, find_motifs_run_config_id, FindMotifsRunConfig::type_name())).await?;
 
     let resource_ids_slices = slices
         .iter()
@@ -1625,7 +1625,7 @@ where
 
     debug!("load_random_slices:  find_motifs_run_config={find_motifs_run_config:?} device_idx={device_idx} channels={channels}");
 
-    let tmp_cache = track_await!(TmpCached::new(&format!("tmp_random_slices_{descr}"))).await;
+    let tmp_cache = t!(TmpCached::new(&format!("tmp_random_slices_{descr}"))).await;
 
     let configurable_loader = config_to_stage(&loader, &find_motifs_run_config, ws, ctx.tho_device_idx()).await?;
     let sync_load_random_slices = SyncLoadRandomSlices::new(ctx.tho_device_idx()).await?;
@@ -1636,7 +1636,7 @@ where
         // TODO(perf): load_random_slices repeats the same sequential raw-resource loading pattern; use a bounded concurrent loader once memory pressure is modeled.
         let resource = resources_map.get(&resource_id).cloned().expect(&format!("no resource with id={resource_id}"));
         let resource_cache = Arc::new(resource);
-        let raw_tensor = track_await!(Arc::clone(&configurable_loader)
+        let raw_tensor = t!(Arc::clone(&configurable_loader)
             .run_cached(resource_cache, ctx.branch(false))).await?;
         debug!("load_random_slices: resource_id={resource_id} slices={slices:?} in_loop_1");
 
@@ -1649,7 +1649,7 @@ where
             slices,
             descr.to_string(),
         ));
-        let resource_slices = track_await!(oom_handler.run(&sync_load_random_slices, sync_input, ctx.branch(false), NoContexts)).await?.into_inner();
+        let resource_slices = t!(oom_handler.run(&sync_load_random_slices, sync_input, ctx.branch(false), NoContexts)).await?.into_inner();
         if resource_slices.size()[1] > 0 {
             debug!("load_random_slices: resource_slices={resource_slices:?} inserted into tmp cache");
 

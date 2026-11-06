@@ -66,7 +66,7 @@ use thoosa_shared::ipc_types::WorkerOutput;
 use thoosa_shared::run_configs::RunConfig;
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::tmp_file::TmpFile;
-use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::tracked_await::t;
 use thoosa_shared::{CopyToDevice, FuturesOrdering, ThoError, collect_futures_with_progress, mono_key, panic_to_err, shuffle_and_chunk_with_rng};
 use tokio::try_join;
 
@@ -454,7 +454,7 @@ where
         apply_motif_nets
     ));
 
-    track_await!(TrainLabelNets::new(
+    t!(TrainLabelNets::new(
         train_motif_net_run_config_ids,
         motif_nets_ids,
         applied_motif_loader,
@@ -542,7 +542,7 @@ impl SavableResult for TrainLabelNetsOutput {
         for result in &mut self.results {
 
             run_config_ids.push(
-                track_await!(result.save(store, ws, TrainLabelNetRunConfigResultParams {
+                t!(result.save(store, ws, TrainLabelNetRunConfigResultParams {
                     train_motif_nets_run_config_ids:&self.train_motif_nets_run_config_ids,
                     motif_nets_ids:&self.motif_nets_ids
                 })).await?
@@ -590,7 +590,7 @@ where
         async move {
             //Split resources into train/valid sets per label for binary label-vs-rest training.
             let resources_config = input.resources_config().clone();
-            let (train_labels_resource_keys, valid_label_resource_keys) = track_await!(resources_config.to_resources(&self.store)).await?;
+            let (train_labels_resource_keys, valid_label_resource_keys) = t!(resources_config.to_resources(&self.store)).await?;
 
             let train_labels_resource_keys =  train_labels_resource_keys.into_iter().filter(|(label, resources)|{
                 let is_empty = resources.is_empty();
@@ -695,7 +695,7 @@ where
                                                Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(*MaxParallelStep::FAST))),
                                                Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("sync_label_batch"))),
                                            ], None);
-                                           let output = track_await!(oom_handler.run(
+                                           let output = t!(oom_handler.run(
                                                &sync_label_batch,
                                                input,
                                                ctx.branch(false),
@@ -723,7 +723,7 @@ where
                         format!("label_{label}")
                     ));
 
-                    let result = track_await!(train_net.run(
+                    let result = t!(train_net.run(
                         Arc::new(TrainNetInput::new()),
                         ctx_for_task
                     )).await?;
@@ -745,7 +745,7 @@ where
 
             });
 
-            let results = track_await!(collect_futures_with_progress(
+            let results = t!(collect_futures_with_progress(
                 futures,
                 labels_train_and_valid_sets_len,
                 FuturesOrdering::Unordered,
@@ -934,11 +934,11 @@ where
                     }
                 });
 
-                let futures = futures.map(|future| async move { Ok::<_, ThoError>(track_await!(future).await) });
+                let futures = futures.map(|future| async move { Ok::<_, ThoError>(t!(future).await) });
 
                 debug!("ResourcesBatch::build_batch_stream: descr={descr} futures.len={}", futures.len());
 
-                let (x_1_wrapped, x_0_wrapped) = track_await!(collect_futures_with_progress(
+                let (x_1_wrapped, x_0_wrapped) = t!(collect_futures_with_progress(
                     futures,
                     batch_len,
                     FuturesOrdering::Ordered,
@@ -956,7 +956,7 @@ where
                 //
                 debug!("ResourcesBatch::build_batch_stream: descr={descr} x_1_wrapped={x_1_wrapped:?} x_0_wrapped={x_0_wrapped:?}");
 
-                let r: Result<(ThoBatch<X>, Option<BatchLengths>, ThoBatch<Y>), ThoError> = track_await!(build_batch_fn(x_1_wrapped, x_0_wrapped, ctx_for_build_fn)).await;
+                let r: Result<(ThoBatch<X>, Option<BatchLengths>, ThoBatch<Y>), ThoError> = t!(build_batch_fn(x_1_wrapped, x_0_wrapped, ctx_for_build_fn)).await;
 
                 debug!("ResourcesBatch::build_batch_stream: descr={descr} batch_i={i} r={r:?}");
 
@@ -1651,7 +1651,7 @@ impl SavableResult for TrainLabelNetRunConfigResult {
         p: Self::P<'_>
     ) -> anyhow::Result<u32> {
 
-        let run_config_id = track_await!(store.save_run_config(
+        let run_config_id = t!(store.save_run_config(
             Some(p.train_motif_nets_run_config_ids), //it's used as input for TrainLabelNetsOutput
             &TrainLabelNetRunConfig::type_name(),
             "Label",
@@ -1668,7 +1668,7 @@ impl SavableResult for TrainLabelNetRunConfigResult {
 
         debug!("TrainLabelNetRunConfigResult::save: self.motif_nets_ids={:?}", self.motif_nets_ids);
 
-        track_await!(store.save_trained_net(run_config_id, path, self.loss, Some(p.motif_nets_ids.clone()))).await?;
+        t!(store.save_trained_net(run_config_id, path, self.loss, Some(p.motif_nets_ids.clone()))).await?;
 
         Ok(run_config_id)
     }

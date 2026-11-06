@@ -6,7 +6,7 @@ use std::fmt::Debug;
 use std::future::Future;
 use std::sync::Arc;
 use thoosa_shared::ThoError;
-use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::tracked_await::t;
 use thoosa_shared::traits::RunCtx;
 use tracing::Instrument;
 
@@ -107,8 +107,8 @@ where
         futures_util::pin_mut!(source);
         loop {
             // Reserve before polling the source: capacity includes the batch being produced.
-            let Ok(permit) = track_await!(tx.reserve()).await else { break; };
-            match track_await!(source.next()).await {
+            let Ok(permit) = t!(tx.reserve()).await else { break; };
+            match t!(source.next()).await {
                 Some(item) => { permit.send(item); }
                 None => break,
             }

@@ -20,7 +20,7 @@ use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Arc, OnceLock};
 use thoosa_shared::collect_futures_eta::{CollectEtaInvocationGuard, collect_eta_record_completion};
-use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::tracked_await::t;
 use thoosa_shared::{CudaActivityGate, ThoError, async_perf_log, async_read_owned_lock, async_write_owned_lock, perf_log, sync_write_lock};
 use tokio::sync::RwLock as AsyncRwLock;
 use thoosa_shims::arena::{shared_arena_dup_fd, shared_arena_init};
@@ -311,9 +311,9 @@ impl ResidencyService {
         let mut total_gpu_mem = 0;
         for (_cache_key, entry) in maps.iter() {
             let type_name = entry.name.as_ref();
-            let _cache_guard = track_await!(Self::lock_cache_shared(entry, "GlobalCtx::debug_caches: timed out waiting for cache gate read lock")).await;
+            let _cache_guard = t!(Self::lock_cache_shared(entry, "GlobalCtx::debug_caches: timed out waiting for cache gate read lock")).await;
             info!("ResidencyService::debug_gpu: descr={descr} type_name={type_name}");
-            match track_await!(entry.purger.debug_gpu(device_idx)).await {
+            match t!(entry.purger.debug_gpu(device_idx)).await {
                 Ok(v) => total_gpu_mem += v,
                 Err(e) => log::error!("GlobalCtx::debug_gpu: failed with {e:?}"),
             }
@@ -328,7 +328,7 @@ impl ResidencyService {
     }
     pub async fn debug_caches(&self, device_idx: usize, descr: &str) {
         let maps = self.caches_snapshot("GlobalCtx::debug_caches: timed out waiting for caches read lock");
-        track_await!(self.debug_caches_snapshot(device_idx, descr, &maps)).await;
+        t!(self.debug_caches_snapshot(device_idx, descr, &maps)).await;
     }
     pub async fn dump_all_to_cpu<'a>(
         &'a self,
@@ -344,15 +344,15 @@ impl ResidencyService {
 
         for (_cache_key, entry) in maps.iter() {
             let type_name = entry.name.as_ref();
-            let _cache_guard = track_await!(Self::lock_cache_shared(entry, "GlobalCtx::dump_all_to_cpu: timed out waiting for cache gate read lock")).await;
-            if !track_await!(entry.purger.has_gpu_data(tho_device_idx)).await {
+            let _cache_guard = t!(Self::lock_cache_shared(entry, "GlobalCtx::dump_all_to_cpu: timed out waiting for cache gate read lock")).await;
+            if !t!(entry.purger.has_gpu_data(tho_device_idx)).await {
                 debug!("ResidencyService::dump_all_to_cpu: type_name={type_name} has no data on device_idx={tho_device_idx}, skipping");
                 collect_eta_record_completion(dump_eta_guard.id());
                 continue;
             }
 
             debug!("ResidencyService::dump_all_to_cpu: type_name={type_name}");
-            track_await!(entry.purger.purge_gpu(None, tho_device_idx, type_name)).await?;
+            t!(entry.purger.purge_gpu(None, tho_device_idx, type_name)).await?;
             debug!("ResidencyService::dump_all_to_cpu: type_name={type_name} descr={descr} done");
             collect_eta_record_completion(dump_eta_guard.id());
         }
@@ -365,7 +365,7 @@ impl ResidencyService {
 
         #[cfg(tho_debug)]
         {
-            track_await!(self.debug_caches(tho_device_idx, descr)).await;
+            t!(self.debug_caches(tho_device_idx, descr)).await;
 
             GlobalCtx::global().execution(tho_device_idx).debug_worker().await?;
         }
@@ -386,9 +386,9 @@ impl ResidencyService {
 
         for (_cache_key, entry) in maps.iter() {
             let type_name = entry.name.as_ref();
-            let _cache_guard = track_await!(Self::lock_cache_shared(entry, "GlobalCtx::drop_data_on_device: timed out waiting for cache gate read lock")).await;
+            let _cache_guard = t!(Self::lock_cache_shared(entry, "GlobalCtx::drop_data_on_device: timed out waiting for cache gate read lock")).await;
             debug!("ResidencyService::drop_data_on_device: type_name={type_name}");
-            match track_await!(entry.purger.drop_gpu(tho_device_idx, type_name)).await {
+            match t!(entry.purger.drop_gpu(tho_device_idx, type_name)).await {
                 Ok(_) => {
                     debug!("ResidencyService::drop_data_on_device: type_name={type_name} descr={descr} done");
                 }
@@ -421,17 +421,17 @@ impl ResidencyService {
             let maps = self.caches_snapshot("GlobalCtx::purge_cpu: timed out waiting for caches read lock");
 
             #[cfg(tho_debug)]
-            track_await!(self.debug_caches_snapshot(1, "before purge_cpu", &maps)).await;
+            t!(self.debug_caches_snapshot(1, "before purge_cpu", &maps)).await;
 
             for (_cache_key, entry) in maps.iter() {
                 let type_name = entry.name.as_ref();
-                let _cache_guard = track_await!(Self::lock_cache_shared(entry, "GlobalCtx::purge_cpu: timed out waiting for cache gate read lock")).await;
-                let purged = track_await!(entry.purger.purge_cpu(purge_until)).await;
+                let _cache_guard = t!(Self::lock_cache_shared(entry, "GlobalCtx::purge_cpu: timed out waiting for cache gate read lock")).await;
+                let purged = t!(entry.purger.purge_cpu(purge_until)).await;
                 debug!("ResidencyService::purge_cpu: purged {purged} from {type_name}");
             }
 
             #[cfg(tho_debug)]
-            track_await!(self.debug_caches_snapshot(1, "after purge_cpu", &maps)).await;
+            t!(self.debug_caches_snapshot(1, "after purge_cpu", &maps)).await;
         }
 
         debug!("ResidencyService::purge_cpu: purge_until={purge_until} done");
@@ -447,8 +447,8 @@ impl ResidencyService {
 
         for (_cache_key, entry) in maps.iter() {
             let type_name = entry.name.as_ref();
-            let _cache_guard = track_await!(Self::lock_cache_shared(entry, "GlobalCtx::is_all_on_cpu_force_check: timed out waiting for cache gate read lock")).await;
-            if track_await!(entry.purger.has_gpu_data(device_idx)).await {
+            let _cache_guard = t!(Self::lock_cache_shared(entry, "GlobalCtx::is_all_on_cpu_force_check: timed out waiting for cache gate read lock")).await;
+            if t!(entry.purger.has_gpu_data(device_idx)).await {
                 debug!("ResidencyService::is_all_on_cpu_force_check: type_name={type_name} has data on device_idx={device_idx}");
                 self.is_all_on_cpu[device_idx].store(false, Relaxed);
                 return false;

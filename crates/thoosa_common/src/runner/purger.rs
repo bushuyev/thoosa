@@ -6,7 +6,7 @@ use parking_lot::Mutex;
 use tokio::sync::{mpsc, watch};
 use tracing::Instrument;
 use thoosa_shared::{panic_to_err_async, CudaActivityGate, ThoError};
-use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::tracked_await::t;
 
 pub enum PurgeCmd {
     Gpu {
@@ -55,7 +55,7 @@ impl Purger {
 
     async fn run(mut rx: mpsc::UnboundedReceiver<PurgeCmd>, gate: Option<Arc<CudaActivityGate>>) -> Result<(), ThoError> {
         let mut first_error = None;
-        while let Some(PurgeCmd::Gpu { closures }) = track_await!(rx.recv()).await {
+        while let Some(PurgeCmd::Gpu { closures }) = t!(rx.recv()).await {
             // A terminal gate failure cannot safely drain GPU work. Returning drops
             // the receiver and pending callbacks, closes admission, and preserves the cause.
             if let Some(gate) = &gate {

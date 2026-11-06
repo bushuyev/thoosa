@@ -32,7 +32,7 @@ use thoosa_cpu_data_derive::CpuData;
 use thoosa_named_derive::Named;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::{MonoKey, SynKey};
-use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::tracked_await::t;
 use thoosa_shared::traits::{Adjustable, AsyncStage, Data, MonoMetrics, OutId, RangeSelector, RunCtx, Stage, ThoSelector, WithId};
 use thoosa_common::runner::sync_stage::{SyncStage};
 use thoosa_shared::{ThoError, mono_key};
@@ -183,8 +183,8 @@ impl BorrowRef for ABClcSyncStageInputWrapper {
         Self: 'a,
     {
         async move {
-            let from_a = track_await!(self.a_out.load_from_any_device_(to_device_idx)).await?;
-            let from_b = track_await!(self.b_out.load_from_any_device_(to_device_idx)).await?;
+            let from_a = t!(self.a_out.load_from_any_device_(to_device_idx)).await?;
+            let from_b = t!(self.b_out.load_from_any_device_(to_device_idx)).await?;
             Ok(ABClcSyncStageInput::from_data_refs(ThoDataRef::ReadLocked(from_a), ThoDataRef::ReadLocked(from_b)))
         }
     }

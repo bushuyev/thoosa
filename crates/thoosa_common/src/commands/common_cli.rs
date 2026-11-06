@@ -16,7 +16,7 @@ use torch_sys::at_grad_set_enabled;
 use tracing::Instrument;
 use thoosa_shared::perf_logging::{install_panic_hook, SyncMakeWriter, init_tracing, format_perf_map, PERF};
 
-use thoosa_shared::tracked_await::{snapshot_not_ready, track_await};
+use thoosa_shared::tracked_await::{snapshot_not_ready, t};
 use thoosa_shims::cpp_log::init_cpp_logging;
 use thoosa_store::Store;
 use crate::args::{CommonArgs, StageCommand};
@@ -94,7 +94,7 @@ where
     let run_id = match args.run_id{
         None => {
             // TODO throw error if command doesn't support new run_id - inference, export etc
-            track_await!(store.save_run(format!("{args:?}"))).await?
+            t!(store.save_run(format!("{args:?}"))).await?
         }
         Some(run_id) => run_id
     };
@@ -149,7 +149,7 @@ where
     let residency = session.runtime.residency();
     let mut purge_cpu_worker = tokio::spawn(async move {
         let mut ticker = time::interval(Duration::from_secs(60));//TODO config
-        track_await!(ticker.tick()).await;
+        t!(ticker.tick()).await;
         ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
         loop {
             select! {
@@ -227,7 +227,7 @@ where
 
     info!("perf: \n{}", format_perf_map(&PERF));
 
-    track_await!(session.runtime.shutdown()).await;
+    t!(session.runtime.shutdown()).await;
 
     let _ = stop_cpu_purge_tx.send(true);
     // A purge may be waiting for work in the poisoned local process. It must
@@ -235,9 +235,9 @@ where
     tokio::select! {
         _ = session.runtime.wait_for_process_failure() => {
             purge_cpu_worker.abort();
-            let _ = track_await!(purge_cpu_worker).await;
+            let _ = t!(purge_cpu_worker).await;
         }
-        _ = track_await!(&mut purge_cpu_worker) => {}
+        _ = t!(&mut purge_cpu_worker) => {}
     }
 
 

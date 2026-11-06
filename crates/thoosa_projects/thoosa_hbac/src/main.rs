@@ -44,7 +44,7 @@ use thoosa_motifs::stages::train_final_net::{SYNC_LOGITS_BATCH_ENDPOINT, sync_lo
 use thoosa_motifs::stages::train_label_nets::{SYNC_LABEL_BATCH_ENDPOINT, sync_label_batch_endpoint_init, train_label_step_endpoint_inits};
 use thoosa_motifs::stages::train_motif_nets::train_motif_step_endpoint_inits;
 use thoosa_motifs::train_nets::InferArgs;
-use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::tracked_await::t;
 use thoosa_shared::traits::RunCtx;
 use thoosa_shared::{ThoError, cdt_for_dir};
 use thoosa_shims::context::ThoCudaContext;
@@ -123,7 +123,7 @@ impl StageCommand for HbacCommands {
                         ctx.tho_device_idx(),
                     ))?))
                 };
-                track_await!(import_resources(
+                t!(import_resources(
                     &ws,
                     store.as_ref(),
                     &LABELS,
@@ -175,7 +175,7 @@ impl StageCommand for HbacCommands {
                 //     max_batch_size : 20,
                 // });
 
-                track_await!(run_all(
+                t!(run_all(
                     &ws,
                     &store,
                     &loader,

@@ -33,7 +33,7 @@ use tokio::process::Command;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tracing::Instrument;
-use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::tracked_await::t;
 
 const SEARCH_TYPE_NONE_LABEL: &str = "no value";
 const RUN_ON_DATE_FORMAT: &str = "%Y-%m-%d";
@@ -716,7 +716,7 @@ impl App {
             return Ok(cached);
         }
 
-        let motifs = track_await!(self.store.list_run_motifs(run_config_id)).await?;
+        let motifs = t!(self.store.list_run_motifs(run_config_id)).await?;
         self.run_motifs_cache.insert(run_config_id, motifs.clone());
         Ok(motifs)
     }
@@ -737,7 +737,7 @@ impl App {
             return false;
         }
 
-        match track_await!(self.load_run_motifs(run_config_id)).await {
+        match t!(self.load_run_motifs(run_config_id)).await {
             Ok(motifs) => {
                 self.apply_selected_run_motifs(motifs, keep_motif_id);
                 if self.selected_run_motifs.is_empty() {
@@ -772,7 +772,7 @@ impl App {
             return true;
         }
 
-        match track_await!(self.load_run_motifs(run_config_id)).await {
+        match t!(self.load_run_motifs(run_config_id)).await {
             Ok(motifs) if motifs.is_empty() => {
                 self.status = Some(format!("No motifs found for run_config_id={run_config_id}."));
                 false
@@ -801,7 +801,7 @@ impl App {
             return false;
         }
 
-        match track_await!(self.load_run_motifs(run_config_id)).await {
+        match t!(self.load_run_motifs(run_config_id)).await {
             Ok(motifs) if motifs.is_empty() => {
                 self.status = Some(format!("No motifs found for run_config_id={run_config_id}."));
                 false
@@ -847,7 +847,7 @@ impl App {
         }
 
         let limit = self.run_config_batch_size();
-        let page = track_await!(self.store.list_run_configs_page(limit, self.paged_run_config_offset)).await?;
+        let page = t!(self.store.list_run_configs_page(limit, self.paged_run_config_offset)).await?;
         if page.is_empty() {
             self.has_more_paged_run_configs = false;
             let loaded_input_pairs = self.loaded_input_pairs.clone();
@@ -861,12 +861,12 @@ impl App {
         let run_config_ids_with_outputs = if page_ids.is_empty() {
             vec![]
         } else {
-            track_await!(self.store.list_run_config_ids_with_outputs(&page_ids)).await?
+            t!(self.store.list_run_config_ids_with_outputs(&page_ids)).await?
         };
         let input_pairs = if page_ids.is_empty() {
             vec![]
         } else {
-            track_await!(self.store.list_input_run_config_ids(&page_ids)).await?
+            t!(self.store.list_input_run_config_ids(&page_ids)).await?
         };
 
         self.paged_run_config_offset += page.len();
@@ -883,7 +883,7 @@ impl App {
 
     async fn ensure_all_run_configs_loaded(&mut self, keep_run_config_id: Option<u32>) -> anyhow::Result<()> {
         while self.has_more_paged_run_configs {
-            if !track_await!(self.load_next_run_config_page(keep_run_config_id)).await? {
+            if !t!(self.load_next_run_config_page(keep_run_config_id)).await? {
                 break;
             }
         }
@@ -901,8 +901,8 @@ impl App {
             return Ok(false);
         }
 
-        let run_configs = track_await!(self.store.list_run_configs_by_ids(&missing_ids)).await?;
-        let input_pairs = track_await!(self.store.list_input_run_config_ids(&missing_ids)).await?;
+        let run_configs = t!(self.store.list_run_configs_by_ids(&missing_ids)).await?;
+        let input_pairs = t!(self.store.list_input_run_config_ids(&missing_ids)).await?;
         self.merge_run_configs(run_configs);
         self.loaded_input_pairs.extend(input_pairs);
         let loaded_input_pairs = self.loaded_input_pairs.clone();
@@ -913,14 +913,14 @@ impl App {
     }
 
     async fn ensure_run_children_loaded(&mut self, run_config_id: u32, keep_run_config_id: Option<u32>) -> anyhow::Result<bool> {
-        let output_run_config_ids = track_await!(self.store.list_output_run_config_ids(run_config_id)).await?;
+        let output_run_config_ids = t!(self.store.list_output_run_config_ids(run_config_id)).await?;
         if output_run_config_ids.is_empty() {
             self.known_run_config_ids_with_outputs.remove(&run_config_id);
         } else {
             self.known_run_config_ids_with_outputs.insert(run_config_id);
         }
         self.known_output_run_config_ids.insert(run_config_id, output_run_config_ids.clone());
-        let loaded_any = track_await!(self.ensure_run_config_ids_loaded(&output_run_config_ids, keep_run_config_id)).await?;
+        let loaded_any = t!(self.ensure_run_config_ids_loaded(&output_run_config_ids, keep_run_config_id)).await?;
         if !loaded_any {
             let loaded_input_pairs = self.loaded_input_pairs.clone();
             let known_output_run_config_ids = self.known_output_run_config_ids.clone();
@@ -935,7 +935,7 @@ impl App {
             && self.has_more_paged_run_configs
             && self.selected_idx + self.main_page_size() >= self.run_configs.len()
         {
-            return track_await!(self.load_next_run_config_page(self.selected_run_config_id())).await;
+            return t!(self.load_next_run_config_page(self.selected_run_config_id())).await;
         }
 
         Ok(false)
@@ -1078,14 +1078,14 @@ impl App {
 
     async fn move_main_down_lazy(&mut self, step: usize) -> bool {
         if self.move_main_down(step) {
-            if let Err(err) = track_await!(self.maybe_load_more_run_configs()).await {
+            if let Err(err) = t!(self.maybe_load_more_run_configs()).await {
                 warn!("move_main_down_lazy failed to load more run configs: {err:?}");
                 self.status = Some(format!("Failed to load more run_configs: {err:?}"));
             }
             return true;
         }
 
-        match track_await!(self.maybe_load_more_run_configs()).await {
+        match t!(self.maybe_load_more_run_configs()).await {
             Ok(true) => self.move_main_down(step),
             Ok(false) => false,
             Err(err) => {
@@ -1098,7 +1098,7 @@ impl App {
 
     async fn move_main_to_bottom_lazy(&mut self) -> bool {
         if self.search_filters.is_empty() && self.has_more_paged_run_configs {
-            if let Err(err) = track_await!(self.ensure_all_run_configs_loaded(self.selected_run_config_id())).await {
+            if let Err(err) = t!(self.ensure_all_run_configs_loaded(self.selected_run_config_id())).await {
                 warn!("move_main_to_bottom_lazy failed to load all run configs: {err:?}");
                 self.status = Some(format!("Failed to load all run_configs: {err:?}"));
                 return false;
@@ -1254,12 +1254,12 @@ impl App {
     }
 
     async fn refresh_run_config_types(&mut self) -> anyhow::Result<()> {
-        self.run_config_types = track_await!(self.store.list_run_config_types()).await?;
+        self.run_config_types = t!(self.store.list_run_config_types()).await?;
         Ok(())
     }
 
     async fn open_filter_popup(&mut self) {
-        if let Err(err) = track_await!(self.refresh_run_config_types()).await {
+        if let Err(err) = t!(self.refresh_run_config_types()).await {
             warn!("open_filter_popup failed to refresh run_config types: {err:?}");
             self.status = Some(format!("Failed to list run_config types: {err:?}"));
         }
@@ -1294,7 +1294,7 @@ impl App {
             Ok(_) => {
                 let keep_run_config_id = self.selected_run_config_id();
                 self.search_filters = self.search_popup.draft.clone();
-                if let Err(err) = track_await!(self.try_refresh_run_configs(keep_run_config_id)).await {
+                if let Err(err) = t!(self.try_refresh_run_configs(keep_run_config_id)).await {
                     warn!("apply_search_from_popup failed to refresh run configs: {err:?}");
                     self.status = Some(format!("Failed to list run_configs for filter: {err:?}"));
                     return false;
@@ -1770,7 +1770,7 @@ impl App {
             .map(|node| !node.children_loaded)
             .unwrap_or(false);
         if needs_children_load {
-            match track_await!(self.ensure_run_children_loaded(run_config_id, Some(run_config_id))).await {
+            match t!(self.ensure_run_children_loaded(run_config_id, Some(run_config_id))).await {
                 Ok(false) => {
                     self.status = Some(format!("No child runs found for run_config_id={run_config_id}."));
                     return false;
@@ -1814,7 +1814,7 @@ impl App {
             .map(|node| !node.children_loaded)
             .unwrap_or(false);
         if needs_children_load {
-            match track_await!(self.ensure_run_children_loaded(run_config_id, Some(run_config_id))).await {
+            match t!(self.ensure_run_children_loaded(run_config_id, Some(run_config_id))).await {
                 Ok(false) => {
                     self.status = Some(format!("No child runs found for run_config_id={run_config_id}."));
                     return false;
@@ -1840,23 +1840,23 @@ impl App {
     }
 
     async fn open_selected_run_from_left(&mut self) -> bool {
-        if track_await!(self.toggle_selected_run_expanded()).await {
+        if t!(self.toggle_selected_run_expanded()).await {
             return true;
         }
 
-        track_await!(self.toggle_selected_run_inline_motifs()).await
+        t!(self.toggle_selected_run_inline_motifs()).await
     }
 
     async fn open_selected_run_right(&mut self) -> bool {
-        if track_await!(self.expand_selected_run()).await {
+        if t!(self.expand_selected_run()).await {
             return true;
         }
 
-        track_await!(self.expand_selected_run_inline_motifs()).await
+        t!(self.expand_selected_run_inline_motifs()).await
     }
 
     async fn open_selected_run_motifs(&mut self) -> bool {
-        if track_await!(self.load_selected_run_motifs()).await {
+        if t!(self.load_selected_run_motifs()).await {
             self.show_selected_run_motifs = true;
             self.selected_area = SelectedArea::RightMotifs;
             self.prefer_right_motifs = true;
@@ -1877,7 +1877,7 @@ impl App {
             return true;
         }
 
-        track_await!(self.open_selected_run_motifs()).await
+        t!(self.open_selected_run_motifs()).await
     }
 
     fn collapse_selected_run(&mut self) -> bool {
@@ -1920,7 +1920,7 @@ impl App {
             let keep_run_config_id = self.selected_run_config_id();
             self.search_filters = RunConfigSearch::default();
             self.search_popup = SearchPopupState::default();
-            match track_await!(self.try_refresh_run_configs(keep_run_config_id)).await {
+            match t!(self.try_refresh_run_configs(keep_run_config_id)).await {
                 Ok(()) => {
                     self.status = Some("Run config filters reset.".to_string());
                     debug!("reset_search_filters");
@@ -1937,7 +1937,7 @@ impl App {
         if let Some(selected_type) = self.selected_popup_type() {
             let keep_run_config_id = self.selected_run_config_id();
             self.search_filters.run_config_type = Some(selected_type.clone());
-            if let Err(err) = track_await!(self.try_refresh_run_configs(keep_run_config_id)).await {
+            if let Err(err) = t!(self.try_refresh_run_configs(keep_run_config_id)).await {
                 warn!("apply_type_filter_from_popup failed to refresh run configs: {err:?}");
                 self.status = Some(format!("Failed to list run_configs for type filter: {err:?}"));
                 return;
@@ -1948,7 +1948,7 @@ impl App {
     }
 
     async fn open_type_filter_popup(&mut self) {
-        match track_await!(self.refresh_run_config_types()).await {
+        match t!(self.refresh_run_config_types()).await {
             Ok(()) => {
                 if self.run_config_types.is_empty() {
                     self.status = Some("No run_config types found.".to_string());
@@ -1975,7 +1975,7 @@ impl App {
 
     async fn load_filtered_run_configs(&mut self, keep_run_config_id: Option<u32>) -> anyhow::Result<()> {
         let normalized = self.search_filters.normalized()?;
-        let run_configs = track_await!(self
+        let run_configs = t!(self
             .store
             .list_run_configs_filtered(RunConfigFilter {
                 id: normalized.id,
@@ -1988,7 +1988,7 @@ impl App {
         let input_pairs = if run_config_ids.is_empty() {
             vec![]
         } else {
-            track_await!(self.store.list_input_run_config_ids(run_config_ids.as_slice())).await?
+            t!(self.store.list_input_run_config_ids(run_config_ids.as_slice())).await?
         };
 
         self.all_run_configs = run_configs;
@@ -2015,15 +2015,15 @@ impl App {
         self.run_configs.clear();
 
         if self.search_filters.is_empty() {
-            track_await!(self.load_next_run_config_page(keep_run_config_id)).await.map(|_| ())
+            t!(self.load_next_run_config_page(keep_run_config_id)).await.map(|_| ())
         } else {
-            track_await!(self.load_filtered_run_configs(keep_run_config_id)).await
+            t!(self.load_filtered_run_configs(keep_run_config_id)).await
         }
     }
 
     async fn refresh_run_configs(&mut self) {
         let keep_run_config_id = self.selected_run_config_id();
-        match track_await!(self.try_refresh_run_configs(keep_run_config_id)).await {
+        match t!(self.try_refresh_run_configs(keep_run_config_id)).await {
             Ok(()) => {
                 self.status = None;
                 debug!(
@@ -2084,7 +2084,7 @@ impl App {
             return;
         };
 
-        match track_await!(self.store.list_run_config_values(run_config_id)).await {
+        match t!(self.store.list_run_config_values(run_config_id)).await {
             Ok(values) => {
                 self.status = None;
                 let mut rows = values
@@ -2123,7 +2123,7 @@ impl App {
         self.pending_plot_open = Some(PendingMotifPlotOpen {
             motif_id,
             started_at: Instant::now(),
-            task: tokio::spawn(async move { track_await!(open_motif_plot_task(ws_path, motif_id)).await }.instrument(tracing::info_span!(
+            task: tokio::spawn(async move { t!(open_motif_plot_task(ws_path, motif_id)).await }.instrument(tracing::info_span!(
                 "tui::open_motif_plot",
                 kind = "spawn",
                 file = file!(),
@@ -2142,7 +2142,7 @@ impl App {
         }
 
         let pending_plot_open = self.pending_plot_open.take().expect("pending plot open exists");
-        match track_await!(pending_plot_open.task).await {
+        match t!(pending_plot_open.task).await {
             Ok(status) => {
                 self.status = Some(status);
             }
@@ -2185,18 +2185,18 @@ async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let db_path = args.ws_path.join("main_db.db3");
     info!("starting thoosa_tui: ws_path={} db_path={}", args.ws_path.display(), db_path.display());
-    let store = track_await!(SqlStore::from_path_(&db_path)).await.with_context(|| format!("open database {}", db_path.display()))?;
+    let store = t!(SqlStore::from_path_(&db_path)).await.with_context(|| format!("open database {}", db_path.display()))?;
 
     let mut app = App::new(Arc::new(store), args.ws_path.clone(), db_path);
-    track_await!(app.refresh_run_configs()).await;
-    track_await!(app.refresh_selected_details()).await;
+    t!(app.refresh_run_configs()).await;
+    t!(app.refresh_selected_details()).await;
 
     if !io::stdout().is_terminal() || !io::stdin().is_terminal() {
         warn!("no TTY detected, switching to non-interactive mode");
         return run_non_interactive(&app);
     }
 
-    track_await!(run_ui(&mut app)).await
+    t!(run_ui(&mut app)).await
 }
 
 async fn run_ui(app: &mut App) -> anyhow::Result<()> {
@@ -2208,7 +2208,7 @@ async fn run_ui(app: &mut App) -> anyhow::Result<()> {
 
     loop {
         drain_progress_events(app, &mut progress_rx);
-        track_await!(app.poll_pending_plot_open()).await;
+        t!(app.poll_pending_plot_open()).await;
         terminal.draw(|frame| render(frame, app))?;
 
         if event::poll(Duration::from_millis(200))? {
@@ -2251,7 +2251,7 @@ async fn run_ui(app: &mut App) -> anyhow::Result<()> {
                 }
 
                 if matches!(key.code, KeyCode::Char('f') | KeyCode::Char('F')) && is_unmodified_or_shift(&key) && app.selected_area == SelectedArea::LeftRunConfigs {
-                    track_await!(app.open_filter_popup()).await;
+                    t!(app.open_filter_popup()).await;
                     continue;
                 }
 
@@ -2266,49 +2266,49 @@ async fn run_ui(app: &mut App) -> anyhow::Result<()> {
 
                         match key.code {
                             KeyCode::Char('r') if key.modifiers.is_empty() => {
-                                track_await!(app.refresh_run_configs()).await;
-                                track_await!(app.refresh_selected_details()).await;
+                                t!(app.refresh_run_configs()).await;
+                                t!(app.refresh_selected_details()).await;
                             }
                             KeyCode::Char('s') if key.modifiers.is_empty() => {
                                 app.toggle_run_on_sort_order();
-                                track_await!(app.refresh_selected_details()).await;
+                                t!(app.refresh_selected_details()).await;
                             }
                             KeyCode::Char('t') if key.modifiers.is_empty() => {
-                                track_await!(app.open_type_filter_popup()).await;
+                                t!(app.open_type_filter_popup()).await;
                             }
                             KeyCode::Char('T') if is_unmodified_or_shift(&key) => {
-                                track_await!(app.reset_search_filters()).await;
-                                track_await!(app.refresh_selected_details()).await;
+                                t!(app.reset_search_filters()).await;
+                                t!(app.refresh_selected_details()).await;
                             }
                             KeyCode::Tab if key.modifiers.is_empty() => {
-                                track_await!(app.open_selected_run_motifs()).await;
+                                t!(app.open_selected_run_motifs()).await;
                             }
                             KeyCode::Char('m') if key.modifiers.is_empty() => {
-                                track_await!(app.toggle_selected_run_motifs_panel()).await;
+                                t!(app.toggle_selected_run_motifs_panel()).await;
                             }
                             KeyCode::Enter if key.modifiers.is_empty() => {
-                                track_await!(app.open_selected_run_from_left()).await;
+                                t!(app.open_selected_run_from_left()).await;
                             }
                             KeyCode::Right if key.modifiers.is_empty() => {
-                                track_await!(app.open_selected_run_right()).await;
+                                t!(app.open_selected_run_right()).await;
                             }
                             KeyCode::Left if key.modifiers.is_empty() => {
                                 app.collapse_selected_run();
                             }
                             KeyCode::Down | KeyCode::Char('j') if key.modifiers.is_empty() => {
-                                selection_changed = track_await!(app.move_main_down_lazy(1)).await;
+                                selection_changed = t!(app.move_main_down_lazy(1)).await;
                             }
                             KeyCode::Up | KeyCode::Char('k') if key.modifiers.is_empty() => {
                                 selection_changed = app.move_main_up(1);
                             }
                             KeyCode::Char('d') if is_ctrl_char(&key, 'd') => {
-                                selection_changed = track_await!(app.move_main_down_lazy(app.main_page_size())).await;
+                                selection_changed = t!(app.move_main_down_lazy(app.main_page_size())).await;
                             }
                             KeyCode::Char('u') if is_ctrl_char(&key, 'u') => {
                                 selection_changed = app.move_main_up(app.main_page_size());
                             }
                             KeyCode::Char('G') if is_unmodified_or_shift(&key) => {
-                                selection_changed = track_await!(app.move_main_to_bottom_lazy()).await;
+                                selection_changed = t!(app.move_main_to_bottom_lazy()).await;
                             }
                             KeyCode::Char('g') if key.modifiers.is_empty() => {
                                 if app.handle_g_press(SelectedArea::LeftRunConfigs) {
@@ -2325,7 +2325,7 @@ async fn run_ui(app: &mut App) -> anyhow::Result<()> {
                         }
 
                         if selection_changed {
-                            track_await!(app.refresh_selected_details()).await;
+                            t!(app.refresh_selected_details()).await;
                         }
                     }
                     SelectedArea::RightMotifs => {
@@ -2338,7 +2338,7 @@ async fn run_ui(app: &mut App) -> anyhow::Result<()> {
                                 app.open_selected_motif_plot();
                             }
                             KeyCode::Char('m') if key.modifiers.is_empty() => {
-                                track_await!(app.toggle_selected_run_motifs_panel()).await;
+                                t!(app.toggle_selected_run_motifs_panel()).await;
                             }
                             KeyCode::Down | KeyCode::Char('j') if key.modifiers.is_empty() => {
                                 app.move_motif_down(1);
@@ -2376,14 +2376,14 @@ async fn run_ui(app: &mut App) -> anyhow::Result<()> {
                                 app.selected_area = app.default_run_configs_area();
                             }
                             KeyCode::Enter => {
-                                track_await!(app.apply_type_filter_from_popup()).await;
+                                t!(app.apply_type_filter_from_popup()).await;
                                 app.selected_area = app.default_run_configs_area();
-                                track_await!(app.refresh_selected_details()).await;
+                                t!(app.refresh_selected_details()).await;
                             }
                             KeyCode::Char('T') if is_unmodified_or_shift(&key) => {
-                                track_await!(app.reset_search_filters()).await;
+                                t!(app.reset_search_filters()).await;
                                 app.selected_area = app.default_run_configs_area();
-                                track_await!(app.refresh_selected_details()).await;
+                                t!(app.refresh_selected_details()).await;
                             }
                             KeyCode::Down | KeyCode::Char('j') if key.modifiers.is_empty() => {
                                 app.move_popup_down(1);
@@ -2420,8 +2420,8 @@ async fn run_ui(app: &mut App) -> anyhow::Result<()> {
                                     }
                                     SearchPopupRow::Field(_) => {}
                                     SearchPopupRow::Ok => {
-                                        if track_await!(app.apply_search_from_popup()).await {
-                                            track_await!(app.refresh_selected_details()).await;
+                                        if t!(app.apply_search_from_popup()).await {
+                                            t!(app.refresh_selected_details()).await;
                                         }
                                     }
                                     SearchPopupRow::Cancel => {
@@ -2530,10 +2530,10 @@ async fn run_ui(app: &mut App) -> anyhow::Result<()> {
 
     if let Some(pending_plot_open) = app.pending_plot_open.take() {
         pending_plot_open.task.abort();
-        let _ = track_await!(pending_plot_open.task).await;
+        let _ = t!(pending_plot_open.task).await;
     }
     progress_task.abort();
-    let _ = track_await!(progress_task).await;
+    let _ = t!(progress_task).await;
     terminal.show_cursor()?;
     Ok(())
 }
@@ -3451,7 +3451,7 @@ fn drain_progress_events(app: &mut App, rx: &mut mpsc::UnboundedReceiver<Progres
 
 fn spawn_progress_client(socket_id: String, tx: mpsc::UnboundedSender<ProgressClientEvent>) -> JoinHandle<()> {
     tokio::spawn(async move {
-        track_await!(run_progress_client(socket_id, tx)).await;
+        t!(run_progress_client(socket_id, tx)).await;
     }.instrument(tracing::info_span!(
         "tui::progress_client",
         kind = "spawn",
@@ -3468,12 +3468,12 @@ async fn run_progress_client(socket_id: String, tx: mpsc::UnboundedSender<Progre
             break;
         }
 
-        match track_await!(connect_progress_stream(&socket_id)).await {
+        match t!(connect_progress_stream(&socket_id)).await {
             Ok(stream) => {
                 if !send_progress_status(&tx, &mut last_status, "Connected to progress socket.".to_string()) {
                     break;
                 }
-                if let Err(err) = track_await!(read_progress_stream(stream, &tx, &mut last_status)).await {
+                if let Err(err) = t!(read_progress_stream(stream, &tx, &mut last_status)).await {
                     if !send_progress_status(&tx, &mut last_status, format!("Progress socket error: {err}")) {
                         break;
                     }
@@ -3488,7 +3488,7 @@ async fn run_progress_client(socket_id: String, tx: mpsc::UnboundedSender<Progre
             }
         }
 
-        track_await!(tokio::time::sleep(Duration::from_secs(1))).await;
+        t!(tokio::time::sleep(Duration::from_secs(1))).await;
     }
 }
 
@@ -3498,7 +3498,7 @@ async fn read_progress_stream(
     last_status: &mut Option<String>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut lines = BufReader::new(stream).lines();
-    while let Some(line) = track_await!(lines.next_line()).await? {
+    while let Some(line) = t!(lines.next_line()).await? {
         let snapshot: CollectEtaProgressState = serde_json::from_str(&line)?;
         if tx.send(ProgressClientEvent::Snapshot(snapshot)).is_err() {
             return Ok(());
@@ -3523,7 +3523,7 @@ fn send_progress_status(
 async fn connect_progress_stream(socket_id: &str) -> io::Result<Stream> {
     let mut last_err = None;
     for name in progress_socket_names(socket_id)? {
-        match track_await!(Stream::connect(name.borrow())).await {
+        match t!(Stream::connect(name.borrow())).await {
             Ok(stream) => return Ok(stream),
             Err(err) => {
                 last_err = Some(err);
@@ -3590,7 +3590,7 @@ fn plot_command(ws_path: &Path, motif_id: u32, print_to_stdout: bool) -> Command
 }
 
 async fn resolve_motif_plot_target(ws_path: &Path, motif_id: u32) -> anyhow::Result<PathBuf> {
-    let output = track_await!(plot_command(ws_path, motif_id, true)
+    let output = t!(plot_command(ws_path, motif_id, true)
         .output()).await
         .context("run motif plot command")?;
     if !output.status.success() {
@@ -3600,7 +3600,7 @@ async fn resolve_motif_plot_target(ws_path: &Path, motif_id: u32) -> anyhow::Res
 }
 
 async fn generate_motif_plot(ws_path: &Path, motif_id: u32) -> anyhow::Result<()> {
-    let output = track_await!(plot_command(ws_path, motif_id, false)
+    let output = t!(plot_command(ws_path, motif_id, false)
         .output()).await
         .context("run motif plot command")?;
     if output.status.success() {
@@ -3611,11 +3611,11 @@ async fn generate_motif_plot(ws_path: &Path, motif_id: u32) -> anyhow::Result<()
 }
 
 async fn open_motif_plot_task(ws_path: PathBuf, motif_id: u32) -> String {
-    match track_await!(resolve_motif_plot_target(&ws_path, motif_id)).await {
+    match t!(resolve_motif_plot_target(&ws_path, motif_id)).await {
         Ok(target_path) => {
             let target_path = if target_path.is_absolute() { target_path } else { ws_path.join(target_path) };
             if !target_path.exists() {
-                if let Err(err) = track_await!(generate_motif_plot(&ws_path, motif_id)).await {
+                if let Err(err) = t!(generate_motif_plot(&ws_path, motif_id)).await {
                     return format!("Failed to generate plot for motif_id={motif_id}: {err}");
                 }
             }

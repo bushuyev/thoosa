@@ -19,7 +19,7 @@ use std::sync::{Arc, OnceLock};
 use parking_lot::{Mutex, ReentrantMutex, ReentrantMutexGuard};
 use tch::{Device, Kind, Tensor};
 use thoosa_shared::applicables_runner::{Input, Output};
-use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::tracked_await::t;
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Named, DebugId, ThoSelector, WithId};
 use thoosa_shared::{CopyToDevice, ThoError};
 use thoosa_shared::debug_id;
@@ -657,11 +657,11 @@ where
                 };
 
                 debug!("CopyToDevice for ThoTensor: self.id={:?} copy copy_from_ptr, dst_device.ordinal={:?}", self.id, dst_device.tho_device_idx());
-                track_await!(cuda_actor.copy(src.into(), dst_device)).await?
+                t!(cuda_actor.copy(src.into(), dst_device)).await?
             }
             ThoTensorInner::Ref { key, .. } => {
                 debug!("CopyToDevice for ThoTensor: self.id={:?} copy out-of-process ref key={key:?} dst_device.ordinal={:?}", self.id, dst_device.tho_device_idx());
-                track_await!(cuda_actor.copy(
+                t!(cuda_actor.copy(
                     self.clone_ref()?.strip_types(),
                     dst_device,
                 ))

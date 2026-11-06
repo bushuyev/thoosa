@@ -11,7 +11,7 @@ use polars::prelude::{LazyFrame, NamedFrom, ScanArgsParquet, Series};
 use tch::{Device, Tensor};
 
 use thoosa_shared::resource::Resource;
-use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::tracked_await::t;
 use tracing::Instrument;
 
 #[derive(Default)]
@@ -129,7 +129,7 @@ pub async fn load_to_logits_tensors(
     group: &str,
     store: Arc<dyn MotifsStore>,
 ) -> anyhow::Result<Vec<(Resource, Vec<f32>)>> {
-    Ok(track_await!(store
+    Ok(t!(store
         .list_resource_random_in_group(group)).await.with_context(|| format!("loading resources in group {group}"))?
         .into_iter()
         .map(move |(resource_id, labels_p)| {

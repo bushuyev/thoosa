@@ -34,7 +34,7 @@ use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::collect_futures_eta::{CollectEtaInvocationGuard, collect_eta_record_completion};
 use thoosa_shared::resource::{Resource, ResourceId, ResourcesConfig};
 use thoosa_shared::run_configs::RunConfigId;
-use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::tracked_await::t;
 use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, MaxParallelCtx, Named, OutId, RunCtx, Stage, ThoSelector, WithId};
 use thoosa_common::runner::sync_stage::{SyncStage};
 use thoosa_shared::{CopyToDevice, FuturesOrdering, TensorIdSliceIdx, ThoError, collect_futures_with_progress, panic_to_err};
@@ -58,7 +58,7 @@ where
     }
 
     pub async fn check(self, store: &Arc<dyn MotifsStore>) -> Result<Self, ThoError> {
-        track_await!(self.resources_config.check(store)).await?;
+        t!(self.resources_config.check(store)).await?;
         Ok(self)
     }
 
@@ -440,7 +440,7 @@ where
         Self: 'a,
     {
         async move {
-            let tensor = track_await!(self.tensor.load_from_any_device_(to_device_idx)).await?;
+            let tensor = t!(self.tensor.load_from_any_device_(to_device_idx)).await?;
             Ok(BucketingSyncInput::from_data_ref(self.resource_id, ThoDataRef::ReadLocked(tensor), 0))
         }
     }
@@ -462,7 +462,7 @@ where
                     return BorrowRef::borrow_ref(self, to_tho_device_idx).await;
                 }
                 Some(selector) => {
-                    let tensor = track_await!(self.tensor.load_from_any_device_(0)).await?;
+                    let tensor = t!(self.tensor.load_from_any_device_(0)).await?;
                     // Keep the synchronous guard in its own scope before copying to another device.
                     let (selected_audio, sample_range) = {
                         let audio = tensor.local()?;
@@ -476,7 +476,7 @@ where
                     };
                     let selected_tensor = ThoTensor::new(tensor.id().clone(), selected_audio)?;
                     drop(tensor);
-                    let selected_tensor = if to_tho_device_idx == 0 { selected_tensor } else { track_await!(selected_tensor.copy_to_device(to_tho_device_idx)).await? };
+                    let selected_tensor = if to_tho_device_idx == 0 { selected_tensor } else { t!(selected_tensor.copy_to_device(to_tho_device_idx)).await? };
                     (ThoDataRef::Owned(selected_tensor), sample_range.start)
                 }
             };
@@ -566,7 +566,7 @@ where
     type A = SelectBucketsInputSelector;
 
     async fn adjust(&self, adjustable: Self::A, adjust_context: &mut SelectBucketsSplitterContext<'a, ST>) -> Result<Self::A, AdjusterError<Self::A>> {
-        let result = track_await!(self.bucket_slice_adjuster.adjust(adjustable, adjust_context)).await;
+        let result = t!(self.bucket_slice_adjuster.adjust(adjustable, adjust_context)).await;
         debug!("SelectBucketsAdjuster::adjust: adjust_context={adjust_context:?} result={result:?}");
         result
     }
@@ -940,7 +940,7 @@ where
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "BucketingStage::run"))]
     async fn run(self: Arc<Self>, input: Self::In<'static>, mut ctx: Self::Ctx) -> Result<Self::Out, ThoError> {
         let resources_config = input.resources_config().clone();
-        let resources = track_await!(resources_config.to_resources(&self.store)).await?;
+        let resources = t!(resources_config.to_resources(&self.store)).await?;
 
         debug!("BucketingStage::run: resources_config={resources_config:?} resources={resources:?}");
 
@@ -955,7 +955,7 @@ where
             let bucket_step_samples = self.bucket_step_samples;
             async move {
 
-                let loaded = track_await!(loader
+                let loaded = t!(loader
                     .run_cached(
                         Arc::new(resource.clone()),
                         sync_bucketing_ctx.branch(false),
@@ -973,7 +973,7 @@ where
                     None,
                 );
 
-                match track_await!(oom_handler
+                match t!(oom_handler
                     .run(
                         &sync_stage,
                         Arc::new(BucketingTensorInput::new(resource.id(), Arc::clone(&loaded), bucket_window_samples, bucket_step_samples)),
@@ -997,7 +997,7 @@ where
             }
         });
 
-        let _loaded_motifs = track_await!(collect_futures_with_progress(
+        let _loaded_motifs = t!(collect_futures_with_progress(
             futures,
             resources_len,
             FuturesOrdering::Unordered,
@@ -1031,7 +1031,7 @@ where
 
         for (channel, groups) in groups_by_channel.into_iter().enumerate() {
             let groups = filter_mel_patch_groups(groups, self.run_config.min_slices_usize(), self.run_config.max_slices_usize());
-            let group_motif_ids = track_await!(self.store.save_groups_as_motifs(run_config_id, channel as i64, groups)).await?;
+            let group_motif_ids = t!(self.store.save_groups_as_motifs(run_config_id, channel as i64, groups)).await?;
             motif_ids.extend(group_motif_ids);
         }
 

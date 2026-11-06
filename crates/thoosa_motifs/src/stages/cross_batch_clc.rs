@@ -35,7 +35,7 @@ use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::ipc_types::WorkerOutput;
 use thoosa_shared::resource::Resource;
-use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::tracked_await::t;
 use thoosa_shared::traits::{Adjustable, Data, OutId, RunCtx, Stage, ThoSelector, WithId};
 use thoosa_shared::{ThoError, mono_key};
 
@@ -577,7 +577,7 @@ impl<R: Debug> CrossUnfoldClcOutput<R> {
     where
         OnBatchDone: Fn(R) -> BoxFuture<'static, Result<R, ThoError>> + Sync + Send + 'static
     {
-        self.clc_result = track_await!(f(self.clc_result)).await?;
+        self.clc_result = t!(f(self.clc_result)).await?;
         Ok(self)
     }
 }

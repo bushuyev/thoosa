@@ -7,7 +7,7 @@ use std::sync::Arc;
 use thoosa_shared::resource::{Resource, ResourceStore, ResourcesConfig};
 use thoosa_shared::ResourceType;
 use thoosa_store::Store;
-use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::tracked_await::t;
 
 
 #[derive(Debug, Clone)]
@@ -34,24 +34,24 @@ impl ResourcesConfig for Simple {
         store: &Arc<S>,
     ) -> anyhow::Result<Vec<Resource>> {
         Ok(match self.resources() {
-            ResourceType::List(list) => track_await!(store
+            ResourceType::List(list) => t!(store
                 .list_resources_by_file_stems(&list.into_iter().map(|v| v.as_str()).collect::<Vec<_>>())).await?,
-            ResourceType::Set(set) => track_await!(store
+            ResourceType::Set(set) => t!(store
                 .list_resource_set_resources_by_descr(set)).await?,
             ResourceType::Group(group) => {
                 let store_guard = store;
                 let mut resources = Vec::new();
-                for (_, resource_set) in track_await!(store_guard
+                for (_, resource_set) in t!(store_guard
                     .list_resource_set_group_sets(group)).await?
                 {
                     resources.extend(
-                        track_await!(store_guard
+                        t!(store_guard
                             .list_resource_set_resources_by_descr(&resource_set)).await?,
                     );
                 }
                 resources
             }
-            ResourceType::NotInGroup(descr) => track_await!(store
+            ResourceType::NotInGroup(descr) => t!(store
                 .list_resources_not_in_group(descr, 1000)).await?, //TODO limit
         })
     }
@@ -63,7 +63,7 @@ impl ResourcesConfig for Simple {
             }
         }
 
-        let resources = track_await!(self.to_resources(store)).await?;
+        let resources = t!(self.to_resources(store)).await?;
         if resources.is_empty() {
             Err(anyhow::anyhow!(format!(
                 "resource config {self:?} resolved to no resources"
@@ -121,14 +121,14 @@ impl ResourcesConfig for Labeled {
     ) -> anyhow::Result<Vec<(String, Vec<Resource>)>> {
         let store_guard = store;
         let mut out = Vec::new();
-        for (label, resource_set) in track_await!(store_guard.list_group_labeled_resources_sets(&self.group)).await? {
-            out.push((label, track_await!(store_guard.list_resource_set_resources_by_descr(&resource_set)).await?));
+        for (label, resource_set) in t!(store_guard.list_group_labeled_resources_sets(&self.group)).await? {
+            out.push((label, t!(store_guard.list_resource_set_resources_by_descr(&resource_set)).await?));
         }
         Ok(out)
     }
 
     async fn check<S: ResourceStore + ?Sized + Send + Sync>(&self, store: &Arc<S>) -> anyhow::Result<()> {
-        let labeled_resources = track_await!(self.to_resources(store)).await?;
+        let labeled_resources = t!(self.to_resources(store)).await?;
         if labeled_resources.is_empty() {
             return Err(anyhow::anyhow!(format!(
                 "resource config {self:?} resolved to no labeled resource sets"
@@ -173,7 +173,7 @@ impl ResourcesConfig for Logits {
         &self,
         store: &Arc<S>,
     ) -> anyhow::Result<Vec<(Resource, Vec<f32>)>> {
-        track_await!(store
+        t!(store
             .list_resource_random_in_group(&self.group)).await?
             .into_iter()
             .map(move |(resource_id, labels_p)| {
@@ -190,7 +190,7 @@ impl ResourcesConfig for Logits {
     }
 
     async fn check<S: ResourceStore + ?Sized + Send + Sync>(&self, store: &Arc<S>) -> anyhow::Result<()> {
-        if track_await!(store.list_resource_random_in_group(&self.group)).await?.is_empty() {
+        if t!(store.list_resource_random_in_group(&self.group)).await?.is_empty() {
             Err(anyhow::anyhow!(format!(
                 "resource config {self:?} resolved to no logits resources"
             )))
@@ -233,12 +233,12 @@ where
         &self,
         store: &Arc<S>,
     ) -> anyhow::Result<(RC::R, RC::R)> {
-        Ok((track_await!(self.train_resources.to_resources(store)).await?, track_await!(self.valid_resources.to_resources(store)).await?))
+        Ok((t!(self.train_resources.to_resources(store)).await?, t!(self.valid_resources.to_resources(store)).await?))
     }
 
     async fn check<S: ResourceStore + ?Sized + Send + Sync>(&self, store: &Arc<S>) -> anyhow::Result<()> {
-        track_await!(self.train_resources.check(store)).await?;
-        track_await!(self.valid_resources.check(store)).await?;
+        t!(self.train_resources.check(store)).await?;
+        t!(self.valid_resources.check(store)).await?;
         Ok(())
     }
 }

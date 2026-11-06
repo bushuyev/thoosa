@@ -13,7 +13,7 @@ use std::sync::Arc;
 use thoosa_common::ws::{NET_PARAMS_FILE, NET_WEIGHTS_FILE};
 use thoosa_cpu_data_derive::CpuData;
 use thoosa_shared::applicables_runner::{Input, Output};
-use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::tracked_await::t;
 use thoosa_shared::traits::Data;
 use thoosa_shared::traits::{AsyncStage, RunCtx, Stage};
 use thoosa_shared::{FuturesOrdering, ThoError, collect_futures_with_progress, recurse_files};
@@ -239,7 +239,7 @@ where
             ModelRoots::from_ws(ws_guard.as_ref())?
         };
         let purge_mode = self.args.purge_mode();
-        let entries = track_await!(selected_purge_entries(&roots, &self.store, purge_mode)).await?;
+        let entries = t!(selected_purge_entries(&roots, &self.store, purge_mode)).await?;
 
         let entries_len = entries.len();
         if entries_len == 0 {
@@ -254,7 +254,7 @@ where
             .collect::<Vec<_>>();
         let futures = entries.into_iter().map(|entry| {
             async move {
-                Ok::<_, ThoError>(track_await!(tokio::task::spawn_blocking(move || {
+                Ok::<_, ThoError>(t!(tokio::task::spawn_blocking(move || {
                     tracing::info_span!(
                         "purge_models::purge_entry",
                         kind = "spawn_blocking",
@@ -266,7 +266,7 @@ where
             }
         });
 
-        let purged = track_await!(collect_futures_with_progress(
+        let purged = t!(collect_futures_with_progress(
             futures,
             entries_len,
             FuturesOrdering::Unordered,
@@ -279,7 +279,7 @@ where
         }
 
         if !ids_to_delete.is_empty() {
-            track_await!(self.store.delete_trained_nets(ids_to_delete)).await?;
+            t!(self.store.delete_trained_nets(ids_to_delete)).await?;
         }
 
         info!("PurgeModelsStage::run: purged {} models for {:?}", purged.len(), self.args.purge_mode());
@@ -323,16 +323,16 @@ struct PurgeEntry {
 
 async fn selected_purge_entries(roots: &ModelRoots, store: &Arc<dyn MotifsStore>, purge_mode: PurgeMode) -> Result<Vec<PurgeEntry>, ThoError> {
     match purge_mode {
-        PurgeMode::PurgeLost => purge_lost_entries(roots, track_await!(store.list_trained_net_entries()).await?),
+        PurgeMode::PurgeLost => purge_lost_entries(roots, t!(store.list_trained_net_entries()).await?),
         PurgeMode::PurgeLabelModels(by) => {
             let rows = match by {
-                PurgeLabelModelsBy::Date(date) => track_await!(store.list_label_trained_nets_before(date.as_str().to_string())).await?,
-                PurgeLabelModelsBy::Loss(loss) => track_await!(store.list_trained_nets_loss_gt(loss, TRAIN_LABEL_NETS_RUN_CONFIG_TYPE)).await?,
+                PurgeLabelModelsBy::Date(date) => t!(store.list_label_trained_nets_before(date.as_str().to_string())).await?,
+                PurgeLabelModelsBy::Loss(loss) => t!(store.list_trained_nets_loss_gt(loss, TRAIN_LABEL_NETS_RUN_CONFIG_TYPE)).await?,
             };
             Ok(rows_to_purge_entries(roots, PurgeModelType::Labels, rows))
         }
         PurgeMode::PurgeUnusedMotifModels => {
-            let rows = track_await!(store.list_unused_motif_trained_nets()).await?;
+            let rows = t!(store.list_unused_motif_trained_nets()).await?;
             Ok(rows_to_purge_entries(roots, PurgeModelType::Motifs, rows))
         }
     }

@@ -11,7 +11,7 @@ use crate as thoosa_common;
 #[double]
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use crate::runner::oom_handler::{Adjuster, AdjusterError, RunCtxContext};
-use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::tracked_await::t;
 #[derive(Debug)]
 pub struct DumpToCpu<A>
 where
@@ -86,17 +86,17 @@ where
         debug!("DumpToCpu::adjust: acquired 100 max_parallel, dumping");
 
         #[cfg(tho_debug)]
-        track_await!(GlobalCtx::global().debug_caches(device_idx, "before dump_all_to_cpu")).await;
+        t!(GlobalCtx::global().debug_caches(device_idx, "before dump_all_to_cpu")).await;
 
 
-        if let Err(error) = track_await!(GlobalCtx::global()
+        if let Err(error) = t!(GlobalCtx::global()
             .dump_all_to_cpu(device_idx, &self.descr)).await {
             warn!("DumpToCpu::adjust: dump_all_to_cpu failed: {error:?}");
             return Err(AdjusterError::SomethingElse(error));
         }
 
         #[cfg(tho_debug)]
-        track_await!(GlobalCtx::global().debug_caches(device_idx, "after dump_all_to_cpu")).await;
+        t!(GlobalCtx::global().debug_caches(device_idx, "after dump_all_to_cpu")).await;
 
 
         Ok(adjustable.branch(false))

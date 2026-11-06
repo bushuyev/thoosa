@@ -21,7 +21,7 @@ use pin_project::{pin_project, pinned_drop};
 // lifetimes or changes the future's type and capture behavior.
 #[cfg(not(tho_debug))]
 #[macro_export]
-macro_rules! track_await {
+macro_rules! t {
     ($future:expr $(,)?) => { $future };
 }
 
@@ -34,7 +34,7 @@ macro_rules! track_await {
 
 // Keep the existing module import path usable for both the macro and the
 // explicit tracking function used by its diagnostic expansion.
-pub use crate::track_await;
+pub use crate::t;
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 pub static TASKS: LazyLock<DashMap<u64, TaskInfo>> = LazyLock::new(DashMap::new);
@@ -250,7 +250,7 @@ mod tests {
     #[test]
     fn test_track_await_returns_the_original_future_type() {
         // A concrete type check rules out boxing and any tracking wrapper.
-        let future: std::future::Ready<u32> = track_await!(std::future::ready(42));
+        let future: std::future::Ready<u32> = t!(std::future::ready(42));
         assert_eq!(futures::executor::block_on(future), 42);
     }
 
@@ -258,7 +258,7 @@ mod tests {
     fn test_track_await_evaluates_once_and_preserves_borrowed_temporaries() {
         let evaluations = Cell::new(0);
         let polls = Cell::new(0);
-        let future = track_await!({
+        let future = t!({
             evaluations.set(evaluations.get() + 1);
             std::future::poll_fn(|cx| {
                 polls.set(polls.get() + 1);
@@ -273,7 +273,7 @@ mod tests {
         assert_eq!(polls.get(), 2);
         async fn length(value: &str) -> usize { value.len() }
         // Direct expansion must keep the temporary String alive through await.
-        assert_eq!(futures::executor::block_on(async { track_await!(length(&String::from("abc"))).await }), 3);
+        assert_eq!(futures::executor::block_on(async { t!(length(&String::from("abc"))).await }), 3);
     }
 
     #[cfg(tho_debug)]
@@ -281,7 +281,7 @@ mod tests {
     fn test_track_await_tracks_location_wakes_completion_and_cancellation() {
         let polls = Cell::new(0);
         let line = line!() + 1;
-        let future = track_await!(std::future::poll_fn(|cx| {
+        let future = t!(std::future::poll_fn(|cx| {
             polls.set(polls.get() + 1);
             if polls.get() == 1 { cx.waker().wake_by_ref(); Poll::Pending }
             else { Poll::Ready(42) }
@@ -299,7 +299,7 @@ mod tests {
         }
         assert_eq!(future.as_mut().poll(&mut cx), Poll::Ready(42));
         assert!(!TASKS.contains_key(&id));
-        let cancelled = track_await!(std::future::pending::<()>());
+        let cancelled = t!(std::future::pending::<()>());
         let id = cancelled.id;
         assert!(TASKS.contains_key(&id));
         drop(cancelled);
