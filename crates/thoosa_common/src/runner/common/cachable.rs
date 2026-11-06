@@ -21,7 +21,7 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt::Debug;
 use std::collections::{HashMap, HashSet};
-use crate::runner::global_ctx::CacheKey;
+use crate::runner::residency::{ManagedResidency, Registration, ResidencyLease};
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -52,9 +52,6 @@ where
 }
 
 pub trait CachedPurgeOutput: Clone + Send + Sync + 'static {
-    // Tensor outputs remember their cache owners so downstream stages can
-    // exclude their inputs from OOM offload without knowing the producer type.
-    fn register_cache_key(&self, _cache_key: CacheKey) {}
 
     fn dump_to_cpu<'a>(&'a self, device_idx: usize) -> BoxFuture<'a, Result<(), ThoError>>;
 
@@ -77,9 +74,6 @@ impl<O> CachedPurgeOutput for Arc<DevicesWrap<O>>
 where
     O: Data + Send + Sync + 'static,
 {
-    fn register_cache_key(&self, cache_key: CacheKey) {
-        self.cache_keys.write().insert(cache_key);
-    }
 
     fn dump_to_cpu<'a>(&'a self, device_idx: usize) -> BoxFuture<'a, Result<(), ThoError>> {
         DevicesWrap::dump_to_cpu(self.as_ref(), device_idx).boxed()
@@ -100,7 +94,7 @@ where
     }
 
     fn has_any_data(&self) -> bool {
-        self.resident_devices.iter().any(|resident| resident.load(Ordering::Acquire))
+        self.data.resident_devices.iter().any(|resident| resident.load(Ordering::Acquire))
     }
 
     fn is_on_cpu_before(&self, purge_until: u64) -> bool {
@@ -117,9 +111,6 @@ impl<O> CachedPurgeOutput for Arc<O>
 where
     O: CachedPurgeOutput
 {
-    fn register_cache_key(&self, cache_key: CacheKey) {
-        self.as_ref().register_cache_key(cache_key);
-    }
 
     fn dump_to_cpu<'a>(&'a self, _device_idx: usize) -> BoxFuture<'a, Result<(), ThoError>> {
         async { Ok(()) }.boxed()
@@ -323,16 +314,9 @@ where
     for <'i> Self::In<'i>: WithId + Send + Sync,
     <Self as Stage>::Out: CachedPurgeOutput +  WithId + Send + Sync + 'static,//
 {
-    // Identifies the concrete cache returned by cache_for(). For an adapter
-    // output, use output_cache_key() to follow its actual cache owner.
+    // Memoization identity is independent of each output handle's residency.
     fn cache_key() -> crate::runner::global_ctx::CacheKey {
         crate::runner::global_ctx::CacheKey::of::<Self>()
-    }
-
-    // Adapters can return another stage's cached output. Exclusions must follow
-    // that owner, including adapters which select a stage at runtime.
-    fn output_cache_key(&self) -> crate::runner::global_ctx::CacheKey {
-        Self::cache_key()
     }
 
     async fn cache() -> Result<Arc<StageCache<Self>>, ThoError>
@@ -381,9 +365,6 @@ where
         // Keep this context through completion; computation uses the same area.
         ctx.add_purge_gpu_closure(cleanup);
         let result = track_await!(shared.clone()).await;
-        if let Ok(output) = &result {
-            output.register_cache_key(Self::cache_key());
-        }
         if result.is_err() {
             // A failed computation has no reusable output. Evict it without
             // requiring a device-generation change to permit a later attempt.
@@ -397,8 +378,15 @@ where
 
 
 //https://github.com/rust-lang/rust/issues/100013
+/// Async data ownership always includes eviction registration, even outside a cache.
 #[derive(Debug)]
-pub struct DevicesWrap<O>
+pub struct DevicesWrap<O: Data + Send + Sync> {
+    data: Arc<ResidentData<O>>,
+    registration: Registration,
+}
+
+#[derive(Debug)]
+struct ResidentData<O>
 where
     O: Data + Send + Sync,
 {
@@ -406,9 +394,6 @@ where
     // operations do not need it; this erased field only keeps the stable reference required
     // by the conditional WithId impl when the wrapper is a Cached AsyncStage output.
     id: Box<dyn CachableIdTr>,
-    // One wrapper can be returned by multiple cached stages. Protect each
-    // owner; excluding an ID in an unrelated cache would retain wrong inputs.
-    cache_keys: parking_lot::RwLock<HashSet<CacheKey>>,
 
     cached_data: Box<[tokio::sync::RwLock<Option<O>>]>,//cached data never changes
     inflights: Box<[Mutex<Option<Arc<Notify>>>]>,
@@ -419,6 +404,7 @@ where
     gpu_resident_count: AtomicUsize,
     //contains cache age ( GlobalCtx::cache_age - increated when something is being cached from Cachable::run_cached). The smaller the value the longer it was on the cpu
     on_cpu_since: parking_lot::RwLock<Option<u64>>,
+    leases: Box<[Arc<AtomicUsize>]>,
     pd: PhantomData<O>,
 }
 
@@ -481,13 +467,14 @@ where
     O: Data + CopyToDevice + Send + Sync,
 {
     type Out<'a> = ThoDataRef<'a, O> where Self: 'a, O:'a;
+    fn protect(&self, device: usize) -> ResidencyLease { DevicesWrap::protect(self, device) }
 
     fn borrow_ref<'o>(&'o self, to_tho_device_idx: usize) -> impl Future<Output=Result<Self::Out<'o>, ThoError>> + Send
     where
         Self: 'o
     {
         async move {
-            let read_guard = self.load_from_any_device_(to_tho_device_idx).await?;
+            let read_guard = self.data.load_from_any_device_(to_tho_device_idx).await?;
             Ok(ThoDataRef::ReadLocked(RwLockReadGuard::map(
                 read_guard,
                 |val: &O| val,
@@ -510,20 +497,20 @@ where
         async move {
             match selector {
                 None => {
-                    debug!("DevicesWrap::borrow_to: no selector self.id={:?}", self.id);
+                    debug!("DevicesWrap::borrow_to: no selector self.data.id={:?}", self.data.id);
 
                     BorrowRef::borrow_ref(self, to_tho_device_idx).await
                 }
                 Some(selector) => {
-                    debug!("DevicesWrap::borrow_to: selector={selector:?} self.id={:?}", self.id);
+                    debug!("DevicesWrap::borrow_to: selector={selector:?} self.data.id={:?}", self.data.id);
 
-                    if self.is_resident_on_device(to_tho_device_idx) {
-                        debug!("DevicesWrap::borrow_to: self.id={:?} is_resident_on_device", self.id);
+                    if self.data.is_resident_on_device(to_tho_device_idx) {
+                        debug!("DevicesWrap::borrow_to: self.data.id={:?} is_resident_on_device", self.data.id);
 
-                        let guard = track_await!(self.cached_data[to_tho_device_idx].read()).await;
+                        let guard = track_await!(self.data.cached_data[to_tho_device_idx].read()).await;
                         match guard.as_ref() {
                             None => {
-                                self.mark_not_resident_on_device(to_tho_device_idx);
+                                self.data.mark_not_resident_on_device(to_tho_device_idx);
                                 warn!("BorrowRef<S> for DevicesWrap::borrow_to: resident_on_device  flag for {to_tho_device_idx} was stale")
                             }
                             Some(data) => {
@@ -535,8 +522,8 @@ where
                         }
                     }
 
-                    for (source_device_idx, op) in self.cached_data.iter().enumerate() {
-                        if !self.is_resident_on_device(source_device_idx) {
+                    for (source_device_idx, op) in self.data.cached_data.iter().enumerate() {
+                        if !self.data.is_resident_on_device(source_device_idx) {
                             continue;
                         }
 
@@ -545,9 +532,9 @@ where
                         if let Some(src) = source_read_guard.as_ref() {
                             let sub_t: O = src.subview(selector.clone())?;
 
-                            debug!("DevicesWrap::with_selected_data_ref: sub_t.size={:?} copying to to_device_idx={to_tho_device_idx} self.copy_to_device={:?}", sub_t.size(), self.copy_to_device);
+                            debug!("DevicesWrap::with_selected_data_ref: sub_t.size={:?} copying to to_device_idx={to_tho_device_idx} self.data.copy_to_device={:?}", sub_t.size(), self.data.copy_to_device);
 
-                            let data = match &self.copy_to_device {
+                            let data = match &self.data.copy_to_device {
                                 Some(copy_to_device) => track_await!(copy_to_device.copy(&sub_t, to_tho_device_idx)).await?,
                                 None => sub_t,
                             };
@@ -561,7 +548,7 @@ where
 
                     }
 
-                    Err(ThoError::NotFound(Some(format!("select_ref: id={:?} selector={selector:?}", self.id))))
+                    Err(ThoError::NotFound(Some(format!("select_ref: id={:?} selector={selector:?}", self.data.id))))
                 }
             }
         }
@@ -604,7 +591,7 @@ fn initial_residency(num_devices: usize, resident_device_idx: usize) -> (Box<[At
     (resident_devices, gpu_resident_count)
 }
 
-impl<O> DevicesWrap<O>
+impl<O> ResidentData<O>
 where
     O: Data + Send + Sync,
 {
@@ -656,7 +643,7 @@ where
 
     fn id(&self) -> &Self::ID {
         // wrap_inner stores O::ID, so this downcast is guaranteed by construction.
-        self.id.as_ref().downcast_ref::<O::ID>().expect("DevicesWrap stored an unexpected ID type")
+        self.data.id.as_ref().downcast_ref::<O::ID>().expect("DevicesWrap stored an unexpected ID type")
     }
 }
 
@@ -679,29 +666,35 @@ where
 {
     pub fn wrap(o: O) -> Self
     where
-        O: CopyToDevice + WithId,
+        O: CopyToDevice + WithId + 'static,
     {
-        Self::wrap_inner(o, Some(Arc::new(CopyToDeviceCopier)))
+        Self::wrap_in(o, &GlobalCtx::global().managed_residency())
     }
 
     #[cfg(test)]
     pub fn wrap_cpu(o: O) -> Self
     where
-        O: WithId,
+        O: WithId + 'static,
     {
         assert_eq!(o.tho_device_idx(), 0);
-        Self::wrap_inner(o, None)
+        Self::wrap_inner(o, None, &GlobalCtx::global().managed_residency())
     }
 
-    fn wrap_inner(o: O, copy_to_device: Option<Arc<dyn DeviceCopier<O>>>) -> Self
+    pub fn wrap_in(o: O, residency: &Arc<ManagedResidency>) -> Self
+    where O: CopyToDevice + WithId + 'static,
+    {
+        Self::wrap_inner(o, Some(Arc::new(CopyToDeviceCopier)), residency)
+    }
+
+    fn wrap_inner(o: O, copy_to_device: Option<Arc<dyn DeviceCopier<O>>>, residency: &Arc<ManagedResidency>) -> Self
     where
-        O: WithId,
+        O: WithId + 'static,
     {
         let id = o.id().clone();
         let size = o.size();
         let device_ordinal = o.tho_device_idx();
         let mem_size = o.mem_size();
-        let num_devices: usize = GlobalCtx::global().device_count();
+        let num_devices: usize = residency.device_count();
         let (resident_devices, gpu_resident_count) = initial_residency(num_devices, device_ordinal);
 
         debug!("DevicesWrap::wrap: id={id:?} device_ordinal={device_ordinal}");
@@ -724,9 +717,8 @@ where
             .collect::<Vec<_>>()
             .into_boxed_slice();
 
-        Self {
+        let data = Arc::new(ResidentData {
             id: Box::new(id),
-            cache_keys: Default::default(),
             cached_data: device_futures,
             inflights,
             size,
@@ -735,20 +727,49 @@ where
             on_cpu_since: Default::default(),
             mem_size,
             copy_to_device,
+            leases: (0..num_devices).map(|_| Arc::new(AtomicUsize::new(0))).collect(),
             pd: PhantomData,
-        }
+        });
+        let registration = residency.register(Arc::clone(&data) as Arc<dyn crate::runner::purge::CachePurger>);
+        Self { data, registration }
     }
 
 
-    pub fn add_required_ids<'a>(&'a self, required_ids: &mut HashMap<CacheKey, HashSet<&'a dyn CachableIdTr>>) {
-        for key in self.cache_keys.read().iter() {
-            required_ids.entry(key.clone()).or_default().insert(self.id.as_ref());
-        }
-    }
+    pub fn protect(&self, device: usize) -> ResidencyLease { ResidencyLease::acquire(&self.data.leases[device]) }
+    pub fn size(&self) -> &O::Metrics { &self.data.size }
+    pub fn is_on_device(&self, device: usize) -> bool { self.data.is_on_device(device) }
+    pub fn mem_size(&self) -> u64 { self.data.mem_size }
+    pub fn is_on_cpu_before(&self, age: u64) -> bool { self.data.is_on_cpu_before(age) }
+    pub async fn is_all_on_cpu(&self) -> bool { self.data.is_all_on_cpu().await }
+    pub async fn dump_to_cpu(&self, device: usize) -> Result<(), ThoError> { self.data.dump_to_cpu(device).await }
+    async fn cleanup_device(&self, device: usize) -> Result<(), ThoError> { self.data.cleanup_device(device).await }
+    pub async fn drop_device(&self, device: usize) -> Result<(), ThoError> { self.data.drop_device(device).await }
+    pub async fn load_from_any_device_(&self, device: usize) -> Result<RwLockReadGuard<'_, O>, ThoError> { self.data.load_from_any_device_(device).await }
 
-    pub fn size(&self) -> &O::Metrics {
-        &self.size
+    async fn detach(self) -> Result<ResidentData<O>, ThoError> {
+        self.registration.detach().await;
+        Arc::try_unwrap(self.data).map_err(|_| ThoError::new("managed residency still borrowed after detach"))
     }
+    pub async fn take_data(self, device: usize) -> Result<O, ThoError> {
+        // An offload may have started before ownership was transferred. Wait
+        // for it and reload the requested replica while excluding new offloads.
+        let _lease = self.protect(device);
+        drop(self.load_from_any_device_(device).await?);
+        self.detach().await?.take_data(device)
+    }
+    pub async fn take_data_prefer_device_or_any(self, device: usize) -> Result<O, ThoError> { self.detach().await?.take_data_prefer_device_or_any(device) }
+    #[cfg(test)]
+    pub fn cached_data(&self) -> &Box<[tokio::sync::RwLock<Option<O>>]> { &self.data.cached_data }
+}
+
+#[async_trait]
+impl<O: Data + Send + Sync + 'static> crate::runner::purge::CachePurger for ResidentData<O> {
+    async fn has_gpu_data(&self, device: usize) -> bool { self.is_on_device(device) }
+    async fn purge_gpu(&self, _: Option<&HashSet<&dyn CachableIdTr>>, device: usize, _: &str) -> Result<(), ThoError> { self.dump_to_cpu(device).await }
+    async fn drop_gpu(&self, device: usize, _: &str) -> Result<(), ThoError> { self.drop_device(device).await }
+}
+
+impl<O: Data + Send + Sync> ResidentData<O> {
 
     async fn cleanup_device(&self, device_idx: usize) -> Result<(), ThoError> {
         if device_idx == 0 || GlobalCtx::is_shutting_down() { return Ok(()); }
@@ -762,6 +783,7 @@ where
     }
 
     async fn offload_locked(&self, device_idx: usize, source: &mut Option<O>) -> Result<(), ThoError> {
+        if self.leases[device_idx].load(Ordering::Acquire) != 0 { return Ok(()); }
         if let Some(data) = source.as_ref() {
             // Release the CPU read guard before ensure_copied takes its write lock.
             let backed_up = self.cached_data[0].read().await.is_some();
@@ -936,25 +958,10 @@ where
         self.resident_devices.get(tho_device_idx).map(|resident| resident.load(Ordering::Acquire)).unwrap_or(false)
     }
 
-    pub fn mem_size(&self) -> u64 {
-        self.mem_size
-    }
 }
 
 
-impl<O> DevicesWrap<O>
-where
-    O: Data + Send + Sync
-{
-
-    pub fn id(&self) -> &<O as WithId>::ID
-    where
-        O: WithId,
-    {
-        // This mirrors the conditional WithId impl without imposing WithId on other operations.
-        self.id.as_ref().downcast_ref::<O::ID>().expect("DevicesWrap stored an unexpected ID type")
-    }
-
+impl<O: Data + Send + Sync> ResidentData<O> {
     async fn ensure_copied(
         &self,
         dst_idx: usize,
@@ -1088,15 +1095,15 @@ where
         }
     }
 
-    #[cfg(test)]
-    pub fn cached_data(&self) -> &Box<[tokio::sync::RwLock<Option<O>>]> {
-        &self.cached_data
-    }
 }
 
 pub trait BorrowRef
 {
     type Out<'a> where Self: 'a;
+
+    /// Enumerate owned managed inputs so the runner retains them across OOM adjustments.
+    /// Scalar and already-materialized kernel inputs return an empty lease.
+    fn protect(&self, device: usize) -> ResidencyLease;
 
     fn borrow_ref<'o>(&'o self, to_tho_device_idx: usize) -> impl Future<Output = Result<Self::Out<'o>, ThoError>> + Send
     where
@@ -1110,6 +1117,7 @@ where
     BR:BorrowRef + Sync + Send,
 {
     type Out<'a> = BR::Out<'a> where Self: 'a,  BR:'a;
+    fn protect(&self, device: usize) -> ResidencyLease { self.as_ref().protect(device) }
 
     fn borrow_ref<'o>(&'o self, to_tho_device_idx: usize) -> impl Future<Output=Result<Self::Out<'o>, ThoError>> + Send
     where
@@ -1152,6 +1160,9 @@ where
 /// Owned-data analogue of WithDataRef for sync-stage consume paths that need executor-controlled materialization.
 pub trait ConsumeData {
     type O: Data + WithId + Send + Sync;
+    /// Enumerate owned managed inputs so the runner retains them across OOM adjustments.
+    /// Scalar and already-materialized kernel inputs return an empty lease.
+    fn protect(&self, device: usize) -> ResidencyLease;
     //it should be run from OOM OOMHandler::consume where tensors can't be dumped to cpu while being used
     fn consume<R: Send, F, P>(
         self,
@@ -1177,7 +1188,7 @@ where
     pub async fn extra(&self) -> Result<E, ThoError> {
         // A concurrent dump_to_cpu can move data from a device slot to CPU while this method is scanning slots; the second pass avoids a false NotFound after waiting on the old device slot.
         for _attempt in 0..2 {
-            for op in self.cached_data.iter() {
+            for op in self.data.cached_data.iter() {
                 let source_read_guard = track_await!(op.read()).await;
 
                 if let Some(data_with_extra) = source_read_guard.as_ref() {
@@ -1186,7 +1197,7 @@ where
             }
         }
 
-        Err(ThoError::new(format!("Can't get extra from {:?}", self.id)))
+        Err(ThoError::new(format!("Can't get extra from {:?}", self.data.id)))
     }
 }
 
@@ -1311,13 +1322,36 @@ mod tests {
     async fn wait_for_inflight_participants(wrap: &DevicesWrap<ControlledCopyData>, device_idx: usize, expected: usize) {
         timeout(Duration::from_secs(5), async {
             loop {
-                let participants = wrap.inflights[device_idx].lock().as_ref().map(Arc::strong_count).unwrap_or(0);
+                let participants = wrap.data.inflights[device_idx].lock().as_ref().map(Arc::strong_count).unwrap_or(0);
                 if participants >= expected {
                     return;
                 }
                 tokio::task::yield_now().await;
             }
         }).await.expect("timed out waiting for inflight participants");
+    }
+
+    #[tokio::test]
+    async fn test_managed_consume_waits_for_inflight_offload() -> Result<(), ThoError> {
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
+        for require_device in [false, true] {
+            let registry = crate::runner::residency::ManagedResidency::new(2);
+            let (data, state) = ControlledCopyData::new(1, CopyBehavior::BlockFirst);
+            let input = DevicesWrap::wrap_in(data, &registry);
+            let mut offload = Box::pin(registry.offload(1));
+            assert!(futures_util::poll!(offload.as_mut()).is_pending());
+            state.entered.acquire().await.unwrap().forget();
+            let mut consume = Box::pin(async move {
+                if require_device { input.take_data(1).await } else { input.take_data_prefer_device_or_any(1).await }
+            });
+            assert!(futures_util::poll!(consume.as_mut()).is_pending(), "taking ownership must wait for the offload snapshot");
+            state.release.add_permits(1);
+            let (offloaded, value) = timeout(Duration::from_secs(5), async { tokio::join!(offload, consume) }).await?;
+            offloaded?;
+            assert_eq!(value?.tho_device_idx(), usize::from(require_device));
+            assert!(!registry.has_gpu_data(1).await);
+        }
+        Ok(())
     }
 
     #[tokio::test]
@@ -1361,7 +1395,7 @@ mod tests {
         assert!(leader.await.expect("leader task panicked").is_err());
         assert_eq!(timeout(Duration::from_secs(5), follower).await.expect("follower timed out").expect("follower task panicked")?, 1);
         assert_eq!(state.calls.load(Ordering::SeqCst), 2);
-        assert!(tested.inflights[1].lock().is_none());
+        assert!(tested.data.inflights[1].lock().is_none());
         Ok(())
     }
 
@@ -1393,7 +1427,7 @@ mod tests {
 
         assert_eq!(timeout(Duration::from_secs(5), follower).await.expect("follower timed out").expect("follower task panicked")?, 1);
         assert_eq!(state.calls.load(Ordering::SeqCst), 2);
-        assert!(tested.inflights[1].lock().is_none());
+        assert!(tested.data.inflights[1].lock().is_none());
         Ok(())
     }
 
@@ -1500,11 +1534,11 @@ mod tests {
         let tested = DevicesWrap::wrap(data);
 
         assert!(tested.dump_to_cpu(1).await.is_err());
-        assert!(tested.cached_data[0].read().await.is_none());
-        assert!(tested.cached_data[1].read().await.is_some());
+        assert!(tested.data.cached_data[0].read().await.is_none());
+        assert!(tested.data.cached_data[1].read().await.is_some());
         assert!(tested.is_on_device(1));
         assert_eq!(state.calls.load(Ordering::SeqCst), 1);
-        assert!(tested.inflights[0].lock().is_none());
+        assert!(tested.data.inflights[0].lock().is_none());
     }
 
     #[tokio::test]
@@ -1515,7 +1549,7 @@ mod tests {
         let data = MockDataWithId::whatever();
         let tested = DevicesWrap::wrap(data);
         assert!(tested.is_all_on_cpu().await);
-        let lock = &tested.cached_data[1];
+        let lock = &tested.data.cached_data[1];
         assert!(track_await!(lock.read()).await.is_none());
 
         let _ctx_for_data = mock_run_ctx::default(1);
@@ -1526,12 +1560,12 @@ mod tests {
         drop(data_on_1);//dump_to_cpu: can't drop self.id=DummyCachableId("id"), locked
 
 
-        let lock = &tested.cached_data[1];
+        let lock = &tested.data.cached_data[1];
         assert!(track_await!(lock.read()).await.is_some());
         assert!(!tested.is_all_on_cpu().await);
 
         tested.dump_to_cpu(1).await?;
-        let lock = &tested.cached_data[1];
+        let lock = &tested.data.cached_data[1];
         assert!(track_await!(lock.read()).await.is_none());
         assert!(tested.is_all_on_cpu().await);
         assert!(tested.is_on_cpu_before(0));

@@ -34,7 +34,7 @@ use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::run_configs::{RunConfig, RunConfigId};
 use thoosa_shared::traits::{AsyncStage, MonoMetrics, Stage};
-use thoosa_shared::traits::{CachableIdTr, Data, DataId, OutId, RunCtx, WithId};
+use thoosa_shared::traits::{Data, DataId, OutId, RunCtx, WithId};
 use thoosa_shared::{TensorIdSliceIdx, ThoError, mono_key};
 
 use crate::stages::find_motifs::{LoaderStageChoice, config_to_stage};
@@ -339,6 +339,8 @@ impl SyncMotifLoaderInputWrapper {
 }
 
 impl ConsumeData for SyncMotifLoaderInputWrapper {
+    fn protect(&self, device: usize) -> thoosa_common::runner::residency::ResidencyLease { self.loaded_resources.protect(device) }
+
     type O = SyncMotifLoaderInput;
 
     fn consume<R: Send, F, P>(
@@ -732,9 +734,8 @@ where
             ctx.branch(false),
             "motif loader",
         )).await?;
-        // Snapshot before moving the cache into the consuming stage so OOM retries retain its inputs.
-        let loaded_resource_ids = loaded_resources.ids();
-        let loaded_resources_key = loaded_resources.cache_key().clone();
+
+
         let sync_motif_loader = SyncMotifLoader::new(ctx.tho_device_idx().into()).await?;
 
         let sync_input = SyncMotifLoaderInputWrapper::new(
@@ -747,8 +748,8 @@ where
             loaded_resources,
             "motif loader wrapper",
         );
-        let required_loaded_resource_ids = loaded_resource_ids.iter().map(|id| id as &dyn CachableIdTr).collect();
-        let required_ids = HashMap::from([(loaded_resources_key, &required_loaded_resource_ids)]);
+
+
         let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(
             vec![
                 Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(*MaxParallelStep::FAST))),
@@ -761,7 +762,7 @@ where
             &sync_motif_loader,
             sync_input,
             ctx.branch(true),
-            WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new(&required_ids))),
+            WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new())),
         )).await?;
 
         Ok(Arc::new(DevicesWrap::wrap(motif.into_data_with_extra())))
@@ -900,9 +901,8 @@ where
             ctx.branch(false),
             "random loader",
         )).await?;
-        // Snapshot before moving the cache into the consuming stage so OOM retries retain its inputs.
-        let loaded_resource_ids = loaded_resources.ids();
-        let loaded_resources_key = loaded_resources.cache_key().clone();
+
+
         let sync_motif_loader = SyncMotifLoader::new(ctx.tho_device_idx().into()).await?;
         let sync_input = SyncMotifLoaderInputWrapper::new(
             mono_key!(*motif_id_value, "random_slices_loader_input").into(),
@@ -914,8 +914,8 @@ where
             loaded_resources,
             "random loader",
         );
-        let required_loaded_resource_ids = loaded_resource_ids.iter().map(|id| id as &dyn CachableIdTr).collect();
-        let required_ids = HashMap::from([(loaded_resources_key, &required_loaded_resource_ids)]);
+
+
         let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(
             vec![
                 Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(*MaxParallelStep::FAST))),
@@ -929,7 +929,7 @@ where
             &sync_motif_loader,
             sync_input,
             ctx.branch(true),
-            WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new(&required_ids))),
+            WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new())),
         )).await?;
 
         let DataWithExtra { data, ..} = motif.into_data_with_extra();
@@ -990,6 +990,8 @@ impl SyncLoadMotifResourcesInputWrapper {
 }
 
 impl BorrowRef for SyncLoadMotifResourcesInputWrapper {
+    fn protect(&self, device: usize) -> thoosa_common::runner::residency::ResidencyLease { self.raw_tensor.protect(device) }
+
     type Out<'a> = SyncLoadMotifResourcesInput<'a> where Self: 'a;
 
     fn borrow_ref<'a>(&'a self, to_device_idx: usize) -> impl std::future::Future<Output = Result<Self::Out<'a>, ThoError>> + Send
@@ -1267,6 +1269,8 @@ impl SyncLoadRandomSlicesInputWrapper {
 }
 
 impl BorrowRef for SyncLoadRandomSlicesInputWrapper {
+    fn protect(&self, device: usize) -> thoosa_common::runner::residency::ResidencyLease { self.raw_tensor.protect(device) }
+
     type Out<'a> = SyncLoadRandomSlicesInput<'a> where Self: 'a;
 
     fn borrow_ref<'a>(&'a self, to_device_idx: usize) -> impl std::future::Future<Output = Result<Self::Out<'a>, ThoError>> + Send

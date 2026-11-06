@@ -4,7 +4,6 @@ use thoosa_common::runner::execution::{StageExecution, ExecutionContext, execute
 use std::borrow::Borrow;
 use thoosa_common::runner::sync_stage::PrepareStage;
 use crate::motifs_store::MotifsStore;
-use thoosa_common::runner::global_ctx::CacheKey;
 use thoosa_common::tch_error::tch_result;
 
 use crate::dims::MotifProbability;
@@ -452,7 +451,7 @@ where
             inputs_by_filter_group.insert(group_key, filtered_input);
         }
 
-        // Each result stays in its registered cache while other nets run or OOM recovery dumps GPU data.
+        // Each result owns its eviction registration while other nets run.
         let futures = apply_motif_nets.into_iter().map(|(net_id, filter, stage)| {
             let group_key = filter.map(|v| v.0);
             let filtered_input = inputs_by_filter_group.get(&group_key).cloned().expect("filtered input for group must exist");
@@ -478,10 +477,8 @@ where
             id: self.out_id(input.id()),
             motif_nets_applied: motif_nets_applied.into_iter().map(|(_, _, output)| output).collect(),
         });
-        // Stacking needs every cached motif-net result, including equal IDs in distinct caches.
-        let mut required_inputs = HashMap::new();
-        for output in &stack_input.motif_nets_applied { output.add_required_ids(&mut required_inputs); }
-        let required_ids = required_inputs.iter().map(|(key, ids)| (key.clone(), ids)).collect();
+
+
 
         let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(
             vec![
@@ -498,7 +495,7 @@ where
             WithRunCtxContext::new(
                 MaxParallelAndDumpToCpuAdjustableContex::new(
                     MaxParallelAdjustContextImpl::new(),
-                    DumpToCpuContextImpl::new(&required_ids),
+                    DumpToCpuContextImpl::new(),
                 ),
             ),
         )).await?.into_inner();
@@ -568,6 +565,8 @@ struct StackAppliedMotifNetsInputWrapper {
 }
 
 impl BorrowRef for StackAppliedMotifNetsInputWrapper {
+    fn protect(&self, device: usize) -> thoosa_common::runner::residency::ResidencyLease { thoosa_common::runner::residency::ResidencyLease::combine(self.motif_nets_applied.iter().map(|value| value.protect(device))) }
+
     type Out<'a> = StackAppliedMotifNetsInput<'a>;
 
     async fn borrow_ref<'a>(&'a self, to_device_idx: usize) -> Result<Self::Out<'a>, ThoError>
@@ -845,6 +844,8 @@ impl ApplyMotifNetInputWrapper {
 }
 
 impl BorrowRef for ApplyMotifNetInputWrapper {
+    fn protect(&self, device: usize) -> thoosa_common::runner::residency::ResidencyLease { self.batch.protect(device) }
+
     type Out<'a> = ApplyMotifNetInput<'a> where Self: 'a;
 
     fn borrow_ref<'a>(&'a self, to_device_idx: usize) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
@@ -936,9 +937,7 @@ where
         let slices = if input_len >= width { (input_len - width) / step + 1 } else { 1 };
         let out_id = self.out_id(input.id());
         // Inference and its split retries reuse the same filtered input.
-        let mut required_inputs = HashMap::new();
-        input.add_required_ids(&mut required_inputs);
-        let required_ids = required_inputs.iter().map(|(key, ids)| (key.clone(), ids)).collect();
+
         let output = OOMHandler::<'_, '_, _, NoStageAdjuster, _, ChannelsDataSelector>::new(
             vec![
                 Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(*MaxParallelStep::MID))),
@@ -954,7 +953,7 @@ where
             Contexts::<DynSyncStageWithStateEnum<SyncApplyMotifNet<C>, MotifNetMeta>, _, _, _>::new(
                 ApplyMotifNetSplitsContext::new(input.size().clone(), out_id, slices, (Float, Cpu), width, step)?,
                 NoopRunnableContext {},
-                MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new(&required_ids)),
+                MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new()),
             ),
         ).await.map_err(|error| error.context(format!("apply motif net {:?}", self.id)))?;
         // The IPC wrapper ends here; the registered async cache owns the ordinary tensor in either mode.
@@ -1077,7 +1076,7 @@ where
         APPLY_MOTIF_NET_INSTANCES.get_or_try_insert_recreatable_with::<C, _, _, _, _>(device_idx, GlobalCtx::global().cuda_activity_gate(device_idx), GlobalCtx::global().is_ipc(), key, move || async move {
 
             // Construction loads model state and has no cached tensor inputs to retain.
-            let required_ids: HashMap<CacheKey, &HashSet<&dyn CachableIdTr>> = HashMap::new();
+
             let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(
                 vec![
                     Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(*MaxParallelStep::FAST))),
@@ -1088,7 +1087,7 @@ where
             let stage = oom_handler.new_stage(
                 sync_init,
                 run_context,
-                WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new(&required_ids))),
+                WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new())),
                 &ws,
             ).await?;
 

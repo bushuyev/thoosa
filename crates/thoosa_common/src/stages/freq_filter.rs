@@ -1,3 +1,5 @@
+#[cfg(test)]
+use std::collections::HashMap;
 use thoosa_common::ipc::state_transfer::StateTransfer;
 use thoosa_common::runner::execution::{StageExecution, ExecutionContext, execute_stateful};
 use std::future::Future;
@@ -15,7 +17,7 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 #[cfg(test)]
 use std::any::Any;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::ops::Range;
@@ -841,9 +843,7 @@ where
         let input_size = input.size().clone();
         let min_split_len = [input_size.dim::<0>(), self.min_input_split_len].into();
         // Keep the source tensor resident for filtering and every split retry.
-        let mut required_inputs = HashMap::new();
-        input.add_required_ids(&mut required_inputs);
-        let required_ids = required_inputs.iter().map(|(key, ids)| (key.clone(), ids)).collect();
+
         // The async loader survives resets; resolve its endpoint for the current
         // generation on each invocation rather than retaining a stale proxy.
         let mut init = self.filter_init.clone();
@@ -865,7 +865,7 @@ where
             Contexts::new(
                 SplitsAdjusterContextImpl::new(input_size, FreqFilterOutputBuilder::new(out_id)),
                 NoopRunnableContext {},
-                MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new(&required_ids)),
+                MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new()),
             ),
         )).await?;
 
@@ -1000,11 +1000,11 @@ mod tests {
                 // A purge for another device must preserve this stage's state.
                 stage.purge_gpu(None, 2, "other device").await?;
                 assert_eq!(stage.has_gpu_data(1).await, global.is_ipc() || tensor_count > 0);
-                global.dump_all_to_cpu(&HashMap::new(), 1, "freq filter state test").await?;
+                global.dump_all_to_cpu(1, "freq filter state test").await?;
                 assert!(!stage.has_gpu_data(1).await);
                 assert!(global.is_all_on_cpu_force_check(1).await);
                 // The CPU dump must survive both repeated global and direct purges.
-                global.dump_all_to_cpu(&HashMap::new(), 1, "already offloaded").await?;
+                global.dump_all_to_cpu(1, "already offloaded").await?;
                 stage.purge_gpu(None, 1, "already offloaded").await?;
 
                 if global.is_ipc() && tensor_count > 0 {
@@ -1067,7 +1067,7 @@ mod tests {
                         // rebuilt. They must not poison a later global offload.
                         assert!(!unused.has_gpu_data(1).await);
                         unused.purge_gpu(None, 1, "retired filter").await?;
-                        global.dump_all_to_cpu(&HashMap::new(), 1, "before filter rebuild").await?;
+                        global.dump_all_to_cpu(1, "before filter rebuild").await?;
                         // Exercise the retained proxy directly: new use must
                         // rebuild its kernels instead of uploading the old dump.
                         let output = global.execution(1).run_stage(Arc::clone(&previous), Arc::clone(&input), 1, &RunCtxImpl::new(1, "retained filter")).await?;
@@ -1083,7 +1083,7 @@ mod tests {
                     assert!(Arc::ptr_eq(&previous, &current), "recovery replaced the cached proxy instead of its endpoint");
                     assert!(Arc::ptr_eq(&current, &SyncFreqFilter::<RunCtxImpl>::new(init.clone()).await?), "same-generation filter was not shared");
                     previous = current;
-                    global.dump_all_to_cpu(&HashMap::new(), 1, "filter reset test").await?;
+                    global.dump_all_to_cpu(1, "filter reset test").await?;
                 }
                 Ok(())
             }).await?

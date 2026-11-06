@@ -7,7 +7,6 @@ use crate::torch_runner::tests::composite_input::ab_clc::{ABClcStage, ABClcStage
 use crate::torch_runner::tests::composite_input::loader_a::{AStageInput, AStageOutput};
 use crate::torch_runner::tests::composite_input::loader_b::{BStageInput, BStageOutput};
 use log::debug;
-use std::collections::HashMap;
 use std::sync::Arc;
 use tch::Tensor;
 use thoosa_shared::ThoError;
@@ -76,7 +75,7 @@ where
     assert_eq!(value, 200.3);
     assert_eq!(num_calls(), 1);
 
-    GlobalCtx::global().dump_all_to_cpu(&HashMap::new(), 1, "test_ab_clc").await?;
+    GlobalCtx::global().dump_all_to_cpu(1, "test_ab_clc").await?;
     assert!(GlobalCtx::global().is_all_on_cpu_force_check(1).await);
 
     let out = Arc::clone(&ab_stage).run_cached(

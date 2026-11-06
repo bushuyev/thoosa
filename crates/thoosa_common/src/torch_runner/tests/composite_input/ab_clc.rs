@@ -174,6 +174,8 @@ impl ABClcSyncStageInputWrapper {
 
 
 impl BorrowRef for ABClcSyncStageInputWrapper {
+    fn protect(&self, device: usize) -> thoosa_common::runner::residency::ResidencyLease { thoosa_common::runner::residency::ResidencyLease::combine([self.a_out.protect(device), self.b_out.protect(device)]) }
+
     type Out<'a> = ABClcSyncStageInput<'a> where Self: 'a;
 
     fn borrow_ref<'a>(&'a self, to_device_idx: usize) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send

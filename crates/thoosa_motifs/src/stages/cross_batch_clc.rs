@@ -263,6 +263,8 @@ impl<'a, R> BorrowRef for CrossInput<'a, R>
 where
     R: AsRef<Resource> + Clone + Debug + Send + Sync + 'static,
 {
+    fn protect(&self, _device: usize) -> thoosa_common::runner::residency::ResidencyLease { thoosa_common::runner::residency::ResidencyLease::default() }
+
     type Out<'o> = CrossInput<'o, R> where Self: 'o;
 
     fn borrow_ref<'o>(&'o self, _to_device_idx: usize) -> impl Future<Output = Result<Self::Out<'o>, ThoError>> + Send

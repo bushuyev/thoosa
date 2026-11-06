@@ -93,9 +93,7 @@ where
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "Stft::run"))]
     async fn run(self: Arc<Self>, input: Self::In<'static>, mut ctx: Self::Ctx) -> Result<Self::Out, ThoError> {
         // The input can come from different loaders; follow its registered owners.
-        let mut required_inputs = std::collections::HashMap::new();
-        input.add_required_ids(&mut required_inputs);
-        let required_ids = required_inputs.iter().map(|(key, ids)| (key.clone(), ids)).collect();
+
         let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, SyncStftSelector> = OOMHandler::new(
             vec![
                 Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(*MaxParallelStep::FAST))),
@@ -111,7 +109,7 @@ where
                 WithRunCtxContext::new(
                     MaxParallelAndDumpToCpuAdjustableContex::new(
                         MaxParallelAdjustContextImpl::new(),
-                        DumpToCpuContextImpl::new(&required_ids),
+                        DumpToCpuContextImpl::new(),
                     ),
                 ),
             )).await?;

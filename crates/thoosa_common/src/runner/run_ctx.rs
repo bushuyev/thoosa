@@ -79,6 +79,15 @@ impl WithId for RunCtxImpl {
 }
 
 impl RunCtxImpl {
+    /// Phase boundaries can release idle residency through their session owner.
+    pub async fn offload_idle(&self, descr: &str) -> Result<(), ThoError> {
+        if self.tho_device_idx == 0 { return Ok(()); }
+        match &self.residency {
+            Some(residency) => residency.dump_all_to_cpu(self.tho_device_idx, descr).await,
+            None => GlobalCtx::global().dump_all_to_cpu(self.tho_device_idx, descr).await,
+        }
+    }
+
     pub fn new_in(runtime: &crate::runner::global_ctx::Runtime, device: usize, name: &str) -> Self {
         let mut ctx = Self::new(device, name);
         ctx.set_residency(runtime.residency());
