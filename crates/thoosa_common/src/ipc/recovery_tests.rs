@@ -362,7 +362,7 @@ fn test_fatal_actor_paths_replace_worker_ipc() -> Result<(), ThoError> {
                     // The admitted runner job must report despite caller cancellation.
                     gate.wait_for_generation_end(worker.generation).await;
                 } else if mode == "copy" {
-                    use crate::copy_ctx::CudaActorHandle;
+                    use crate::cuda_copier::CudaActorHandle;
                     let response = actor.install_stage(worker, ENDPOINT.into(), Some(3.to_string()), input(RecoveryAction::Poison)).await?;
                     assert!(matches!(response.status, OpResult::Ok(_)));
                     let error = actor.copy(tch_result(Tensor::f_from_slice(&[1f32]))?.into(), 1.into()).await.unwrap_err();

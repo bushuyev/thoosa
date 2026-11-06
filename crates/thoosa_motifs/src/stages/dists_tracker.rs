@@ -589,7 +589,7 @@ impl DistsMask {
                 .f_to_kind(Kind::Int64))?;
 
                 let flat = tch_result((&indices * &weights).f_sum_dim_intlist(&[1i64][..], false, Kind::Int64))?;
-                // CopyCtx assumes contiguous tensors for raw pointer copies.
+                // CudaCopier assumes contiguous tensors for raw pointer copies.
                 let flat = if flat.is_contiguous() {
                     flat
                 } else {

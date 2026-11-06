@@ -306,7 +306,7 @@ where
                 mask_makers.push(Tril);
             }
 
-            //copy to device is done on streams created in CopyCtx and used in DistsMask::new_async. Should wait for calculation stream to finish.
+            //copy to device is done on streams created in CudaCopier and used in DistsMask::new_async. Should wait for calculation stream to finish.
             debug!("FindMotifsStage::new, batch_clc: t_0.size={:?}, t_1.size={:?}", t_0.size(), t_1.size());
 
             //it's invoked from CrossLoader::run/OOMHandler/CrossInputSelectorWrap//with_[selected_]data_ref where stream is synchronized

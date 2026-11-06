@@ -2,9 +2,9 @@
 
 App can run either in 'local mode' where all cuda operations are executed in the same process or in 'Inter Process Communication (IPC) mode' where cuda operations are executed in a standalone process (CudaWorker) making it possible to restart this process if unrecoverable CUDA error happens.  
 
-[`CudaActorHandle`](../crates/thoosa_common/src/copy_ctx.rs) provides the common interface for tensor copies, execution contexts, and backend recovery. Its `run_stage` helpers prepare input and call a synchronous stage. The mode determines where that stage's GPU work happens; asynchronous orchestration stays in the application process.
+[`CudaActorHandle`](../crates/thoosa_common/src/cuda_copier.rs) provides the common interface for tensor copies, execution contexts, and backend recovery. Its `run_stage` helpers prepare input and call a synchronous stage. The mode determines where that stage's GPU work happens; asynchronous orchestration stays in the application process.
 
-`GlobalCtx` creates one actor handle per GPU, using either [`CudaLocalActorHandle`](../crates/thoosa_common/src/copy_ctx.rs) or [`CudaIPCActorHandle`](../crates/thoosa_common/src/ipc/cuda_process.rs).
+`GlobalCtx` creates one actor handle per GPU, using either [`CudaLocalActorHandle`](../crates/thoosa_common/src/cuda_copier.rs) or [`CudaIPCActorHandle`](../crates/thoosa_common/src/ipc/cuda_process.rs).
 
 | | Local | IPC |
 | --- | --- | --- |

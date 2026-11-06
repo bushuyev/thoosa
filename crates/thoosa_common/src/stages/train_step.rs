@@ -1,4 +1,4 @@
-use crate::copy_ctx::LocalCudaExecution;
+use crate::cuda_copier::LocalCudaExecution;
 use thoosa_common::ipc::state_transfer::CheckpointRestore;
 use thoosa_common::ipc::state_transfer::StateTransfer;
 use thoosa_common::runner::execution::{StageExecution, ExecutionContext, execute_stateful};
