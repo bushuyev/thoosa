@@ -338,8 +338,8 @@ where
     where
         R: RunCtx + MaxParallelCtx + Adjustable + 'static
     {
-        let _trained_net_ids = trained_nets.iter().map(|v|v.id).collect::<Vec<_>>();
-        let _trained_nets_len = trained_nets.len();
+
+
         // Aggregate caching must distinguish the same model set sampled differently.
         let id = &SynKey::new([mono_key!(APPLY_MOTIF_NETS, "ApplyMotifNets"), mono_key!(slice_step, "slice_step"), mono_key!(quantize, "quantize")]) + &SynKey::new(trained_nets.iter().map(|net| mono_key!(net.id, format!("trained_net_id_{}", net.id))).collect::<Vec<_>>());
 

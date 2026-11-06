@@ -515,7 +515,7 @@ where
             run_configs_len,
             FuturesOrdering::Unordered,
             thoosa_shared::CollectionErrorPolicy::SkipData(&[thoosa_shared::DataErrorKind::InputTooShort]),
-            "FindMotifsStage::new",
+            "FindMotifsStage::new",//TODO use thoosa_shared::futures_limits::ENTRY ?
         )).await?
         .into_iter()
         .collect::<Vec<_>>();
