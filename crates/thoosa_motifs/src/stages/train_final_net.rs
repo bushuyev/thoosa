@@ -78,7 +78,7 @@ where
     pd: PhantomData<L>,
     label_loader: Arc<LL>,
     num_label_nets: u32,
-    // label_net_run_config_ids: Vec<RunConfigId>,
+
     #[expect(dead_code, reason = "Retains the shared owner for the lifetime of this stage or input.")]
     ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
     store: Arc<dyn MotifsStore>,

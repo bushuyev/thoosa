@@ -495,12 +495,7 @@ impl RunAllArgs {
     }
 }
 
-/**
-export LD_LIBRARY_PATH=/home/bu/dvl/torch/libtorch-2.5.0/lib/ && cargo run --release -- \
---term-logger-level=TRACE --write-logger-level=INFO  --ws-path="/tmp/ws_import_test"  \
---logfile=/tmp/ws_1/thoosa.log import-resources --source-path=/media/bu/KINGSTON/hbac_orig
 
-*/
 #[derive(Debug, Args, Clone, Default)]
 pub struct ImportResourcesArgs {
     #[arg(long)]

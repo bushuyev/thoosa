@@ -70,6 +70,7 @@ Asynchronous stages coordinate tensor work, while synchronous stages perform the
 - [OOM Handling of the SyncStage execution](docs/sync_oom.md)
 - [IPC subsystem](docs/ipc.md) 
 - [Hyperparameter optimization](docs/opt.md)
+- [Example project](docs/hbac.md)
 
 ## Run
 
