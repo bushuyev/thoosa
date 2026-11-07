@@ -1,5 +1,12 @@
 # Thoosa
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/thoosa_dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="docs/thoosa_light.png">
+  <img alt="Thoosa logo" src="docs/thoosa_light.png" width="100">
+</picture>
+
+
 ## Design Goals and Constraints
 
 Thoosa is intended for **machine-learning experiments on a local workstation**, where GPU resources are limited and CUDA out-of-memory (OOM) errors are an expected part of the workflow.
