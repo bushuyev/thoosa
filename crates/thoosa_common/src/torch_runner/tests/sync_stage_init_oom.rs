@@ -7,7 +7,7 @@ use thoosa_shared::ThoError;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::traits::{MaxParallelCtx, Stage};
 
-use crate::ipc::cuda_wokrer::{AllTensors, WorkerStageInput, WorkerStageOutput};
+use crate::ipc::cuda_worker::{AllTensors, WorkerStageInput, WorkerStageOutput};
 use crate::ipc::proxy::DynSyncStageEnum;
 use crate::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelStep};
 use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;

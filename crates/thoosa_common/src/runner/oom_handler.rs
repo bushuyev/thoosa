@@ -1,4 +1,4 @@
-pub use super::syn_stage_runner::RetryToken;
+pub use super::sync_stage_runner::RetryToken;
 use crate as thoosa_common;
 use crate::runner::common::cachable::{BorrowRef, ConsumeData, SelectRef};
 use crate::ws::Workspace;
@@ -687,7 +687,7 @@ where
     type Out = SyncStageInitOutput<St>;
 }
 
-fn oom_executor(tho_device_idx: usize) -> &'static crate::runner::syn_stage_runner::SyncStageRunner {
+fn oom_executor(tho_device_idx: usize) -> &'static crate::runner::sync_stage_runner::SyncStageRunner {
     GlobalCtx::global().get_runner(tho_device_idx)
 }
 
@@ -1683,7 +1683,7 @@ mod tests {
     #[tokio::test]
     async fn test_consume_without_recoverable_input_stops_retry_and_releases_runner() {
         use crate::runner::global_ctx::{MockGlobalCtx, mock_global_ctx};
-        use crate::runner::syn_stage_runner::SyncStageRunner;
+        use crate::runner::sync_stage_runner::SyncStageRunner;
         use thoosa_common::runner::sync_stage::ConsumeResult;
         let global_context = MockGlobalCtx::global_context();
         let mock = Box::leak(Box::new(mock_global_ctx::build().with_runner(SyncStageRunner::new_with_reset_hook(8, 1, Arc::new(|_| Box::pin(async { Ok(()) })))).finish()));
@@ -1726,7 +1726,7 @@ mod tests {
     #[tokio::test]
     async fn test_recovery_interrupts_oom_adapter_between_attempts() {
         use crate::runner::global_ctx::{MockGlobalCtx, mock_global_ctx};
-        use crate::runner::syn_stage_runner::SyncStageRunner;
+        use crate::runner::sync_stage_runner::SyncStageRunner;
         tokio::time::timeout(std::time::Duration::from_secs(3), async {
             let global_context = MockGlobalCtx::global_context();
             let mock = Box::leak(Box::new(mock_global_ctx::build().with_runner(SyncStageRunner::new_with_reset_hook(8, 1, Arc::new(|_| Box::pin(async { Ok(()) })))).finish()));

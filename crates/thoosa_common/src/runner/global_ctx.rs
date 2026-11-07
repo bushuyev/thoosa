@@ -4,7 +4,7 @@ use crate::runner::common::cachable::{CachedPurgeOutput, StageCache};
 use crate::runner::cuda_recovery::CudaRecoveryCoordinator;
 use crate::runner::purge::CachePurger;
 use crate::runner::purger::Purger;
-use crate::runner::syn_stage_runner::SyncStageRunner;
+use crate::runner::sync_stage_runner::SyncStageRunner;
 use crate::tho_device::ThoDevice;
 use futures_util::future::BoxFuture;
 use log::{debug, error, info, warn};
@@ -791,7 +791,7 @@ impl GlobalCtx {
 pub mod mock_global_ctx {
     use crate::runner::global_ctx::MockGlobalCtx;
     use crate::runner::global_ctx::{GlobalCtx, RegisteredCacheHandle};
-    use crate::runner::syn_stage_runner::SyncStageRunner;
+    use crate::runner::sync_stage_runner::SyncStageRunner;
     use log::debug;
     use std::fmt::{Debug, Formatter};
     use tokio::task::block_in_place;
@@ -1137,7 +1137,7 @@ impl MockGlobalCtx {
 mod tests {
     use crate as thoosa_common;
     use crate::dims::AnyDims;
-    use crate::ipc::cuda_wokrer::CudaWorker;
+    use crate::ipc::cuda_worker::CudaWorker;
     use crate::ipc::tests::run_ipc_test;
     use crate::runner::common::cachable::{DevicesWrap, SelectRef};
     use crate::runner::global_ctx::GlobalCtx;

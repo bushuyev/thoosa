@@ -775,7 +775,7 @@ mod generation_tests {
 
     #[test]
     fn test_local_and_materialized_worker_inputs_use_the_same_lease() -> anyhow::Result<()> {
-        use crate::ipc::cuda_wokrer::{AllTensors, WorkerStageInput};
+        use crate::ipc::cuda_worker::{AllTensors, WorkerStageInput};
         let installed = crate::runner::global_ctx::MockGlobalCtx::is_installed_context();
         installed.expect().return_const(false);
         // CPU worker storage exercises the wire/materialization boundary without a GPU.
@@ -827,7 +827,7 @@ mod generation_tests {
 #[cfg(test)]
 mod thread_safety_tests {
     use super::*;
-    use crate::ipc::cuda_wokrer::AllTensors;
+    use crate::ipc::cuda_worker::AllTensors;
     use crate::nets::common_nets::ThoModuleWithStore;
     use crate::nets::nodes::{ThoBatchNorm1d, ThoClosureModule, ThoLinear};
     use crate::nets::tho_varstore::ThoTrainModule;

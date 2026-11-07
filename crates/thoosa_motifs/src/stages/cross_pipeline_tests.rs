@@ -6,7 +6,7 @@ use crate::stages::tensor_loader::{RawTensorLoader, mock_tensor_loader};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 use tch::{Device, Kind, Tensor};
-use thoosa_common::ipc::{cuda_wokrer::CudaWorker, tests::run_ipc_test};
+use thoosa_common::ipc::{cuda_worker::CudaWorker, tests::run_ipc_test};
 use thoosa_common::resources::Simple;
 use thoosa_common::runner::common::{MockRunCtx, mock_run_ctx};
 use thoosa_common::runner::global_ctx::{GlobalCtx, mock_global_ctx::MockGlobalCtxBuilder};

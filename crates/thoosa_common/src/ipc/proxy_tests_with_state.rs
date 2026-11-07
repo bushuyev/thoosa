@@ -1,5 +1,5 @@
 use crate::cuda_utils::tensor_mem_size;
-use crate::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
+use crate::ipc::cuda_worker::{AllTensors, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use crate::ipc::proxy::{DynSyncStageWithStateEnum, ProxyStage, StageState};
 use crate::ipc::serialization::json::JsonIpcCodec;
 use crate::ipc::worker_msg::WorkerInput;
@@ -392,7 +392,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::ipc::cuda_wokrer::{CudaWorker, InitFn};
+    use crate::ipc::cuda_worker::{CudaWorker, InitFn};
     use crate::ipc::proxy::DynSyncStageWithStateEnum;
     use crate::ipc::proxy_tests_with_state::{TEST_ENDPOINT, TestStageInitB, with_state_init};
     use crate::ipc::proxy_tests_with_state::{TestInputB, TestRunCtx, TestStageB};

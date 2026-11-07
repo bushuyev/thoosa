@@ -4,7 +4,7 @@ use crate::stages::apply_motif_nets::{ApplyMotifNetInit, ApplyMotifNetInput, App
 use crate::train_nets::{LabelNetParams, LabelNetTypeParams, MotifNetParams};
 use std::time::Duration;
 use tch::{Device, nn::VarStore};
-use thoosa_common::ipc::cuda_wokrer::{CudaWorker, InitFn};
+use thoosa_common::ipc::cuda_worker::{CudaWorker, InitFn};
 use thoosa_common::ipc::worker_msg::OpResult;
 use thoosa_common::nets::common_nets::LinLenNetParams;
 use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;

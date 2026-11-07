@@ -527,7 +527,6 @@ impl CudaCopier {
     }
 
     #[cfg(test)]
-    #[allow(dead_code)]
     pub fn rebuild(&mut self, mem_k: f64, buffs: usize) -> Result<(), ThoError> {
         assert_eq!(self.bufs_pool_h2d.as_ref().remaining_capacity(), self.buffs);
 

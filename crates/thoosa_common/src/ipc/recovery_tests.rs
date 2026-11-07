@@ -1,7 +1,7 @@
 //! Exercise the real actor/worker protocol. CUDA poisoning is confined to a
 //! worker or an explicitly spawned child, including under plain `cargo test`.
 use super::cuda_process::CudaIPCActorHandle;
-use super::cuda_wokrer::{AllTensors, CudaWorker, InitFn, WokerRunCtx};
+use super::cuda_worker::{AllTensors, CudaWorker, InitFn, WokerRunCtx};
 use super::worker_msg::{CudaWorkerMsgOut, DebugOutput, OpResult, WorkerInput};
 use super::wraps::SyncStageIpcWrapper;
 use crate::runner::global_ctx::GlobalCtx;

@@ -1,5 +1,5 @@
 use crate::ipc::cuda_process::CudaIPCActorHandle;
-use crate::ipc::cuda_wokrer::{WorkerStageInput, WorkerStageOutput};
+use crate::ipc::cuda_worker::{WorkerStageInput, WorkerStageOutput};
 use crate::ipc::endpoints::{EndpointRegistration, StageRecovery};
 use crate::ipc::worker_msg::{CudaWorkerId, CudaWorkerMsgOut, OpResult, WorkerInput};
 use crate::runner::execution::{ConsumingExecution, ExecutionContext, StageExecution};

@@ -138,7 +138,7 @@ fn get_test_name() -> String {
 #[cfg(test)]
 mod tests {
     use super::run_ipc_test;
-    use crate::ipc::cuda_wokrer::{AllTensors, CudaWorker, InitFn};
+    use crate::ipc::cuda_worker::{AllTensors, CudaWorker, InitFn};
     use crate::ipc::worker_msg::{DebugOutput, OpResult, WorkerInput};
     use crate::ipc::wraps::SyncStageIpcWrapper;
     use crate::runner::common::cachable::{BorrowRef, ConsumeData, DevicesWrap};
@@ -981,7 +981,7 @@ mod tests {
     }
 
     mod composite_input {
-        use crate::ipc::cuda_wokrer::{CudaWorker, InitFn};
+        use crate::ipc::cuda_worker::{CudaWorker, InitFn};
         use crate::tho_device::ThoDevice;
         use crate::torch_runner::tests::composite_input::ab_clc::{ABClcStage, ProxyABClcSyncStage, SYNC_AB_CLC_ENDPOINT, sync_ab_clc_endpoint_init};
         use crate::torch_runner::tests::composite_input::{ab_clc_sync_with_selector, run_ab_clc_with_stage};

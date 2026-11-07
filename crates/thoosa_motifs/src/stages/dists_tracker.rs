@@ -17,7 +17,7 @@ use tch::Kind::{Bool, Uint8};
 use tch::{Kind, Tensor};
 use thoosa_common::cuda_utils::{pack_bits_bool, unpack_bits_u8};
 use thoosa_common::dims::AnyDims;
-use thoosa_common::ipc::cuda_wokrer::{AllTensors, WorkerStageOutput, insert_worker_tensor};
+use thoosa_common::ipc::cuda_worker::{AllTensors, WorkerStageOutput, insert_worker_tensor};
 use thoosa_common::runner::sync_stage::ConsumeResult;
 use thoosa_common::runner::sync_stage::ConsumingStage;
 use thoosa_common::tch_error::tch_result;

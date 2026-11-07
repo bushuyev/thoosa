@@ -67,7 +67,7 @@ use crate::stages::stage_ids::APPLY_LABEL_NET;
 use crate::stages::stft::SyncStftSelector;
 use thoosa_common::dims::ChannelsData;
 use thoosa_common::instance_cache::InstanceCache;
-use thoosa_common::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput};
+use thoosa_common::ipc::cuda_worker::{AllTensors, WokerRunCtx, WorkerStageInput};
 use thoosa_common::ipc::proxy::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage};
 #[cfg(test)]
 use thoosa_common::ipc::serialization::json::IpcCodec;

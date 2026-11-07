@@ -18,7 +18,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use tch::Kind::Float;
 use tch::nn::AdamW;
 use tch::{Reduction, Tensor};
-use thoosa_common::ipc::cuda_wokrer::{AllTensors, InitFn, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
+use thoosa_common::ipc::cuda_worker::{AllTensors, InitFn, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::serialization::json::JsonIpcCodec;
 
 type MotifsInitFn = InitFn<dyn crate::motifs_ws::MotifsWorkspace>;
@@ -1381,8 +1381,8 @@ mod tests {
     use thoosa_common::cuda_copier::CudaActorHandle;
     use thoosa_common::debug_plot;
     use thoosa_common::dims::{Batch, Dims};
-    use thoosa_common::ipc::cuda_wokrer::{AllTensors, WorkerStageInput};
-    use thoosa_common::ipc::cuda_wokrer::{CudaWorker, InitFn, WokerRunCtx};
+    use thoosa_common::ipc::cuda_worker::{AllTensors, WorkerStageInput};
+    use thoosa_common::ipc::cuda_worker::{CudaWorker, InitFn, WokerRunCtx};
     use thoosa_common::ipc::proxy::{DynSyncStageWithStateEnum, ProxyStage};
     use thoosa_common::ipc::serialization::json::JsonIpcCodec;
     use thoosa_common::ipc::tests::run_ipc_test;

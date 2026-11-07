@@ -1724,7 +1724,7 @@ mod tests {
     use crate::cuda_copier::CudaActorHandle;
     use crate::cuda_utils::{cuda_mem, speed_gb_per_s};
     use crate::ipc::cuda_process::{CudaIPCActor, CudaIPCActorHandle, CudaIPCActorMessage};
-    use crate::ipc::cuda_wokrer::CudaWorker;
+    use crate::ipc::cuda_worker::CudaWorker;
     use crate::ipc::tests::run_ipc_test;
     use crate::runner::global_ctx::GlobalCtx;
     use crate::tch_error::tch_result;

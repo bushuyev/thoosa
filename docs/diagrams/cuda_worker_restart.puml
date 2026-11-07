@@ -7,7 +7,7 @@ skinparam nodesep 100
 skinparam ranksep 50
 
 ' Fatal recovery path. Healthy maintenance is described separately below.
-' Sources: runner/cuda_recovery.rs, runner/syn_stage_runner.rs,
+' Sources: runner/cuda_recovery.rs, runner/sync_stage_runner,
 ' runner/global_ctx.rs, ipc/cuda_process.rs, ipc/pending.rs.
 
 (*) --> "Report fatal CUDA error or IPC transport failure\nfor device d, generation g" as report

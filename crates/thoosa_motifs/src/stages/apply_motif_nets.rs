@@ -44,7 +44,7 @@ use thoosa_common::dims::AnyDims;
 use thoosa_common::dims::Dims;
 use thoosa_common::dims::{Batch, ChannelsData, Slice};
 use thoosa_common::instance_cache::InstanceCache;
-use thoosa_common::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput};
+use thoosa_common::ipc::cuda_worker::{AllTensors, WokerRunCtx, WorkerStageInput};
 use thoosa_common::ipc::proxy::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage};
 use thoosa_common::ipc::serialization::json::JsonIpcCodec;
 use thoosa_common::ipc::worker_msg::WorkerInput;

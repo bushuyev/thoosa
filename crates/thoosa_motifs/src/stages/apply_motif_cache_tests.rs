@@ -3,7 +3,7 @@ use crate::motifs_store::MockMotifsStoreBuilder;
 use crate::motifs_ws::{MotifsWorkspace, MotifsWsMockBuilder};
 use std::sync::atomic::AtomicUsize;
 use std::time::Duration;
-use thoosa_common::ipc::cuda_wokrer::{CudaWorker, InitFn};
+use thoosa_common::ipc::cuda_worker::{CudaWorker, InitFn};
 use thoosa_common::nets::nodes::ThoClosureModule;
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;

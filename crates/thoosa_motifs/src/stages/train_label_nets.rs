@@ -16,7 +16,7 @@ use std::sync::Arc;
 use tch::{Reduction, Tensor};
 use thoosa_common::data_with_extra::DataWithExtra;
 use thoosa_common::dims::ChannelsData;
-use thoosa_common::ipc::cuda_wokrer::{AllTensors, InitFn, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
+use thoosa_common::ipc::cuda_worker::{AllTensors, InitFn, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::serialization::json::JsonIpcCodec;
 use thoosa_common::tch_error::tch_result;
 

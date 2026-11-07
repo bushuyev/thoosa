@@ -68,7 +68,7 @@ type MotifsInitFn = InitFn<dyn crate::motifs_ws::MotifsWorkspace>;
 use crate::stages::apply_label_nets::{APPLY_LABEL_NET_ENDPOINT, STACK_APPLIED_LABEL_NETS_ENDPOINT, apply_label_net_endpoint_init, stack_applied_label_nets_init};
 use crate::stages::cross_batch_clc::{CROSS_UNFOLD_CLC_ENDPOINT, sync_cross_unfold_clc_endpoint_init};
 use crate::stages::prepare_cross_batch::{PREPARE_CROSS_BATCH_ENDPOINT, prepare_cross_batch_endpoint_init};
-use thoosa_common::ipc::cuda_wokrer::{AllTensors, InitFn, WokerRunCtx};
+use thoosa_common::ipc::cuda_worker::{AllTensors, InitFn, WokerRunCtx};
 use thoosa_common::ipc::serialization::json::JsonIpcCodec;
 use thoosa_common::ipc::worker_msg::WorkerInput;
 use thoosa_common::ipc::wraps::SyncStageIpcWrapper;

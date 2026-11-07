@@ -1,5 +1,5 @@
 use crate::cuda_copier::{HandleCtx, run_cuda_stage};
-use crate::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
+use crate::ipc::cuda_worker::{AllTensors, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use crate::ipc::serialization::json::IpcCodec;
 use crate::ipc::state_transfer::{CheckpointRestore, StateTransfer};
 use crate::ipc::worker_msg::WorkerInput;

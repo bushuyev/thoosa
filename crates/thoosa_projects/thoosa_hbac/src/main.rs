@@ -22,7 +22,7 @@ use tch::nn::Path;
 use thoosa_common::args::{CommonArgs, StageCommand};
 use thoosa_common::commands::common_cli::run_common_cli;
 use thoosa_common::ipc::cuda_process::IPC_SOCK_ENV;
-use thoosa_common::ipc::cuda_wokrer::{CudaWorker, InitFn, WorkerCli};
+use thoosa_common::ipc::cuda_worker::{CudaWorker, InitFn, WorkerCli};
 use thoosa_common::ipc::wraps::SyncStageIpcWrapper;
 use thoosa_common::nets::common_nets::OptConfig;
 use thoosa_common::runner::global_ctx::GlobalCtx;

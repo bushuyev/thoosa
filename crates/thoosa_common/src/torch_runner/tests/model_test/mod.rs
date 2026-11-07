@@ -19,7 +19,7 @@ pub(crate) mod common;
 pub(crate) mod join_and_classify;
 pub(crate) mod loader;
 
-use crate::ipc::cuda_wokrer::InitFn;
+use crate::ipc::cuda_worker::InitFn;
 use classifier::{Classifier, SYNC_CLASSIFIER_ENDPOINT, sync_classifier_endpoint_init};
 use common::{ClsOut, FileListInput, ModelTestId};
 use join_and_classify::JoinAndClassifyStage;

@@ -1,6 +1,6 @@
 //! Tensor-free IPC fixture for measuring the sync-stage invocation path without tensor transfer work.
 
-use crate::ipc::cuda_wokrer::{AllTensors, CudaWorker, InitFn, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
+use crate::ipc::cuda_worker::{AllTensors, CudaWorker, InitFn, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use crate::ipc::proxy::{DynSyncStageEnum, ProxyStage};
 use crate::ipc::serialization::json::JsonIpcCodec;
 use crate::ipc::tests::run_ipc_test;

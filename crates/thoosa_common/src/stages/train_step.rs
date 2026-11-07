@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use tch::Tensor;
 use thoosa_common::dims::{Dims, ThoBatch};
-use thoosa_common::ipc::cuda_wokrer::{AllTensors, WorkerStageInput, WorkerStageOutput};
+use thoosa_common::ipc::cuda_worker::{AllTensors, WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::proxy::{CpuStateCheckpoint, DynSyncStageWithStateEnum, checkpoint_operation, copy_state_tensor};
 use thoosa_common::ipc::state_transfer::CheckpointRestore;
 use thoosa_common::ipc::state_transfer::StateTransfer;

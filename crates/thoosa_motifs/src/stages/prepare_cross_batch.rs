@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::{marker::PhantomData, sync::Arc};
 use thoosa_common::dims::AnyDims;
 use thoosa_common::instance_cache::InstanceCache;
-use thoosa_common::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
+use thoosa_common::ipc::cuda_worker::{AllTensors, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::proxy::{DynSyncStageEnum, ProxyStage};
 use thoosa_common::ipc::serialization::json::JsonIpcCodec;
 use thoosa_common::ipc::worker_msg::WorkerInput;

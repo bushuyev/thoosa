@@ -27,7 +27,7 @@ use tch::nn::AdamW;
 use tch::{Kind, Tensor};
 use thoosa_common::dims::{Batch, ThoBatch};
 use thoosa_common::instance_cache::InstanceCache;
-use thoosa_common::ipc::cuda_wokrer::{AllTensors, InitFn, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
+use thoosa_common::ipc::cuda_worker::{AllTensors, InitFn, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::serialization::json::JsonIpcCodec;
 use thoosa_common::nets::batches::{AsyncDataBatch, BatchLengths};
 use thoosa_common::stages::train_step::{TrainStep, TrainStepInput, TrainStepXFn};

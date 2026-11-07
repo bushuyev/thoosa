@@ -22,7 +22,7 @@ use crate::motif_tho_tensor::MotifThoTensor;
 use crate::stages::find_motifs_run_config::FindMotifsRunConfig;
 use futures_util::future::BoxFuture;
 use thoosa_common::dims::ChannelsData;
-use thoosa_common::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
+use thoosa_common::ipc::cuda_worker::{AllTensors, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::proxy::{DynSyncStageEnum, ProxyStage};
 use thoosa_common::ipc::serialization::json::JsonIpcCodec;
 use thoosa_common::ipc::wraps::SyncStageIpcWrapper;

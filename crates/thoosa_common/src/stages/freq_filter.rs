@@ -48,10 +48,10 @@ use crate::ipc::serialization::json::JsonIpcCodec;
 #[cfg(test)]
 use crate::ipc::wraps::SyncStageIpcWrapper;
 #[cfg(test)]
-use thoosa_common::ipc::cuda_wokrer::AllTensors;
+use thoosa_common::ipc::cuda_worker::AllTensors;
 #[cfg(test)]
-use thoosa_common::ipc::cuda_wokrer::WokerRunCtx;
-use thoosa_common::ipc::cuda_wokrer::WorkerStageInput;
+use thoosa_common::ipc::cuda_worker::WokerRunCtx;
+use thoosa_common::ipc::cuda_worker::WorkerStageInput;
 use thoosa_common::ipc::proxy::DynSyncStageWithStateEnum;
 use thoosa_common::ipc::tensor_info::WorkerTensorInfoPayload;
 use thoosa_common::ipc::worker_msg::WorkerInput;
@@ -861,7 +861,7 @@ impl LocalSelect<SynKey, ChannelsDataSelector> for ThoTensor<ChannelsData, SynKe
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ipc::cuda_wokrer::{CudaWorker, InitFn};
+    use crate::ipc::cuda_worker::{CudaWorker, InitFn};
     use crate::ipc::worker_msg::OpResult;
     use crate::runner::common::cachable::SelectRef;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;

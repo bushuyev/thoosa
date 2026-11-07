@@ -1,4 +1,4 @@
-use crate::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
+use crate::ipc::cuda_worker::{AllTensors, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use crate::ipc::proxy::{DynSyncStageEnum, ProxyStage};
 use crate::ipc::serialization::json::JsonIpcCodec;
 use crate::ipc::worker_msg::WorkerInput;
@@ -249,9 +249,9 @@ pub fn test_simp_init<'a>(_stage_id: Option<String>, init: Box<dyn WorkerInput>,
 
 mod tests {
     #[cfg(test)]
-    use crate::ipc::cuda_wokrer::CudaWorker;
+    use crate::ipc::cuda_worker::CudaWorker;
     #[cfg(test)]
-    use crate::ipc::cuda_wokrer::InitFn;
+    use crate::ipc::cuda_worker::InitFn;
     #[cfg(test)]
     use crate::ipc::proxy_tests::TEST_ENDPOINT;
     use crate::ipc::proxy_tests::TestStageInitA;

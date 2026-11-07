@@ -1,6 +1,6 @@
 use crate as thoosa_common;
 use crate::dims::{Dims, LocalSelect};
-use crate::ipc::cuda_wokrer::{AllTensors, WorkerStageInput};
+use crate::ipc::cuda_worker::{AllTensors, WorkerStageInput};
 use crate::ipc::proxy::{DynSyncStageEnum, ProxyStage};
 use crate::ipc::serialization::json::JsonIpcCodec;
 use crate::ipc::worker_msg::WorkerInput;

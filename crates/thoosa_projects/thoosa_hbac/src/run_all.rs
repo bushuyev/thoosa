@@ -972,7 +972,7 @@ mod tests {
     use tch::{Device, Tensor};
     use thoosa_common::debug_plot;
     use thoosa_common::ipc::cuda_process::IPC_SOCK_ENV;
-    use thoosa_common::ipc::cuda_wokrer::CudaWorker;
+    use thoosa_common::ipc::cuda_worker::CudaWorker;
     use thoosa_common::ipc::tests::run_ipc_test;
     use thoosa_common::nets::common_nets::{AdamWRangeOrValue, AttnPool1dArgsRangeOrValue, CommonTrainingRunConfigRangeOrValue, ConvNetArgsRangeOrValue, ConvNetJointArgsRangeOrValue, OptConfig, OptimizersRangeOrValue};
     use thoosa_common::nets::nodes::{InitDummyRangeOrValue, InitModeRangeOrValue};

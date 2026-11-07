@@ -1,6 +1,6 @@
 use super::*;
 use crate::dims::AnyDims;
-use crate::ipc::cuda_wokrer::{CudaWorker, InitFn, WokerRunCtx};
+use crate::ipc::cuda_worker::{CudaWorker, InitFn, WokerRunCtx};
 use crate::ipc::proxy::{DynSyncStageWithStateEnum, ProxyStage};
 use crate::ipc::serialization::json::JsonIpcCodec;
 use crate::ipc::worker_msg::OpResult;

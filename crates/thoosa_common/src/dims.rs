@@ -88,7 +88,7 @@ impl Dims for Slice {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ipc::cuda_wokrer::{AllTensors, WorkerStageInput};
+    use crate::ipc::cuda_worker::{AllTensors, WorkerStageInput};
     use crate::ipc::worker_msg::CudaWorkerId;
     use crate::tho_device::ThoDevice;
     use thoosa_shared::CudaDeviceGeneration;

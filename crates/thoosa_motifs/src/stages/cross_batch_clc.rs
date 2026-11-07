@@ -16,7 +16,7 @@ use std::sync::Arc;
 use tch::Tensor;
 use thoosa_common::dims::ChannelsData;
 use thoosa_common::instance_cache::InstanceCache;
-use thoosa_common::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput};
+use thoosa_common::ipc::cuda_worker::{AllTensors, WokerRunCtx, WorkerStageInput};
 use thoosa_common::ipc::proxy::{DynSyncStageEnum, ProxyStage};
 use thoosa_common::ipc::serialization::json::JsonIpcCodec;
 use thoosa_common::ipc::worker_msg::WorkerInput;
@@ -547,7 +547,7 @@ impl<R: Debug> CrossUnfoldClcOutput<R> {
     }
 }
 
-impl thoosa_common::ipc::cuda_wokrer::WorkerStageOutput for CrossUnfoldClcOutput<DistsMask> {
+impl thoosa_common::ipc::cuda_worker::WorkerStageOutput for CrossUnfoldClcOutput<DistsMask> {
     fn encode_from_worker(self, all_cuda_tensors: &AllTensors, tho_device: &ThoDevice) -> Result<Self, ThoError> {
         let Self { id, clc_result, iter_0, iter_1 } = self;
 

@@ -1,7 +1,7 @@
 //! Typed installation shared by feature stages. Endpoint definitions and input
 //! adapters describe a stage; backend selection and endpoint ownership live here.
 use crate::ipc::{
-    cuda_wokrer::{WorkerStageInput, WorkerStageOutput},
+    cuda_worker::{WorkerStageInput, WorkerStageOutput},
     endpoints::StageRecovery,
     proxy::{DynSyncStageWithStateEnum, ProxyStage},
     worker_msg::WorkerInput,

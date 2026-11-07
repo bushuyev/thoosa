@@ -3,7 +3,7 @@ use std::fmt::Debug;
 use std::ops::{Deref, DerefMut};
 use thoosa_common::data_with_extra::DataWithExtra;
 use thoosa_common::dims::Batch;
-use thoosa_common::ipc::cuda_wokrer::{AllTensors, WorkerStageOutput};
+use thoosa_common::ipc::cuda_worker::{AllTensors, WorkerStageOutput};
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::ThoError;

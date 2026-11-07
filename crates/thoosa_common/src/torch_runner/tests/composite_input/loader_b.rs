@@ -1,6 +1,6 @@
 use crate as thoosa_common;
 use crate::dims::LocalSelect;
-use crate::ipc::cuda_wokrer::{AllTensors, WorkerStageInput};
+use crate::ipc::cuda_worker::{AllTensors, WorkerStageInput};
 use crate::ipc::worker_msg::WorkerInput;
 use crate::runner::common::cachable::DevicesWrap;
 use crate::runner::run_ctx::RunCtxImpl;

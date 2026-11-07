@@ -24,7 +24,7 @@ use tch::{IndexOp, Tensor};
 use thoosa_common::data_with_extra::DataWithExtra;
 use thoosa_common::dims::ChannelsData;
 use thoosa_common::instance_cache::InstanceCache;
-use thoosa_common::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
+use thoosa_common::ipc::cuda_worker::{AllTensors, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::proxy::{DynSyncStageEnum, ProxyStage};
 use thoosa_common::ipc::serialization::json::JsonIpcCodec;
 use thoosa_common::ipc::worker_msg::WorkerInput;

@@ -1,6 +1,6 @@
 # Adaptive asynchronous concurrency
 
-[`collect_futures_with_progress`](../crates/thoosa_shared/src/collect_futures_with_progress.rs) limits how many futures it starts at once. [`FuturesLimits`](../crates/thoosa_shared/src/futures_limits.rs) adjusts that allowance using feedback from [`SyncStageRunner`](../crates/thoosa_common/src/runner/syn_stage_runner.rs): frequent OOMs reduce parallelism, while successful executions gradually increase it. This reduces the amount of concurrent work holding tensor data during memory pressure.
+[`collect_futures_with_progress`](../crates/thoosa_shared/src/collect_futures_with_progress.rs) limits how many futures it starts at once. [`FuturesLimits`](../crates/thoosa_shared/src/futures_limits.rs) adjusts that allowance using feedback from [`SyncStageRunner`](../crates/thoosa_common/src/runner/sync_stage_runner.rs): frequent OOMs reduce parallelism, while successful executions gradually increase it. This reduces the amount of concurrent work holding tensor data during memory pressure.
 
 ## Components and shared limits
 
