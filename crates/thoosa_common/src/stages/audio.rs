@@ -955,7 +955,6 @@ mod tests {
         let sample_rate = 32000.;
         // plot_t(&resource_t, &format!("resource_{i}"))?;
         // debug_plot_impl(&Tensor::rand([1, 1000], FLOAT_CPU), "test", 0)?;
-        // let tensor = Tensor::load("/home/bu/tmp/ws_clef/tensors/1_hyamac1_XC497685.ogg.pt")?;
 
         let tensor = Tensor::cat(
             &[
