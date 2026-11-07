@@ -981,38 +981,30 @@ mod tests {
         Ok(())
     }
 
-    // #[tokio::test(flavor = "multi_thread", worker_threads = 8)] TODO add build config to enable asserts
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_copy_d2h_from_ptr_reports_error() {
-        unsafe {
-            let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
-            // let _lib = libloading::Library::new("/home/bu/dvl/rust/thoosa/crates/target/debug/libthoosa_shims.so").expect("no libtorch_cuda.so");
-        }
+
         let cu_ctx = ThoCudaContext::new(0).expect("failed to create CUDA context");
         cu_ctx.bind_to_thread().expect("failed to bind CUDA context for error test");
 
-        // Setup a small pool
+        // Set up a small pool
         let buffs = 2usize;
         let buf_size = 1024usize;
         let bufs_pool = Arc::new(super::CopyBufferPool::new((0..buffs).map(|_| (PinnedHostBuffer::new(buf_size, 0).unwrap(), Arc::new(ThoCudaStream::from_pool(0, true).unwrap())))));
 
         // Use a CPU pointer as if it were a device pointer — should error
         let bogus_cpu_tensor = Tensor::rand(&[1000, 1000], FLOAT_CPU);
-        debug!("bogus_cpu_tensor={bogus_cpu_tensor:?} d={:?}", bogus_cpu_tensor.device());
 
         let bogus_device_ptr = bogus_cpu_tensor.data_ptr() as usize; // not a CUdeviceptr
 
         let res = super::copy_d2h(&Arc::new(thoosa_shared::CudaActivityGate::new(1)), bogus_cpu_tensor, buf_size, &bufs_pool).await;
 
-        debug!("res={res:?} device={:?}", res.as_ref().map(|v| v.device()));
 
         assert!(res.is_err(), "expected copy_d2h_from_ptr_result to error for invalid device ptr");
     }
 
-    // #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-    async fn compare_unfold() -> Result<(), ThoError> {
-        unsafe {
-            let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
-        }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn heavy_compare_unfold() -> Result<(), ThoError> {
 
         for mem_k in [0.1, 0.5, 1.] {
             for buffs in [2, 4, 8, 16, 32] {
@@ -1043,8 +1035,6 @@ mod tests {
                     }
                 }
 
-                debug!("mem_k={mem_k} buffs={buffs} copy_unfold_time={} unfold_copy_time={}", copy_unfold_time / runs, unfold_copy_time / runs);
-
                 assert!(copy_unfold_time < unfold_copy_time);
             }
         }
@@ -1071,7 +1061,6 @@ mod tests {
         let unpacked_size = unpacked.numel() * unpacked.kind().elt_size_in_bytes();
 
         assert!(mask.allclose(&unpacked, 0.01, 0.01, false), "roundtrip mismatch");
-        // assert!(mask.allclose(&unpack_bits_u8(&packed, None), 0.01, 0.01, false), "roundtrip mismatch");
         Ok(())
     }
 
@@ -1105,10 +1094,8 @@ mod tests {
 
         let unpacked_size = unpacked.numel() * unpacked.kind().elt_size_in_bytes();
 
-        // println!("mask=\n{mask} unpacked=\n{unpacked} \n={numelts}");
 
         assert!(mask.to_device(Cpu).allclose(&unpacked, 0.01, 0.01, false), "roundtrip mismatch");
-        // assert!(mask.allclose(&unpack_bits_u8(&packed, None), 0.01, 0.01, false), "roundtrip mismatch");
 
         Ok(())
     }
