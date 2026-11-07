@@ -2,17 +2,19 @@
 
 ## Design Goals and Constraints
 
-This project is intended for running **machine-learning experiments on a local workstation**, where GPU resources are limited and CUDA OOM conditions are expected.
+Thoosa is intended for **machine-learning experiments on a local workstation**, where GPU resources are limited and CUDA out-of-memory (OOM) errors are an expected part of the workflow.
 
-It is built directly on **LibTorch**. Supporting other ML runtimes or GPU backends is not a goal.
+The project evolved from a loose collection of utilities and is not intended to become a polished, ready-to-use framework. Instead, it serves as a playground for experimenting with and sharing various LibTorch and CUDA implementations.
 
-A primary design objective is to make long-running experiments survive memory pressure whenever possible. On CUDA OOM, the system attempts to recover by progressively reducing resource usage—for example by decreasing data sizes, using lower-quality or less memory-intensive operations, or accepting slower execution.
+Thoosa is built directly on **LibTorch**, with no plans to support other ML runtimes or GPU backends.
 
-When LibTorch encounters a CUDA error that requires the CUDA context to be restarted, the application can run GPU work in a separate **IPC worker process** ("IPC Mode"). That worker can be restarted independently, allowing training to continue without restarting the entire application.
+One of its primary design goals is to **keep long-running tasks alive under GPU memory pressure**. When a CUDA OOM error occurs, the system attempts to recover by progressively reducing resource requirements—for example, by shrinking data sizes, switching to less memory-intensive operations, sacrificing numerical precision, or accepting slower execution.
 
-The project also includes a simple **DashMap-based cache** that can keep data on the GPU for reuse and move cached GPU data back to CPU memory when additional VRAM needs to be freed.
+When LibTorch frequently encounters CUDA errors that require a context reset, Thoosa can be configured to run in IPC mode, where GPU operations are executed in a separate worker process. This worker can be restarted independently, allowing training to resume without restarting the main application.
 
-The overall priority is **robustness under constrained GPU memory**, even when that requires trading quality and performance for continued execution.
+The project also provides a lightweight **DashMap-based cache** for reusing GPU-resident data and offloading cached tensors to CPU memory when additional VRAM is needed.
+
+The guiding principle is **robustness under constrained GPU memory**, even at the cost of numerical precision, execution speed, or overall performance.
 
 
 ## Workspace layout
