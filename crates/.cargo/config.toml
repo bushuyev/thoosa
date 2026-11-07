@@ -26,5 +26,6 @@ rustflags = [
 
 [env]
 LIBTORCH_BYPASS_VERSION_CHECK="1"
-LIBTORCH="/home/bu/dvl/torch/libtorch-2.7.1/"
+#set in ~/.cargo/config.toml
+#LIBTORCH=".../libtorch-2.7.1/"
 #LD_PRELOAD="$LIBTORCH/lib/libtorch_cpu.so:$LIBTORCH/lib/libtorch_cuda.so"
