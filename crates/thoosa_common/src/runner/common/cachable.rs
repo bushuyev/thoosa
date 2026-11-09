@@ -168,6 +168,9 @@ impl Drop for CacheUse {
 /// Shared computations retain the device generation that started them. Recovery
 /// can discard that device's pending work without cancelling healthy cache entries.
 pub struct CachedFuture<O: Clone> {
+    // Suspension belongs to each awaiting handle, not the shared computation:
+    // cancelling a waiter must release its slot relationship without aborting work.
+    waiting: Mutex<Option<BoxFuture<'static, Result<O, ThoError>>>>,
     inner: Shared<BoxFuture<'static, Result<O, ThoError>>>,
     origin: Option<(Arc<thoosa_shared::CudaActivityGate>, thoosa_shared::CudaDeviceGeneration)>,
     invalidated: Arc<AtomicBool>,
@@ -187,11 +190,14 @@ impl<O: Clone> CachedFuture<O> {
             let generation = activity.as_ref().ok().and_then(|scope| scope.as_ref()).and_then(|scope| scope.generation(&gate)).unwrap_or_else(|| gate.device_generation());
             (gate, generation)
         });
-        if origin.is_none() && matches!(&activity, Ok(None)) {
+        if origin.is_none() && matches!(&activity, Ok(None)) && thoosa_shared::job_context::JobContext::current().job.is_none() {
             return Self::with_origin(inner, origin, Arc::new(AtomicBool::new(false)));
         }
         let computation_origin = origin.clone();
-        let inner = async move {
+        // Shared futures may be polled by the cache's detached task rather than
+        // their caller. Carry scheduling ownership just as we carry CUDA leases.
+        let context = thoosa_shared::job_context::JobContext::current().dependencies();
+        let inner = async move { context.run(async move {
             let activity = activity?;
             let dependencies = activity.clone();
             let run = async move {
@@ -224,7 +230,7 @@ impl<O: Clone> CachedFuture<O> {
                 Some(scope) => scope.run(run).await,
                 None => run.await,
             }
-        }
+        }).await }
         .boxed()
         .shared();
         // A cache owns its pending future even when every caller cancels. Keep
@@ -235,6 +241,7 @@ impl<O: Clone> CachedFuture<O> {
 
     fn with_origin(inner: Shared<BoxFuture<'static, Result<O, ThoError>>>, origin: Option<(Arc<thoosa_shared::CudaActivityGate>, thoosa_shared::CudaDeviceGeneration)>, invalidated: Arc<AtomicBool>) -> Self {
         Self {
+            waiting: Mutex::new(None),
             inner,
             origin,
             invalidated,
@@ -300,6 +307,7 @@ impl<O: Clone> CachedFuture<O> {
 impl<O: Clone> Clone for CachedFuture<O> {
     fn clone(&self) -> Self {
         Self {
+            waiting: Mutex::new(None),
             inner: self.inner.clone(),
             origin: self.origin.clone(),
             invalidated: Arc::clone(&self.invalidated),
@@ -320,14 +328,19 @@ impl<O: Clone> From<Shared<BoxFuture<'static, Result<O, ThoError>>>> for CachedF
     }
 }
 
-impl<O: Clone> Future for CachedFuture<O> {
+impl<O: Clone + Send + Sync + 'static> Future for CachedFuture<O> {
     type Output = Result<O, ThoError>;
 
     fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
         if self.invalidated.load(Ordering::Acquire) {
             return std::task::Poll::Ready(Err(ThoError::CudaBeingRecovered));
         }
-        let result = std::pin::Pin::new(&mut self.inner).poll(cx);
+        if self.waiting.get_mut().is_none() {
+            let context = thoosa_shared::job_context::JobContext::current();
+            let inner = self.inner.clone();
+            *self.waiting.get_mut() = Some(async move { context.wait(inner).await? }.boxed());
+        }
+        let result = self.waiting.get_mut().as_mut().expect("initialized dependency wait").as_mut().poll(cx);
         if self.invalidated.load(Ordering::Acquire) { std::task::Poll::Ready(Err(ThoError::CudaBeingRecovered)) } else { result }
     }
 }

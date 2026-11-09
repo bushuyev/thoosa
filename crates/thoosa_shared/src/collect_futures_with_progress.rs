@@ -1,4 +1,5 @@
 use crate::collect_futures_eta::{CollectEtaInvocationGuard, collect_eta_maybe_log, collect_eta_record_completion};
+use crate::job_context::JobContext;
 use crate::{CudaActivityScope, DataErrorKind, FuturesOrdering, ThoError};
 use log::warn;
 use std::{
@@ -49,7 +50,13 @@ where
     F: Future<Output = Result<T, ThoError>> + Send + 'static,
 {
     let registration = crate::futures_limits::futures_limits().register(descr);
-    let outcomes = collect_outcomes(futures, len, registration.receiver(), buffering, descr).await;
+    let outcomes = match collect_outcomes(futures, len, registration.receiver(), buffering, descr).await {
+        Ok(outcomes) => outcomes,
+        Err(error) => {
+            error!("best-effort collection: descr={descr} scheduling error={error:?}");
+            return Vec::new();
+        }
+    };
     outcomes
         .into_iter()
         .filter_map(|(idx, result)| match result {
@@ -67,7 +74,7 @@ where
     T: Debug + Send + 'static,
     F: Future<Output = Result<T, ThoError>> + Send + 'static,
 {
-    let outcomes = collect_outcomes(futures, len, buffer_limit, buffering, descr).await;
+    let outcomes = collect_outcomes(futures, len, buffer_limit, buffering, descr).await?;
     let mut values = Vec::with_capacity(outcomes.len());
     let mut failure: Option<ThoError> = None;
     for (idx, result) in outcomes {
@@ -100,11 +107,14 @@ where
     }
 }
 
-async fn collect_outcomes<T, F>(futures: impl Iterator<Item = F>, len: usize, buffer_limit: Arc<watch::Receiver<usize>>, buffering: FuturesOrdering, descr: &str) -> Vec<(usize, Result<T, ThoError>)>
+async fn collect_outcomes<T, F>(futures: impl Iterator<Item = F>, len: usize, buffer_limit: Arc<watch::Receiver<usize>>, buffering: FuturesOrdering, descr: &str) -> Result<Vec<(usize, Result<T, ThoError>)>, ThoError>
 where
     T: Debug + Send + 'static,
     F: Future<Output = Result<T, ThoError>> + Send + 'static,
 {
+    // Suspend the waiting scheduled frame once for the entire collection. A
+    // child must be able to do post-submit work without first resuming its parent.
+    JobContext::current().wait(async {
     let mut limit_rx = buffer_limit.as_ref().clone();
     let mut limit = *limit_rx.borrow_and_update();
     assert!(limit > 0, "buffer_limit must be > 0; JoinSet version cannot make progress with 0");
@@ -162,6 +172,7 @@ where
         collect_eta_maybe_log(true);
     }
     outcomes
+    }).await
 }
 
 fn fill_joinset<T, F, I>(tasks: &mut JoinSet<Result<T, ThoError>>, indices: &mut HashMap<Id, usize>, futures: &mut I, limit: usize, completed_len: usize) -> bool
@@ -177,12 +188,13 @@ where
         // Child tasks inherit admission, including nested copy collectors. They
         // must drain during recovery rather than wait on their own parent lease.
         let activity = CudaActivityScope::current();
-        let task = tasks.spawn(async move {
+        let context = JobContext::current();
+        let task = tasks.spawn(context.run(async move {
             match activity {
                 Some(activity) => activity.run(future).await,
                 None => future.await,
             }
-        });
+        }));
         indices.insert(task.id(), idx);
     }
     false

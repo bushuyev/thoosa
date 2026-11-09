@@ -20,6 +20,8 @@ use tokio::{
 };
 use tracing::{Instrument, debug, warn};
 
+use thoosa_shared::job_context::{CurrentJob, JobContext, ManagerCmd, ParentSuspendGuard};
+
 use super::cuda_recovery::{CudaRecoveryCoordinator, RestartFn};
 use thoosa_shared::futures_limits::{FuturesLimits, SyncExecutionPermit, SyncExecutionWaiter, futures_limits};
 use thoosa_shared::tracked_await::t;
@@ -39,6 +41,12 @@ type JobFuture = Pin<Box<dyn Future<Output = JobFeedback> + Send + 'static>>;
 type PendingJobFailure = Box<dyn FnOnce(ThoError) + Send + 'static>;
 type JobId = u64;
 
+fn executor_closed_error(msg: impl Into<String>) -> ThoError {
+    ThoError::new_with_cause(msg, ThoError::SyncStageRunner(SyncStageRunnerError::SubmitErrorClosed))
+}
+
+
+
 static NEXT_JOB_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Owns one sequential retry chain, including the waits between attempts. Tokens
@@ -52,14 +60,21 @@ pub struct RetryToken {
     inner: Arc<RetryState>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ExclusiveOwner {
+    job_id: JobId,
+    family_id: JobId,
+}
+
 #[derive(Debug)]
 struct RetryState {
     job_id: JobId,
+    family_id: Mutex<Option<JobId>>,
     alive: Mutex<bool>,
     generation: Mutex<Option<CudaDeviceGeneration>>,
     generation_bound: tokio::sync::Notify,
     gate: Option<Arc<CudaActivityGate>>,
-    exclusive_job_id: Arc<RwLock<Option<JobId>>>,
+    exclusive_job_id: Arc<RwLock<Option<ExclusiveOwner>>>,
     cmd_tx: mpsc::UnboundedSender<ManagerCmd>,
 }
 
@@ -130,31 +145,28 @@ impl RetryToken {
     fn reserve_exclusive(&self) {
         let alive = self.inner.alive.lock();
         if *alive && self.check_generation().is_ok() {
-            self.inner.exclusive_job_id.write().replace(self.inner.job_id);
+            // A descendant must not replace its ancestor's reservation: finishing
+            // that child cannot release exclusivity owned by an outer retry loop.
+            let mut exclusive = self.inner.exclusive_job_id.write();
+            if exclusive.is_none() {
+                *exclusive = Some(ExclusiveOwner { job_id: self.inner.job_id, family_id: self.inner.family_id.lock().expect("submitted retry family") });
+            }
         }
     }
 
     fn clear_exclusive(&self) {
         let mut exclusive = self.inner.exclusive_job_id.write();
-        if *exclusive == Some(self.inner.job_id) {
+        if exclusive.is_some_and(|owner| owner.job_id == self.inner.job_id) {
             exclusive.take();
             let _ = self.inner.cmd_tx.send(ManagerCmd::Recheck);
         }
     }
 }
 
-tokio::task_local! {
-    static CURRENT_JOB: CurrentJob;
-}
-
-#[derive(Clone, Debug)]
-struct CurrentJob {
-    job_id: JobId,
-    cmd_tx: mpsc::UnboundedSender<ManagerCmd>,
-}
 
 struct Job {
     id: JobId,
+    family_id: JobId,
     fut: JobFuture,
     pending_failure: Option<PendingJobFailure>,
     /// Maximum number of *other* jobs allowed to run together with this one.
@@ -212,6 +224,7 @@ impl Job {
     {
         Self {
             id,
+            family_id: id,
             fut: Box::pin(fut),
             pending_failure: Some(pending_failure),
             max_other_parallel,
@@ -271,6 +284,7 @@ impl Debug for Job {
 
 #[derive(Debug)]
 struct LiveJob {
+    family_id: JobId,
     /// max_other_parallel + 1
     cap: usize,
     /// Logical scheduler-active state. A suspended job is still physically alive,
@@ -284,13 +298,6 @@ struct LiveJob {
     interrupted: Arc<AtomicBool>,
 }
 
-#[derive(Debug)]
-enum ManagerCmd {
-    Suspend { job_id: JobId, reply: oneshot::Sender<()> },
-    Resume { job_id: JobId, reply: oneshot::Sender<()>, for_unwind: bool },
-    DrainForRecovery { reply: oneshot::Sender<()> },
-    Recheck,
-}
 
 #[derive(Debug)]
 #[allow(dead_code)]
@@ -310,105 +317,6 @@ impl std::fmt::Display for SubmitError {
 
 impl std::error::Error for SubmitError {}
 
-/// Temporarily removes a parent job from the manager's active-capacity accounting
-/// while that job awaits a nested `submit`.
-///
-/// The parent Tokio task is not paused: it is already blocked waiting for its child.
-/// Without removing it from `active_count`/`active_caps`, an exclusive parent (or a
-/// parent whose cap is already full) can prevent the child from ever starting. The
-/// parent would then wait for the child while the child waits for the parent's slot.
-///
-/// `resume` waits for the manager to count the parent as active again before the
-/// nested `submit` returns. Once Suspend is queued, Drop owes exactly one Resume,
-/// including cancellation before either acknowledgement has been received.
-struct ParentSuspendGuard {
-    parent: Option<CurrentJob>,
-    suspended: bool,
-}
-
-fn executor_closed_error(msg: impl Into<String>) -> ThoError {
-    ThoError::new_with_cause(msg, ThoError::SyncStageRunner(SyncStageRunnerError::SubmitErrorClosed))
-}
-
-impl ParentSuspendGuard {
-    fn new(parent: Option<CurrentJob>) -> Self {
-        Self { parent, suspended: false }
-    }
-
-    async fn maybe_suspend(&mut self) -> Result<(), ThoError> {
-        let Some(parent) = &self.parent else {
-            return Ok(());
-        };
-
-        let (ack_tx, ack_rx) = oneshot::channel();
-        if parent.cmd_tx.send(ManagerCmd::Suspend { job_id: parent.job_id, reply: ack_tx }).is_err() {
-            return Err(executor_closed_error("executor is closed"));
-        }
-
-        // Sending is synchronous: arm compensation before the first cancellation point.
-        self.suspended = true;
-        if t!(ack_rx).await.is_err() {
-            return Err(executor_closed_error("executor is closed"));
-        }
-
-        Ok(())
-    }
-
-    async fn resume(&mut self) -> Result<(), ThoError> {
-        if !self.suspended {
-            return Ok(());
-        }
-
-        let Some(parent) = &self.parent else {
-            self.suspended = false;
-            return Ok(());
-        };
-
-        let (ack_tx, ack_rx) = oneshot::channel();
-        if parent
-            .cmd_tx
-            .send(ManagerCmd::Resume {
-                job_id: parent.job_id,
-                reply: ack_tx,
-                for_unwind: CudaActivityScope::current().is_some_and(|scope| scope.check_dependencies().is_err()),
-            })
-            .is_err()
-        {
-            return Err(executor_closed_error("executor is closed"));
-        }
-
-        // The manager now owns the resume. Drop must not enqueue a second one while
-        // we await capacity, since that could release another nested submission's slot.
-        self.suspended = false;
-        if t!(ack_rx).await.is_err() {
-            return Err(executor_closed_error("executor is closed"));
-        }
-
-        Ok(())
-    }
-}
-
-impl Drop for ParentSuspendGuard {
-    fn drop(&mut self) {
-        if !self.suspended {
-            return;
-        }
-
-        let Some(parent) = self.parent.clone() else {
-            return;
-        };
-
-        // Unbounded sends do not await or need a runtime. FIFO ordering pairs this
-        // command with our queued Suspend even when its acknowledgement was dropped.
-        let (reply, _) = oneshot::channel();
-        let _ = parent.cmd_tx.send(ManagerCmd::Resume {
-            job_id: parent.job_id,
-            reply,
-            for_unwind: CudaActivityScope::current().is_some_and(|scope| scope.check_dependencies().is_err()),
-        });
-    }
-}
-
 /// Its goal is to run synchronous stages limiting parallelism.
 /// Maximum allowed number of parallel stages is specified in max_other_parallel parameter to submit method
 /// There is single executor instance per device. The aggregate number of  active jobs is bounded by that adaptive limit.
@@ -417,7 +325,7 @@ pub struct SyncStageRunner {
     tx: mpsc::Sender<Job>,
     cmd_tx: mpsc::UnboundedSender<ManagerCmd>,
     worker: JoinHandle<()>,
-    exclusive_job_id: Arc<RwLock<Option<JobId>>>,
+    exclusive_job_id: Arc<RwLock<Option<ExclusiveOwner>>>,
     tho_device_idx: usize,
     recovery: Option<Arc<CudaRecoveryCoordinator>>, //None for CPU
 }
@@ -436,10 +344,12 @@ impl Debug for SyncStageRunner {
 
 impl SyncStageRunner {
     pub fn retry_scope(&self) -> RetryScope {
+        let job_id = NEXT_JOB_ID.fetch_add(1, Ordering::Relaxed);
         RetryScope {
             token: RetryToken {
                 inner: Arc::new(RetryState {
-                    job_id: NEXT_JOB_ID.fetch_add(1, Ordering::Relaxed),
+                    job_id,
+                    family_id: Mutex::new(None),
                     alive: Mutex::new(true),
                     generation: Mutex::new(None),
                     generation_bound: tokio::sync::Notify::new(),
@@ -554,7 +464,7 @@ impl SyncStageRunner {
         F: Future<Output = Result<T, ThoError>> + Send + 'static, //TODO change to closure taking ticket to let function a way to ensure they're running in Executor
         T: Send + Debug + 'static,
     {
-        let parent = CURRENT_JOB.try_with(|job| job.clone()).ok();
+        let parent = JobContext::current().job;
         let inherited = CudaActivityScope::current();
         let cancellation = Arc::new(AttemptCancellation { reason: Mutex::new(None), cmd_tx: self.cmd_tx.clone() });
         let _submission = SubmissionGuard(Arc::clone(&cancellation));
@@ -565,7 +475,12 @@ impl SyncStageRunner {
 
         debug_assert!(Arc::ptr_eq(&retry.inner.exclusive_job_id, &self.exclusive_job_id), "retry scope belongs to another executor"); //it compares locks' addresses, not job ids - if it fails it's a bug in the app and we can't handle it
 
-        let job_id = retry.inner.job_id;
+        // Retry ownership is stable, but a physical attempt needs a distinct ID:
+        // late dependency resumes must never change a successor attempt's slot.
+        let job_id = NEXT_JOB_ID.fetch_add(1, Ordering::Relaxed);
+        // Bind at first submission, since callers may construct a retry scope
+        // before entering the scheduled frame whose work it depends on.
+        let family_id = *retry.inner.family_id.lock().get_or_insert_with(|| JobContext::current().family_id.unwrap_or(retry.inner.job_id));
         if max_other_parallel != 0 {
             retry.clear_exclusive();
         }
@@ -619,7 +534,7 @@ impl SyncStageRunner {
                 }
                 if is_oom && max_other_parallel == 0 {
                     retry.reserve_exclusive();
-                    *error = SyncStageRunnerError::JobError { job_id, inner: Box::new(error.clone()) }.into();
+                    *error = SyncStageRunnerError::JobError { job_id: retry.inner.job_id, inner: Box::new(error.clone()) }.into();
                 } else {
                     retry.clear_exclusive();
                 }
@@ -640,6 +555,7 @@ impl SyncStageRunner {
 
         let pending_failure = Box::new(move |error| result_sender_for_job.send(Err(error)));
         let mut job = Job::new(job_id, max_other_parallel, wrapped, pending_failure);
+        job.family_id = family_id;
         job.inherited = inherited.clone();
         job.cancellation = Some(Arc::clone(&cancellation));
 
@@ -739,7 +655,7 @@ impl SyncStageRunner {
 
         let mut exclusive_job_id = self.exclusive_job_id.write();
 
-        if exclusive_job_id.as_ref() == Some(&job_id) {
+        if exclusive_job_id.is_some_and(|owner| owner.job_id == job_id) {
             exclusive_job_id.take();
             let _ = self.cmd_tx.send(ManagerCmd::Recheck);
         }
@@ -775,7 +691,7 @@ impl SyncStageRunner {
         mut sync_capacity_rx: watch::Receiver<usize>,
         mut cmd_rx: mpsc::UnboundedReceiver<ManagerCmd>,
         cmd_tx_for_tasks: mpsc::UnboundedSender<ManagerCmd>,
-        exclusive_job_id: Arc<RwLock<Option<JobId>>>,
+        exclusive_job_id: Arc<RwLock<Option<ExclusiveOwner>>>,
         buffer_limits: Arc<FuturesLimits>,
         gate: Option<Arc<CudaActivityGate>>,
     ) {
@@ -809,7 +725,7 @@ impl SyncStageRunner {
             // Critical: drain already queued commands before spawning pending jobs.
             // Otherwise a job sent immediately before DrainForRecovery could be spawned
             // before the manager observes the reset request.
-            Self::drain_commands(&mut cmd_rx, &mut cmd_closed, &mut jobs, &mut active_caps, &mut active_count, max_parallel_jobs, &mut execution_waiter, &mut pending_drains, gate.as_ref());
+            Self::drain_commands(&mut cmd_rx, &mut cmd_closed, &mut jobs, &mut active_caps, &mut active_count, max_parallel_jobs, &mut execution_waiter, &mut pending_drains, gate.as_ref(), *exclusive_job_id.read());
 
             for job in jobs.values_mut() {
                 if job.interrupted.load(Ordering::Acquire) {
@@ -848,7 +764,7 @@ impl SyncStageRunner {
 
             if !cuda_activity_gate_is_paused {
                 let current_exclusive_job_id = *exclusive_job_id.read();
-                Self::try_resume_waiters(&mut jobs, &mut active_caps, &mut active_count, max_parallel_jobs, None, &mut execution_waiter);
+                Self::try_resume_waiters(&mut jobs, &mut active_caps, &mut active_count, max_parallel_jobs, current_exclusive_job_id, &mut execution_waiter);
                 Self::try_spawn_ready_jobs(
                     &mut pending,
                     &mut running,
@@ -930,6 +846,7 @@ impl SyncStageRunner {
                                 &mut execution_waiter,
                                 &mut pending_drains,
                                 gate.as_ref(),
+                                *exclusive_job_id.read(),
                             );
                         }
                         None => {
@@ -965,7 +882,7 @@ impl SyncStageRunner {
         }
     }
 
-    fn process_command(cmd: ManagerCmd, jobs: &mut HashMap<JobId, LiveJob>, active_caps: &mut BTreeMap<usize, usize>, active_count: &mut usize, max_parallel_jobs: usize, execution_waiter: &mut SyncExecutionWaiter, pending_drains: &mut Vec<oneshot::Sender<()>>, gate: Option<&Arc<CudaActivityGate>>) {
+    fn process_command(cmd: ManagerCmd, jobs: &mut HashMap<JobId, LiveJob>, active_caps: &mut BTreeMap<usize, usize>, active_count: &mut usize, max_parallel_jobs: usize, execution_waiter: &mut SyncExecutionWaiter, pending_drains: &mut Vec<oneshot::Sender<()>>, gate: Option<&Arc<CudaActivityGate>>, exclusive: Option<ExclusiveOwner>) {
         debug!("SyncStageRunner::run_manager: manager cmd={cmd:?}");
 
         match cmd {
@@ -974,7 +891,7 @@ impl SyncStageRunner {
                 let _ = reply.send(());
             }
             ManagerCmd::Resume { job_id, reply, for_unwind } => {
-                Self::handle_resume(jobs, active_caps, active_count, max_parallel_jobs, None, job_id, reply, for_unwind || gate.is_some_and(|gate| gate.is_paused()), execution_waiter);
+                Self::handle_resume(jobs, active_caps, active_count, max_parallel_jobs, exclusive, job_id, reply, for_unwind || gate.is_some_and(|gate| gate.is_paused()), execution_waiter);
             }
             ManagerCmd::DrainForRecovery { reply } => pending_drains.push(reply),
             ManagerCmd::Recheck => {}
@@ -991,6 +908,7 @@ impl SyncStageRunner {
         execution_waiter: &mut SyncExecutionWaiter,
         pending_drains: &mut Vec<oneshot::Sender<()>>,
         gate: Option<&Arc<CudaActivityGate>>,
+        exclusive: Option<ExclusiveOwner>,
     ) {
         use tokio::sync::mpsc::error::TryRecvError;
 
@@ -1003,7 +921,7 @@ impl SyncStageRunner {
         for _ in 0..256 {
             //TODO 256?
             match cmd_rx.try_recv() {
-                Ok(cmd) => Self::process_command(cmd, jobs, active_caps, active_count, max_parallel_jobs, execution_waiter, pending_drains, gate),
+                Ok(cmd) => Self::process_command(cmd, jobs, active_caps, active_count, max_parallel_jobs, execution_waiter, pending_drains, gate, exclusive),
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
                     *cmd_closed = true;
@@ -1052,7 +970,7 @@ impl SyncStageRunner {
         max_parallel_jobs: usize,
         done_tx: &mpsc::UnboundedSender<JobId>,
         cmd_tx_for_tasks: &mpsc::UnboundedSender<ManagerCmd>,
-        exclusive_job_id: Option<JobId>,
+        exclusive_job_id: Option<ExclusiveOwner>,
         buffer_limits: &Arc<FuturesLimits>,
         execution_waiter: &mut SyncExecutionWaiter,
         gate: Option<&Arc<CudaActivityGate>>,
@@ -1074,7 +992,7 @@ impl SyncStageRunner {
                 }
                 let sync_execution_permit = {
                     let job = &pending[idx];
-                    Self::try_activate_now(job.id, *active_count, max_parallel_jobs, active_caps, job.total_parallel_cap(), exclusive_job_id, execution_waiter)
+                    Self::try_activate_now(job.family_id, *active_count, max_parallel_jobs, active_caps, job.total_parallel_cap(), exclusive_job_id, execution_waiter)
                 };
 
                 if let Some(sync_execution_permit) = sync_execution_permit {
@@ -1095,12 +1013,14 @@ impl SyncStageRunner {
                         None => inherited,
                     };
                     let job_id = job.id;
+                    let family_id = job.family_id;
                     let cap = job.total_parallel_cap();
                     let interrupted = Arc::new(AtomicBool::new(false));
 
                     jobs.insert(
                         job_id,
                         LiveJob {
+                            family_id,
                             cap,
                             active: true,
                             sync_execution_permit: Some(sync_execution_permit),
@@ -1136,7 +1056,7 @@ impl SyncStageRunner {
                             let _guard = DoneGuard { job_id, done_tx };
 
                             let unwind_tx = cmd_tx_for_tasks.clone();
-                            let future = CURRENT_JOB.scope(CurrentJob { job_id, cmd_tx: cmd_tx_for_tasks }, async move {
+                            let future = JobContext::for_job(family_id, CurrentJob { job_id, cmd_tx: cmd_tx_for_tasks }).run(async move {
                                 debug!("SyncStageRunner::try_spawn_ready_jobs: running job job_id={job_id}");
 
                                 t!(job.run()).await
@@ -1152,9 +1072,8 @@ impl SyncStageRunner {
                                                 // This may be a healthy device with a recovering
                                                 // ancestor. Release its scheduling slot even when
                                                 // its parent is already waiting for a Resume ack.
-                                                // Retry attempts reuse job IDs. Store this on the
-                                                // physical attempt so a delayed wakeup cannot
-                                                // release a successor attempt's capacity.
+                                                // Store interruption on the physical attempt so a
+                                                // delayed wakeup cannot release another attempt's capacity.
                                                 interrupted.store(true, Ordering::Release);
                                                 let _ = unwind_tx.send(ManagerCmd::Recheck);
                                                 future.await
@@ -1194,7 +1113,7 @@ impl SyncStageRunner {
                     match exclusive_job_id {
                         // If a specific OOM-rerun job is required, do not let some other
                         // exclusive job at the front block the scan.
-                        Some(required_job_id) if pending[0].id != required_job_id => {
+                        Some(owner) if pending[0].family_id != owner.family_id => {
                             idx += 1;
                             continue;
                         }
@@ -1212,9 +1131,9 @@ impl SyncStageRunner {
         }
     }
 
-    fn can_activate_now(job_id: JobId, active_count: usize, max_parallel_jobs: usize, active_caps: &BTreeMap<usize, usize>, new_cap: usize, exclusive_job_id: Option<JobId>) -> bool {
-        if exclusive_job_id.is_some_and(|exclusive_job_id| exclusive_job_id != job_id) {
-            debug!("SyncStageRunner::can_activate_now: blocked by exclusive job current_job_id={job_id} exclusive_job_id={exclusive_job_id:?}");
+    fn can_activate_now(family_id: JobId, active_count: usize, max_parallel_jobs: usize, active_caps: &BTreeMap<usize, usize>, new_cap: usize, exclusive_job_id: Option<ExclusiveOwner>) -> bool {
+        if exclusive_job_id.is_some_and(|owner| owner.family_id != family_id) {
+            debug!("SyncStageRunner::can_activate_now: blocked by exclusive job family_id={family_id} exclusive_job_id={exclusive_job_id:?}");
             return false;
         }
 
@@ -1224,12 +1143,12 @@ impl SyncStageRunner {
         let min = current_group_cap.min(new_cap);
         let r = next_total <= min;
 
-        debug!("SyncStageRunner::can_activate_now: job_id={job_id} active_count={active_count} next_total={next_total} max_parallel_jobs={max_parallel_jobs} min={min} r={r}");
+        debug!("SyncStageRunner::can_activate_now: family_id={family_id} active_count={active_count} next_total={next_total} max_parallel_jobs={max_parallel_jobs} min={min} r={r}");
         r
     }
 
-    fn try_activate_now(job_id: JobId, active_count: usize, max_parallel_jobs: usize, active_caps: &BTreeMap<usize, usize>, new_cap: usize, exclusive_job_id: Option<JobId>, execution_waiter: &mut SyncExecutionWaiter) -> Option<SyncExecutionPermit> {
-        if !Self::can_activate_now(job_id, active_count, max_parallel_jobs, active_caps, new_cap, exclusive_job_id) {
+    fn try_activate_now(family_id: JobId, active_count: usize, max_parallel_jobs: usize, active_caps: &BTreeMap<usize, usize>, new_cap: usize, exclusive_job_id: Option<ExclusiveOwner>, execution_waiter: &mut SyncExecutionWaiter) -> Option<SyncExecutionPermit> {
+        if !Self::can_activate_now(family_id, active_count, max_parallel_jobs, active_caps, new_cap, exclusive_job_id) {
             return None;
         }
         execution_waiter.try_acquire()
@@ -1277,7 +1196,7 @@ impl SyncStageRunner {
         }
     }
 
-    fn handle_resume(jobs: &mut HashMap<JobId, LiveJob>, active_caps: &mut BTreeMap<usize, usize>, active_count: &mut usize, max_parallel_jobs: usize, exclusive_job_id: Option<JobId>, job_id: JobId, reply: oneshot::Sender<()>, activity_paused: bool, execution_waiter: &mut SyncExecutionWaiter) {
+    fn handle_resume(jobs: &mut HashMap<JobId, LiveJob>, active_caps: &mut BTreeMap<usize, usize>, active_count: &mut usize, max_parallel_jobs: usize, exclusive_job_id: Option<ExclusiveOwner>, job_id: JobId, reply: oneshot::Sender<()>, activity_paused: bool, execution_waiter: &mut SyncExecutionWaiter) {
         let Some(job) = jobs.get_mut(&job_id) else {
             let _ = reply.send(());
             return;
@@ -1299,7 +1218,7 @@ impl SyncStageRunner {
         if job.suspend_depth == 0 {
             if job.active {
                 Self::flush_waiting_resumes(job);
-            } else if let Some(sync_execution_permit) = Self::try_activate_now(job_id, *active_count, max_parallel_jobs, active_caps, job.cap, exclusive_job_id, execution_waiter) {
+            } else if let Some(sync_execution_permit) = Self::try_activate_now(job.family_id, *active_count, max_parallel_jobs, active_caps, job.cap, exclusive_job_id, execution_waiter) {
                 job.active = true;
                 job.sync_execution_permit = Some(sync_execution_permit);
                 Self::add_active(active_caps, active_count, job.cap);
@@ -1311,7 +1230,7 @@ impl SyncStageRunner {
         job.suspend_depth -= 1;
 
         if job.suspend_depth == 0
-            && let Some(sync_execution_permit) = Self::try_activate_now(job_id, *active_count, max_parallel_jobs, active_caps, job.cap, exclusive_job_id, execution_waiter)
+            && let Some(sync_execution_permit) = Self::try_activate_now(job.family_id, *active_count, max_parallel_jobs, active_caps, job.cap, exclusive_job_id, execution_waiter)
         {
             job.active = true;
             job.sync_execution_permit = Some(sync_execution_permit);
@@ -1343,7 +1262,7 @@ impl SyncStageRunner {
         }
     }
 
-    fn try_resume_waiters(jobs: &mut HashMap<JobId, LiveJob>, active_caps: &mut BTreeMap<usize, usize>, active_count: &mut usize, max_parallel_jobs: usize, exclusive_job_id: Option<JobId>, execution_waiter: &mut SyncExecutionWaiter) {
+    fn try_resume_waiters(jobs: &mut HashMap<JobId, LiveJob>, active_caps: &mut BTreeMap<usize, usize>, active_count: &mut usize, max_parallel_jobs: usize, exclusive_job_id: Option<ExclusiveOwner>, execution_waiter: &mut SyncExecutionWaiter) {
         for job in jobs.values_mut() {
             if job.active && !job.waiting_resumes.is_empty() {
                 Self::flush_waiting_resumes(job);
@@ -1358,12 +1277,12 @@ impl SyncStageRunner {
             let mut progressed = false;
 
             for job_id in waiting_ids {
-                let cap = match jobs.get(&job_id) {
-                    Some(job) if !job.active && job.suspend_depth == 0 && !job.waiting_resumes.is_empty() => job.cap,
+                let (cap, family_id) = match jobs.get(&job_id) {
+                    Some(job) if !job.active && job.suspend_depth == 0 && !job.waiting_resumes.is_empty() => (job.cap, job.family_id),
                     _ => continue,
                 };
 
-                if let Some(sync_execution_permit) = Self::try_activate_now(job_id, *active_count, max_parallel_jobs, active_caps, cap, exclusive_job_id, execution_waiter) {
+                if let Some(sync_execution_permit) = Self::try_activate_now(family_id, *active_count, max_parallel_jobs, active_caps, cap, exclusive_job_id, execution_waiter) {
                     let job = jobs.get_mut(&job_id).expect("job must exist");
                     job.active = true;
                     job.sync_execution_permit = Some(sync_execution_permit);
@@ -1453,6 +1372,137 @@ mod tests {
         let (reply, received) = oneshot::channel();
         exec.cmd_tx.send(ManagerCmd::Suspend { job_id: 0, reply }).unwrap();
         received.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_exclusive_parent_awaits_spawned_collector_dependencies() {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            // One shared slot forces suspension even when the child uses another device.
+            for target in [1, 2] {
+                let limits = Arc::new(FuturesLimits::new_with_parallelism(1, 1));
+                let parent = runner_with_limits(1, &limits);
+                let child = if target == 1 { Arc::clone(&parent) } else { runner_with_limits(target, &limits) };
+                let child_run = Arc::clone(&child);
+                let values = parent.submit(0, async move {
+                    thoosa_shared::collect_futures_with_progress::collect_futures_with_progress(
+                        (0..3).map(move |index| {
+                            let child = Arc::clone(&child_run);
+                            async move {
+                                let value = child.submit(0, async move { Ok(index) }, None).await?;
+                                // Post-submit work must finish while the collector's parent
+                                // stays suspended, rather than each child trying to resume it.
+                                tokio::task::yield_now().await;
+                                Ok(value)
+                            }
+                        }), 3, thoosa_shared::FuturesOrdering::Ordered, thoosa_shared::CollectionErrorPolicy::Propagate, "scheduled descendants",
+                    ).await
+                }, None).await.unwrap();
+                assert_eq!(values, vec![0, 1, 2]);
+                if target == 1 { drop(child); } else { Arc::try_unwrap(child).unwrap().shutdown().await; }
+                Arc::try_unwrap(parent).unwrap().shutdown().await;
+            }
+        }).await.expect("collector descendants must make progress with one scheduling slot");
+    }
+
+    #[tokio::test]
+    async fn test_exclusive_retry_admits_descendants_but_keeps_unrelated_jobs_out() {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let limits = Arc::new(FuturesLimits::new_with_parallelism(1, 1));
+            let exec = runner_with_limits(1, &limits);
+            let retry = exec.retry_scope();
+            assert!(exec.submit::<_, ()>(0, async { Err(ThoError::oom()) }, Some(retry.token())).await.unwrap_err().is_oom());
+            let unrelated_ran = Arc::new(AtomicBool::new(false));
+            let unrelated = tokio::spawn({
+                let exec = Arc::clone(&exec);
+                let ran = Arc::clone(&unrelated_ran);
+                async move { exec.submit(0, async move { ran.store(true, Ordering::SeqCst); Ok(()) }, None).await }
+            });
+            let nested = Arc::clone(&exec);
+            let ran = Arc::clone(&unrelated_ran);
+            exec.submit(0, async move {
+                // Direct child OOMs must neither replace nor clear the outer reservation.
+                assert!(nested.submit::<_, ()>(0, async { Err(ThoError::oom()) }, None).await.unwrap_err().is_oom());
+                let collector_runner = Arc::clone(&nested);
+                let results = thoosa_shared::collect_futures_with_progress::collect_futures_with_progress(
+                    (0..2).map(move |_| {
+                        let exec = Arc::clone(&collector_runner);
+                        async move { exec.submit(0, async { Ok(7) }, None).await }
+                    }), 2, thoosa_shared::FuturesOrdering::Ordered, thoosa_shared::CollectionErrorPolicy::Propagate, "exclusive retry descendants",
+                ).await?;
+                assert_eq!(results, vec![7, 7]);
+                assert!(!ran.load(Ordering::SeqCst), "unrelated work entered the reserved dependency tree");
+                Err::<(), _>(ThoError::oom())
+            }, Some(retry.token())).await.unwrap_err();
+            assert_eq!(exec.exclusive_job_id.read().map(|owner| owner.job_id), Some(retry.token.inner.job_id));
+            assert!(!unrelated_ran.load(Ordering::SeqCst));
+            drop(retry);
+            unrelated.await.unwrap().unwrap();
+            Arc::try_unwrap(exec).unwrap().shutdown().await;
+        }).await.expect("exclusive retries must admit their whole dependency tree");
+    }
+
+    #[tokio::test]
+    async fn test_exclusive_parent_awaits_instance_and_cached_initializers() {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            for device in [0, 1] {
+                let limits = Arc::new(FuturesLimits::new_with_parallelism(1, 1));
+                let exec = runner_with_limits(device, &limits);
+                let nested = Arc::clone(&exec);
+                exec.submit(0, async move {
+                    let cache = crate::instance_cache::InstanceCache::new();
+                    let child = Arc::clone(&nested);
+                    let value = cache.get_or_try_insert_with::<(), _, _, _, _>(device, nested.cuda_gate().cloned(), 0, move || async move {
+                        child.submit(0, async { Ok(Arc::new(17)) }, None).await
+                    }).await?;
+                    assert_eq!(*value, 17);
+                    let gate = nested.cuda_gate().cloned();
+                    let computation = async move { nested.submit(0, async { Ok(23) }, None).await }.boxed().shared();
+                    let cached = crate::runner::common::cachable::CachedFuture::for_device(computation, gate);
+                    assert_eq!(cached.await?, 23);
+                    Ok(())
+                }, None).await.unwrap();
+                Arc::try_unwrap(exec).unwrap().shutdown().await;
+            }
+        }).await.expect("detached initializers must retain scheduling dependencies on CPU and CUDA");
+    }
+
+    #[tokio::test]
+    async fn test_cancelled_dependency_wait_releases_only_its_parent_suspension() {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let limits = Arc::new(FuturesLimits::new_with_parallelism(1, 1));
+            let exec = runner_with_limits(0, &limits);
+            let nested = Arc::clone(&exec);
+            exec.submit(0, async move {
+                let cache = crate::instance_cache::InstanceCache::new();
+                let (started, ready) = oneshot::channel();
+                let (release, released) = oneshot::channel();
+                let mut waiter = Box::pin(cache.get_or_try_insert_with::<(), _, _, _, _>(0, None, 0, move || async move {
+                    started.send(()).unwrap();
+                    released.await.unwrap();
+                    Ok(Arc::new(17))
+                }));
+                tokio::select! { _ = ready => {}, _ = &mut waiter => panic!("initializer should still be pending") }
+                drop(waiter);
+                // The detached initializer remains alive, but its cancelled
+                // waiter must not keep the parent suspended behind a new child.
+                assert_eq!(nested.submit(0, async { Ok(1) }, None).await?, 1);
+                release.send(()).unwrap();
+                assert_eq!(*cache.get_or_try_insert_with::<(), _, _, _, _>(0, None, 0, || async { Ok(Arc::new(99)) }).await?, 17);
+
+                let (started, ready) = oneshot::channel();
+                let (release, released) = oneshot::channel();
+                let computation = async move { started.send(()).unwrap(); released.await.unwrap(); Ok(23) }.boxed().shared();
+                let cached = crate::runner::common::cachable::CachedFuture::for_device(computation, None);
+                let mut waiter = Box::pin(cached.clone());
+                tokio::select! { _ = ready => {}, _ = &mut waiter => panic!("cached computation should still be pending") }
+                drop(waiter);
+                assert_eq!(nested.submit(0, async { Ok(2) }, None).await?, 2);
+                release.send(()).unwrap();
+                assert_eq!(cached.await?, 23);
+                Ok(())
+            }, None).await.unwrap();
+            Arc::try_unwrap(exec).unwrap().shutdown().await;
+        }).await.expect("cancelled waits must not pin capacity behind detached computations");
     }
 
     #[tokio::test]
@@ -1604,7 +1654,7 @@ mod tests {
                         .submit(
                             0,
                             async move {
-                                let mut guard = ParentSuspendGuard::new(CURRENT_JOB.try_with(Clone::clone).ok());
+                                let mut guard = ParentSuspendGuard::new(JobContext::current().job);
                                 guard.maybe_suspend().await?;
                                 suspended.send(()).unwrap();
                                 resume_ready.await.unwrap();
@@ -1759,7 +1809,7 @@ mod tests {
         let ConsumeResult::Failed { input, error } = result else { panic!("missing OOM") };
         assert_eq!(input, vec![7]);
         assert!(error.is_oom());
-        assert_eq!(*exec.exclusive_job_id.read(), Some(scope.token.inner.job_id));
+        assert_eq!(exec.exclusive_job_id.read().map(|owner| owner.job_id), Some(scope.token.inner.job_id));
         let generation = exec.cuda_gate().unwrap().device_generation();
         let result = exec.submit_consume(0, async move { Ok(ConsumeResult::<_, ()>::Failed { input, error: needs_restart_error() }) }, Some(scope.token())).await.unwrap();
         let ConsumeResult::Failed { input, error } = result else { panic!("missing fatal failure") };
@@ -1860,12 +1910,12 @@ mod tests {
             let scope = exec.retry_scope();
             let job_id = scope.token.inner.job_id;
             assert!(exec.submit(0, async { Err::<(), _>(ThoError::oom()) }, Some(scope.token())).await.unwrap_err().is_oom());
-            assert_eq!(*exec.exclusive_job_id.read(), Some(job_id));
+            assert_eq!(exec.exclusive_job_id.read().map(|owner| owner.job_id), Some(job_id));
             let mut other = Box::pin(exec.submit(0, async { Ok(42) }, None));
             assert!(futures::poll!(other.as_mut()).is_pending());
             // A further OOM keeps the same reservation through the next adjustment.
             assert!(exec.submit(0, async { Err::<(), _>(ThoError::oom()) }, Some(scope.token())).await.unwrap_err().is_oom());
-            assert_eq!(*exec.exclusive_job_id.read(), Some(job_id));
+            assert_eq!(exec.exclusive_job_id.read().map(|owner| owner.job_id), Some(job_id));
             assert!(futures::poll!(other.as_mut()).is_pending());
             if succeed {
                 exec.submit(0, async { Ok(()) }, Some(scope.token())).await.unwrap();

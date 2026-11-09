@@ -83,7 +83,11 @@ impl InstanceCache {
         // An IPC install cannot be undone by dropping its caller. Keep the
         // per-entry initializer alive until it finishes or its device recovers,
         // so a cancelled caller cannot cause a duplicate install in this worker.
-        tokio::spawn(async move {
+        // Initialization can submit scheduled descendants. Keep its dependency
+        // context with the detached install. Only the awaiting caller owns suspension.
+        let context = thoosa_shared::job_context::JobContext::current();
+        let dependencies = context.dependencies();
+        context.wait(async move { tokio::spawn(dependencies.run(async move {
             let initialize = async { entry.get_or_try_init(create).await.cloned() };
             match activity {
                 Some(activity) => {
@@ -103,9 +107,9 @@ impl InstanceCache {
                 }
                 None => initialize.await,
             }
-        })
+        }))
         .await
-        .map_err(|error| ThoError::new(format!("instance initialization task failed: {error}")))?
+        .map_err(|error| ThoError::new(format!("instance initialization task failed: {error}")))? }).await?
     }
 }
 

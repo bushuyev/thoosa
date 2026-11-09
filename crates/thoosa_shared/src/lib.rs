@@ -41,6 +41,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{fmt, fs};
 
 mod cuda_activity;
+pub mod job_context;
 pub mod resource;
 pub use cuda_activity::CudaActivityScope;
 pub mod val;
