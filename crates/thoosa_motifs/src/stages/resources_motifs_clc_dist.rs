@@ -1,6 +1,7 @@
 use crate::dims::ChannelsMotifsDists;
 use crate::distance::MaskMaker::{Le, LocalMin};
 use crate::stages::cross_batch_clc::{UnfoldParams, unfold_and_cat};
+use crate::stages::resource_batch::ResourceBatch;
 use crate::stages::dists_tracker::{DistsMask, DistsMaskType};
 use crate::stages::slices_iter::{ResourceSlices, SlicesIter};
 use crate::stages::stacked_moitfs_loader::StackedMotifsOutput;
@@ -91,8 +92,12 @@ where
 
         let unfold_params = UnfoldParams::new(1, input.stacked_motifs_output.as_ref().motifs.extra().1.window as i64, input.stacked_motifs_output.as_ref().motifs.extra().1.step as i64);
 
-        let batch = input.batch.iter().map(ThoDataRef::as_ref).collect::<Vec<_>>();
-        let (batch_1_t, batch_1_sizes) = unfold_and_cat(batch.as_slice(), &unfold_params)?;
+        let batch = ResourceBatch::try_new(input.batch.iter().map(|tensor| ThoDataRef::Borrowed(tensor.as_ref())).collect(), input.resource_ids.clone())?;
+        // Validate all per-resource metadata before unfolding can filter entries.
+        if input.resource_offsets.len() != batch.len() {
+            return Err(ThoError::new("resource offset count does not match the tensor batch"));
+        }
+        let (batch_1_t, layout) = unfold_and_cat(&batch, &unfold_params)?;
 
         debug!(
             "ClcResourcesMotifsDist::do_run: self.num_channels={} batch_1_t.size={:?} batch_1_t.device={:?} motifs.size={:?} motifs_stats.size={:?} input.resource_ids={:?}",
@@ -110,13 +115,7 @@ where
             return Err(ThoError::oom());
         }
 
-        let resource_ids_sizes = input
-            .resource_ids
-            .iter()
-            .zip(batch_1_sizes.into_iter())
-            .zip(input.resource_offsets.iter().copied())
-            .map(|((resource_id, size), _offset)| ResourceSlices::new(*resource_id, size as usize))
-            .collect::<Vec<_>>();
+        let resource_ids_sizes = layout.into_iter().map(|entry| ResourceSlices::new(entry.resource, entry.windows as usize)).collect();
 
         let resources_iter = SlicesIter::new_with_offsets(unfold_params.step() as usize, resource_ids_sizes);
 

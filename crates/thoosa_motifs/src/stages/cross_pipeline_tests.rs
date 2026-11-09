@@ -1,4 +1,5 @@
 use super::*;
+use crate::stages::slices_iter::ResourceSlices;
 use crate::motifs_store::MockMotifsStoreBuilder;
 use crate::stages::cross_batch_clc::{CrossUnfoldClc, UnfoldParams};
 use crate::stages::find_motifs::{FindMotifsCrossUnfoldClcInit, FindMotifsMasksCtxInit};
@@ -112,7 +113,7 @@ async fn check_pipeline(fail_consumer: bool) -> Result<(), ThoError> {
     let outer = loader.run_cached(resources[0].clone(), mock_run_ctx::default(0)).await?;
     // The first consumer cannot finish until the next comparison has run. This
     // detects serial execution without timing assertions, and failure must drain.
-    let (result, ()) = tokio::join!(cross_loader.run_inner_batches(&resources, vec![outer], vec![resources[0].clone()], 0, 0, 2, receiver, mock_run_ctx::default(0)), async {
+    let (result, ()) = tokio::join!(cross_loader.run_inner_batches(&resources, ResourceBatch::try_new(vec![outer], vec![resources[0].clone()])?, 0, 0, 2, receiver, mock_run_ctx::default(0)), async {
         tokio::time::timeout(Duration::from_secs(10), async {
             started.notified().await;
             calculated_next.notified().await;
@@ -164,11 +165,34 @@ async fn check_prepared_outer() -> Result<(), ThoError> {
     for resource in &resources {
         tensors.push(loader.clone().run_cached(resource.clone(), ctx.branch(false)).await?);
     }
-    let input = Arc::new(CrossInputSelectorWrap::new("outer".into(), tensors[..3].to_vec(), vec![], resources[..3].to_vec(), vec![], CacheArea::default()));
+    let input = Arc::new(CrossInputSelectorWrap::new("outer".into(), ResourceBatch::try_new(tensors[..3].to_vec(), resources[..3].to_vec())?, ResourceBatch::default(), CacheArea::default()));
     let cache = Arc::new(TmpCached::new("test_prepared_outer").await);
     let prepared = Arc::new(cache.insert_guarded(NoRetry::new(vec![], None).run(&preparation, input, ctx.branch(false), NoContexts).await?));
     drop(cache); // The entry itself must keep offloading registration alive.
-    assert_eq!(BorrowRef::borrow_ref(&prepared, 1).await?.as_ref().sizes, vec![3, 0, 3]);
+    assert_eq!(BorrowRef::borrow_ref(&prepared, 1).await?.as_ref().slices(), vec![ResourceSlices::new(1, 3), ResourceSlices::new(3, 3)]);
+    // Equal cardinality and equal window counts cannot justify reusing another
+    // resource ordering. Validate this before any invocation reaches the worker.
+    let mut reordered = CrossInputSelectorWrap::new("reordered".into(), ResourceBatch::try_new(vec![tensors[2].clone(), tensors[1].clone(), tensors[0].clone()], vec![resources[2].clone(), resources[1].clone(), resources[0].clone()])?, ResourceBatch::default(), CacheArea::default());
+    reordered.prepared_outer = Some(prepared.clone());
+    assert!(reordered.borrow_ref(1).await.is_err());
+    let mut changed_lengths = CrossInputSelectorWrap::new("changed_lengths".into(), ResourceBatch::try_new(vec![tensors[1].clone(), tensors[1].clone(), tensors[2].clone()], resources[..3].to_vec())?, ResourceBatch::default(), CacheArea::default());
+    changed_lengths.prepared_outer = Some(prepared.clone());
+    assert!(changed_lengths.borrow_ref(1).await.is_err());
+    let selectable = CrossInputSelectorWrap::new("selected".into(), ResourceBatch::try_new(tensors[..3].to_vec(), resources[..3].to_vec())?, ResourceBatch::try_new(tensors[3..].to_vec(), resources[3..].to_vec())?, CacheArea::default());
+    {
+        let selected = selectable.select_ref(1, Some(CrossInputSelector { batch_0_selector: RangeOrSlice::Range(2..3), batch_1_selector: RangeOrSlice::Slice((1, 2..5)) })).await?;
+        assert_eq!(selected.batch_0()[0].as_ref().id(), 3);
+        assert_eq!(selected.batch_1()[0].as_ref().id(), 5);
+        assert_eq!(selected.tensors().iter().map(|tensor| (*tensor).size()[1]).collect::<Vec<_>>(), vec![7, 3]);
+        if GlobalCtx::global().is_ipc() {
+            let decoded: CrossInput<'static, Arc<Resource>> = serde_json::from_slice(&serde_json::to_vec(&selected)?)?;
+            assert_eq!(decoded.batch_1()[0].as_ref().id(), 5);
+            assert_eq!(decoded.tensors()[1].size(), vec![1, 3]);
+        }
+    }
+    for selector in [RangeOrSlice::Range(-1..1), RangeOrSlice::Range(0..3), RangeOrSlice::Slice((2, 0..1)), RangeOrSlice::Slice((0, 0..8))] {
+        assert!(selectable.select_ref(1, Some(CrossInputSelector { batch_0_selector: RangeOrSlice::Full, batch_1_selector: selector })).await.is_err());
+    }
     let mut match_count = 0;
     for inner in 3..5 {
         // Force the actual cache-purge path before the second use, then reload
@@ -177,11 +201,11 @@ async fn check_prepared_outer() -> Result<(), ThoError> {
             GlobalCtx::global().dump_all_to_cpu(1, "prepared outer regression").await?;
             assert_eq!(BorrowRef::borrow_ref(&prepared, 0).await?.as_ref().tho_device_idx(), 0);
         }
-        let make_input = || CrossInputSelectorWrap::new("cross".into(), tensors[..3].to_vec(), vec![tensors[inner].clone()], resources[..3].to_vec(), vec![resources[inner].clone()], CacheArea::default());
-        let raw = NoRetry::new(vec![], None).run(&calculation, Arc::new(make_input()), ctx.branch(false), NoContexts).await?;
+        let make_input = || -> Result<_, ThoError> { Ok(CrossInputSelectorWrap::new("cross".into(), ResourceBatch::try_new(tensors[..3].to_vec(), resources[..3].to_vec())?, ResourceBatch::try_new(vec![tensors[inner].clone()], vec![resources[inner].clone()])?, CacheArea::default())) };
+        let raw = NoRetry::new(vec![], None).run(&calculation, Arc::new(make_input()?), ctx.branch(false), NoContexts).await?;
         let expected_slices: Vec<_> = raw.iter_0().collect();
         let expected = raw.clc_result().to_cpu().await?.into_indices_iter()?.collect::<Vec<_>>();
-        let mut input = make_input();
+        let mut input = make_input()?;
         input.prepared_outer = Some(prepared.clone());
         let reused = NoRetry::new(vec![], None).run(&calculation, Arc::new(input), ctx.branch(false), NoContexts).await?;
         assert_eq!(reused.iter_0().collect::<Vec<_>>(), expected_slices);

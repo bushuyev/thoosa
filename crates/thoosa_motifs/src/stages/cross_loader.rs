@@ -4,6 +4,7 @@ use crate::stages::cross_batch_clc::CrossBatchFn;
 use crate::stages::cross_batch_clc::{CrossClcResultMerge, CrossInput, CrossUnfoldClcOutput};
 use crate::stages::dists_tracker::DistsMask;
 use crate::stages::prepare_cross_batch::{PrepareCrossBatch, PreparedCrossBatch};
+use crate::stages::resource_batch::{BorrowedResourceBatch, ResourceBatch, checked_batch_range};
 use crate::stages::slices_iter::SlicesIter;
 use async_trait::async_trait;
 #[cfg(test)]
@@ -53,6 +54,9 @@ use thoosa_shared::resource::{Resource, ResourcesConfig};
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::tracked_await::t;
 use thoosa_shared::traits::{Adjustable, Data, MaxParallelCtx, OutId, RunCtx, ThoSelector, WithId};
+
+// Cached handles keep both batches offloadable across awaits and OOM retries.
+type LoadedResourceBatch = ResourceBatch<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Arc<Resource>>;
 use thoosa_shared::traits::{AsyncStage, Stage};
 use tokio::task::JoinHandle;
 
@@ -218,10 +222,8 @@ where
 
     async fn run_loaded_batch(
         &self,
-        t_0_batch: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>,
-        t_0_batch_resources: Vec<Arc<Resource>>,
-        t_1_batch: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>,
-        t_1_batch_resources: Vec<Arc<Resource>>,
+        t_0_batch: LoadedResourceBatch,
+        t_1_batch: LoadedResourceBatch,
         mut ctx: C,
         receiver: Arc<RSV>,
         prepared_outer: Option<Arc<TmpCachedEntry<PreparedCrossBatch>>>,
@@ -229,9 +231,9 @@ where
     ) -> Result<(), ThoError> {
         debug!("CrossLoader::run_loaded_batch: find_motifs_run_config_id={} t_0_batch={t_0_batch:?} t_1_batch={t_1_batch:?}", self.find_motifs_run_config_id);
         let cross_unfold_clc = Arc::clone(&self.cross_unfold_clc);
-        let batch_1_slice_lengths = t_1_batch.iter().map(|t| t.size().dim_1()).collect::<Vec<_>>();
+        let batch_1_slice_lengths = t_1_batch.lengths().to_vec();
 
-        let mut input = CrossInputSelectorWrap::new(mono_key!(self.find_motifs_run_config_id, "find_motifs_run_config_id").into(), t_0_batch, t_1_batch, t_0_batch_resources, t_1_batch_resources.clone(), CacheArea::default());
+        let mut input = CrossInputSelectorWrap::new(mono_key!(self.find_motifs_run_config_id, "find_motifs_run_config_id").into(), t_0_batch, t_1_batch, CacheArea::default());
         input.prepared_outer = prepared_outer;
         debug!("CrossLoader::run_loaded_batch: input={input:?}");
 
@@ -251,7 +253,7 @@ where
             Arc::clone(&input),
             ctx.branch(false),
             Contexts::new(
-                CrossSplitterContext::new(t_1_batch_resources.len() as i64, batch_1_slice_lengths),
+                CrossSplitterContext::new(batch_1_slice_lengths),
                 NoopRunnableContext {},
                 MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new(),),
             ),
@@ -286,7 +288,7 @@ where
         Ok(())
     }
 
-    async fn run_inner_batches(&self, resources: &[Arc<Resource>], t_0_batch: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>, t_0_batch_resources: Vec<Arc<Resource>>, outer_batch_last_i: usize, skip_0_i: usize, max_batch: i64, receiver: Arc<RSV>, mut ctx: C) -> Result<(), ThoError> {
+    async fn run_inner_batches(&self, resources: &[Arc<Resource>], t_0_batch: LoadedResourceBatch, outer_batch_last_i: usize, skip_0_i: usize, max_batch: i64, receiver: Arc<RSV>, mut ctx: C) -> Result<(), ThoError> {
         debug!("CrossLoader::run_inner_batches: t_0_batch={t_0_batch:?} skip_0_i={skip_0_i}");
 
         let _prepared_outer = if let Some(stage) = &self.prepare_outer {
@@ -295,9 +297,7 @@ where
             let input = Arc::new(CrossInputSelectorWrap::new(
                 mono_key!(self.find_motifs_run_config_id, "prepare_outer_batch").into(),
                 t_0_batch.clone(),
-                vec![],
-                t_0_batch_resources.clone(),
-                vec![],
+                ResourceBatch::default(),
                 CacheArea::default(),
             ));
 
@@ -331,8 +331,7 @@ where
         let prepared_outer = None;
         let mut pending_consumer = None;
         let result = async {
-            let mut t_1_batch: Vec<_> = vec![];
-            let mut t_1_batch_resources: Vec<_> = vec![];
+            let mut t_1_batch = ResourceBatch::default();
             let mut t_1_batch_len = 0;
             let cross_loader_inner = CollectEtaInvocationGuard::new(&format!("CrossLoader::run, inner: run_config_id={} i_0={outer_batch_last_i}", self.find_motifs_run_config_id), resources.len(), 1);
 
@@ -360,9 +359,7 @@ where
                     if !t_1_batch.is_empty() {
                         t!(self.run_loaded_batch(
                             t_0_batch.clone(),
-                            t_0_batch_resources.clone(),
                             std::mem::take(&mut t_1_batch),
-                            std::mem::take(&mut t_1_batch_resources),
                             ctx.branch(false),
                             Arc::clone(&receiver),
                             prepared_outer.clone(),
@@ -373,14 +370,13 @@ where
                         collect_eta_record_completion(cross_loader_inner.id());
                     }
 
-                    t!(self.run_loaded_batch(t_0_batch.clone(), t_0_batch_resources.clone(), vec![t_1], vec![Arc::clone(resource_1)], ctx.branch(false), Arc::clone(&receiver), prepared_outer.clone(), &mut pending_consumer,)).await?;
+                    t!(self.run_loaded_batch(t_0_batch.clone(), ResourceBatch::try_new(vec![t_1], vec![Arc::clone(resource_1)])?, ctx.branch(false), Arc::clone(&receiver), prepared_outer.clone(), &mut pending_consumer,)).await?;
                     collect_eta_record_completion(cross_loader_inner.id());
                     continue;
                 }
 
                 t_1_batch_len += t_1_len;
-                t_1_batch.push(t_1);
-                t_1_batch_resources.push(Arc::clone(resource_1));
+                t_1_batch.push(Arc::clone(resource_1), t_1)?;
 
                 if t_1_batch_len < max_batch && i_1 < resources.len() - 1 {
                     continue;
@@ -388,9 +384,7 @@ where
 
                 t!(self.run_loaded_batch(
                     t_0_batch.clone(),
-                    t_0_batch_resources.clone(),
                     std::mem::take(&mut t_1_batch),
-                    std::mem::take(&mut t_1_batch_resources),
                     ctx.branch(false),
                     Arc::clone(&receiver),
                     prepared_outer.clone(),
@@ -494,8 +488,7 @@ where
 
         let receiver = (self.receiver_factory)(resources.as_slice());
 
-        let mut t_0_batch: Vec<_> = vec![];
-        let mut t_0_batch_resources: Vec<_> = vec![];
+        let mut t_0_batch = ResourceBatch::default();
         let mut t_0_batch_len = 0;
         let mut t_0_batch_last_i: Option<usize> = None;
 
@@ -514,29 +507,28 @@ where
                 if !t_0_batch.is_empty() {
                     let pending_last_i = t_0_batch_last_i.expect("CrossLoader::run: missing t_0_batch_last_i for pending batch");
 
-                    t!(self.run_inner_batches(resources.as_slice(), std::mem::take(&mut t_0_batch), std::mem::take(&mut t_0_batch_resources), pending_last_i, skip_0_i, max_batch, Arc::clone(&receiver), ctx.branch(false),)).await?;
+                    t!(self.run_inner_batches(resources.as_slice(), std::mem::take(&mut t_0_batch), pending_last_i, skip_0_i, max_batch, Arc::clone(&receiver), ctx.branch(false),)).await?;
                     skip_0_i = pending_last_i;
                     t_0_batch_len = 0;
                     t_0_batch_last_i = None;
                     collect_eta_record_completion(cross_loader_outer.id());
                 }
 
-                t!(self.run_inner_batches(resources.as_slice(), vec![t_0], vec![Arc::clone(resource_0)], i_0, skip_0_i, max_batch, Arc::clone(&receiver), ctx.branch(false),)).await?;
+                t!(self.run_inner_batches(resources.as_slice(), ResourceBatch::try_new(vec![t_0], vec![Arc::clone(resource_0)])?, i_0, skip_0_i, max_batch, Arc::clone(&receiver), ctx.branch(false),)).await?;
                 skip_0_i = i_0;
                 collect_eta_record_completion(cross_loader_outer.id());
                 continue;
             }
 
             t_0_batch_len += t_0_len;
-            t_0_batch.push(t_0);
-            t_0_batch_resources.push(Arc::clone(resource_0));
+            t_0_batch.push(Arc::clone(resource_0), t_0)?;
             t_0_batch_last_i = Some(i_0);
 
             if t_0_batch_len < max_batch && i_0 < resources.len() - 1 {
                 continue;
             }
 
-            t!(self.run_inner_batches(resources.as_slice(), std::mem::take(&mut t_0_batch), std::mem::take(&mut t_0_batch_resources), i_0, skip_0_i, max_batch, Arc::clone(&receiver), ctx.branch(false),)).await?;
+            t!(self.run_inner_batches(resources.as_slice(), std::mem::take(&mut t_0_batch), i_0, skip_0_i, max_batch, Arc::clone(&receiver), ctx.branch(false),)).await?;
 
             skip_0_i = i_0;
             t_0_batch_len = 0;
@@ -554,10 +546,8 @@ where
 #[derive(Debug)]
 struct CrossInputSelectorWrap {
     id: SynKey,
-    batch_0: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>,
-    batch_1: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>,
-    resources_0: Vec<Arc<Resource>>,
-    resources_1: Vec<Arc<Resource>>,
+    batch_0: LoadedResourceBatch,
+    batch_1: LoadedResourceBatch,
     #[expect(dead_code, reason = "Retains the shared owner for the lifetime of this stage or input.")]
     cache_area: CacheArea,
     prepared_outer: Option<Arc<TmpCachedEntry<PreparedCrossBatch>>>,
@@ -567,7 +557,7 @@ impl Data for CrossInputSelectorWrap {
     type Metrics = i64;
 
     fn size(&self) -> Self::Metrics {
-        self.resources_1.len() as i64
+        self.batch_1.len() as i64
     }
 
     fn tho_device_idx(&self) -> usize {
@@ -575,18 +565,16 @@ impl Data for CrossInputSelectorWrap {
     }
 
     fn mem_size(&self) -> u64 {
-        self.batch_0.iter().map(|batch| batch.mem_size()).sum::<u64>() + self.batch_1.iter().map(|batch| batch.mem_size()).sum::<u64>()
+        self.batch_0.tensors().iter().map(|batch| batch.mem_size()).sum::<u64>() + self.batch_1.tensors().iter().map(|batch| batch.mem_size()).sum::<u64>()
     }
 }
 
 impl CrossInputSelectorWrap {
-    pub fn new(id: SynKey, batch_0: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>, batch_1: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>, resources_0: Vec<Arc<Resource>>, resources_1: Vec<Arc<Resource>>, cache_area: CacheArea) -> Self {
+    pub fn new(id: SynKey, batch_0: LoadedResourceBatch, batch_1: LoadedResourceBatch, cache_area: CacheArea) -> Self {
         Self {
             id,
             batch_0,
             batch_1,
-            resources_0,
-            resources_1,
             cache_area,
             prepared_outer: None,
         }
@@ -748,7 +736,9 @@ where
     R: CrossClcResultMerge + Debug + Send + Sync + 'static,
     ST::In<'a>: Data<Metrics = i64>,
 {
-    pub fn new(batch_1_len: <<ST as Stage>::In<'a> as Data>::Metrics, batch_1_slice_lengths: Vec<i64>) -> Self {
+    pub fn new(batch_1_slice_lengths: Vec<i64>) -> Self {
+        // The retry cursor must use the same cardinality as the batch lengths.
+        let batch_1_len = batch_1_slice_lengths.len() as i64;
         debug!("CrossSplitterContext::new: batch_1_len={batch_1_len:?}");
 
         Self {
@@ -862,36 +852,24 @@ impl Default for RangeOrSlice {
 }
 
 impl RangeOrSlice {
-    async fn borrow_to<'a>(&self, batch: &'a [Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>], to_device_idx: usize) -> Result<Vec<ThoDataRef<'a, ThoTensor<ChannelsData, SynKey>>>, ThoError> {
-        match self {
-            Self::Full => {
-                let mut loaded = Vec::with_capacity(batch.len());
-                for tensor in batch {
-                    loaded.push(ThoDataRef::ReadLocked(t!(tensor.load_from_any_device_(to_device_idx)).await?));
-                }
-                Ok(loaded)
-            }
-            Self::Range(range) => {
-                let mut loaded = Vec::with_capacity((range.end - range.start) as usize);
-                for tensor in &batch[range.start as usize..range.end as usize] {
-                    loaded.push(ThoDataRef::ReadLocked(t!(tensor.load_from_any_device_(to_device_idx)).await?));
-                }
-                Ok(loaded)
-            }
-            Self::Slice((i, range)) => {
-                let channels = batch[*i].size().dim_0();
-                let selector = ChannelsDataSelector([0, range.start].into()..[channels, range.end].into());
-                Ok(vec![t!(SelectRef::select_ref(&batch[*i], to_device_idx, Some(selector))).await?])
+    async fn borrow_to<'a>(&self, batch: &'a LoadedResourceBatch, to_device_idx: usize) -> Result<BorrowedResourceBatch<'a, Arc<Resource>>, ThoError> {
+        let mut loaded = ResourceBatch::default();
+        if let Self::Slice((index, range)) = self {
+            let tensor = batch.tensors().get(*index).ok_or_else(|| ThoError::new("resource slice index is out of bounds"))?;
+            checked_batch_range(range, batch.lengths()[*index] as usize)?;
+            let channels = tensor.size().dim_0();
+            let selector = ChannelsDataSelector([0, range.start].into()..[channels, range.end].into());
+            // Derive the selected length from the result; Resource::length still
+            // describes the original file and may differ after filtering/slicing.
+            loaded.push(batch.resources()[*index].clone(), t!(SelectRef::select_ref(tensor, to_device_idx, Some(selector))).await?)?;
+        } else {
+            let range = match self { Self::Range(range) => checked_batch_range(range, batch.len())?, _ => 0..batch.len() };
+            for index in range {
+                let tensor = ThoDataRef::ReadLocked(t!(batch.tensors()[index].load_from_any_device_(to_device_idx)).await?);
+                loaded.push(batch.resources()[index].clone(), tensor)?;
             }
         }
-    }
-
-    fn select_resources<'a, R>(&self, resources: &'a [R]) -> &'a [R] {
-        match self {
-            Self::Full => resources,
-            Self::Range(range) => &resources[range.start as usize..range.end as usize],
-            Self::Slice((i, _)) => std::slice::from_ref(&resources[*i]),
-        }
+        Ok(loaded)
     }
 }
 
@@ -912,7 +890,7 @@ impl Adjustable for CrossInputSelector {}
 
 impl BorrowRef for CrossInputSelectorWrap {
     fn protect(&self, device: usize) -> thoosa_common::runner::residency::ResidencyLease {
-        thoosa_common::runner::residency::ResidencyLease::combine(self.batch_0.iter().chain(&self.batch_1).map(|value| value.protect(device)).chain(self.prepared_outer.iter().map(|value| value.protect(device))))
+        thoosa_common::runner::residency::ResidencyLease::combine(self.batch_0.tensors().iter().chain(self.batch_1.tensors()).map(|value| value.protect(device)).chain(self.prepared_outer.iter().map(|value| value.protect(device))))
     }
 
     type Out<'a> = CrossInput<'a, Arc<Resource>>;
@@ -943,9 +921,14 @@ impl SelectRef<CrossInputSelector> for CrossInputSelectorWrap {
             } else {
                 None
             };
-            let mut tensors = if prepared.is_some() { vec![] } else { t!(selector.batch_0_selector.borrow_to(&self.batch_0, to_tho_device_idx)).await? };
-            tensors.extend(t!(selector.batch_1_selector.borrow_to(&self.batch_1, to_tho_device_idx)).await?);
-            Ok(CrossInput::from_data_refs(tensors, selector.batch_0_selector.select_resources(&self.resources_0), selector.batch_1_selector.select_resources(&self.resources_1), self.id.clone()).with_prepared_outer(prepared))
+            let inner = t!(selector.batch_1_selector.borrow_to(&self.batch_1, to_tho_device_idx)).await?;
+            match prepared {
+                Some(prepared) => {
+                    prepared.as_ref().validate_lengths(self.batch_0.lengths())?;
+                    CrossInput::from_prepared(prepared, self.batch_0.resources().to_vec(), inner, self.id.clone())
+                }
+                None => Ok(CrossInput::new(t!(selector.batch_0_selector.borrow_to(&self.batch_0, to_tho_device_idx)).await?, inner, self.id.clone())),
+            }
         }
     }
 }
@@ -1361,7 +1344,7 @@ mod tests {
             .map(|i| Ok(Arc::new(DevicesWrap::wrap(ThoTensor::<ChannelsData, SynKey>::new("".into(), batch_1_tensors[(i - batch_0_len) as usize].shallow_clone())?))))
             .collect::<Result<Vec<_>, ThoError>>()?;
 
-        let input = CrossInputSelectorWrap::new("".into(), batch_0, batch_1, resources_0.clone(), resources_1.clone(), ca.clone());
+        let input = CrossInputSelectorWrap::new("".into(), ResourceBatch::try_new(batch_0, resources_0.clone())?, ResourceBatch::try_new(batch_1, resources_1.clone())?, ca.clone());
         let _cross_loader_adjuster = CrossLoaderAdjuster::new();
 
         let _selector = CrossInputSelector::default();
@@ -1398,9 +1381,9 @@ mod tests {
         let batch_0 = vec![Arc::new(DevicesWrap::wrap(ThoTensor::<ChannelsData, SynKey>::new("".into(), batch_0_tensors[0].shallow_clone())?))];
         let batch_1 = vec![Arc::new(DevicesWrap::wrap(ThoTensor::<ChannelsData, SynKey>::new("".into(), batch_1_tensors[0].shallow_clone())?))];
 
-        let input = CrossInputSelectorWrap::new("".into(), batch_0, batch_1, resources_0.clone(), resources_1.clone(), ca.clone());
+        let input = CrossInputSelectorWrap::new("".into(), ResourceBatch::try_new(batch_0, resources_0.clone())?, ResourceBatch::try_new(batch_1, resources_1.clone())?, ca.clone());
 
-        let mut context = CrossSplitterContext::<AdjusterStage, TestBatchOutput>::new(1, vec![batch_1_tensors[0].size()[1]]);
+        let mut context = CrossSplitterContext::<AdjusterStage, TestBatchOutput>::new(vec![batch_1_tensors[0].size()[1]]);
         let cross_loader_adjuster = CrossLoaderAdjuster::new();
         let mut selector = CrossInputSelector::default();
 
@@ -1454,10 +1437,10 @@ mod tests {
             Arc::new(DevicesWrap::wrap(ThoTensor::<ChannelsData, SynKey>::new("".into(), batch_1_tensors[1].shallow_clone())?)),
         ];
 
-        let input = CrossInputSelectorWrap::new("".into(), batch_0, batch_1, resources_0.clone(), resources_1.clone(), ca.clone());
+        let input = CrossInputSelectorWrap::new("".into(), ResourceBatch::try_new(batch_0, resources_0.clone())?, ResourceBatch::try_new(batch_1, resources_1.clone())?, ca.clone());
 
         let batch_1_lengths = batch_1_tensors.iter().map(|t| t.as_ref().size()[1]).collect::<Vec<_>>();
-        let mut context = CrossSplitterContext::<AdjusterStage, TestBatchOutput>::new(2, batch_1_lengths);
+        let mut context = CrossSplitterContext::<AdjusterStage, TestBatchOutput>::new(batch_1_lengths);
         let cross_loader_adjuster = CrossLoaderAdjuster::new();
         let mut selector = CrossInputSelector::default();
 

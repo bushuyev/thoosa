@@ -1,6 +1,7 @@
 use crate::stages::dists_tracker::DistsMask;
 use crate::stages::find_motifs::{CrossUnfoldMaskFn, MasksCtx};
 use crate::stages::prepare_cross_batch::PreparedCrossBatch;
+use crate::stages::resource_batch::{BorrowedResourceBatch, ResourceBatch, ResourceWindows, checked_batch_range};
 use crate::stages::slices_iter::{ResourceSlices, SlicesIter};
 use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
@@ -41,67 +42,60 @@ use thoosa_shared::{ThoError, mono_key};
 
 pub const SYNC_CROSS_UNFOLD_CLC_ENDPOINT: &str = "CrossUnfoldClc";
 
+// A prepared outer batch is a different representation, never an offset into a
+// flat tensor list. Only the checked constructors below may attach its resources.
+#[derive(Debug)]
+enum CrossOuterBatch<'a, R> {
+    Raw(BorrowedResourceBatch<'a, R>),
+    Prepared { data: ThoDataRef<'a, PreparedCrossBatch>, resources: Vec<R> },
+}
+
 #[derive(Debug)]
 pub struct CrossInput<'a, R: AsRef<Resource>> {
     id: SynKey,
-    tensors: Vec<ThoDataRef<'a, ThoTensor<ChannelsData, SynKey>>>,
-    resources_0: Vec<R>,
-    resources_1: Vec<R>,
-    prepared_0: Option<ThoDataRef<'a, PreparedCrossBatch>>,
+    outer: CrossOuterBatch<'a, R>,
+    inner: BorrowedResourceBatch<'a, R>,
 }
 
 impl<'a, R: AsRef<Resource> + Clone> CrossInput<'a, R> {
-    pub fn new(tensors: &'a [&'a ThoTensor<ChannelsData, SynKey>], b_0: &'a [R], b_1: &'a [R], id: SynKey) -> Self {
-        Self {
-            id: &id + Self::resources_id(b_0, b_1),
-            tensors: tensors.iter().map(|tensor| ThoDataRef::Borrowed(*tensor)).collect(),
-            resources_0: b_0.to_vec(),
-            resources_1: b_1.to_vec(),
-            prepared_0: None,
-        }
+    pub fn new(outer: BorrowedResourceBatch<'a, R>, inner: BorrowedResourceBatch<'a, R>, id: SynKey) -> Self {
+        Self { id: &id + Self::resources_id(outer.resources(), inner.resources()), outer: CrossOuterBatch::Raw(outer), inner }
     }
 
     fn resources_id(b_0: &[R], b_1: &[R]) -> SynKey {
         SynKey::new(b_0.iter().chain(b_1.iter()).map(|resource| mono_key!(resource.as_ref().id(), format!("resource_id{}", resource.as_ref().id()))).collect::<Vec<_>>())
     }
 
-    pub fn from_data_refs(tensors: Vec<ThoDataRef<'a, ThoTensor<ChannelsData, SynKey>>>, b_0: &'a [R], b_1: &'a [R], id: SynKey) -> Self {
-        Self {
-            id: &id + Self::resources_id(&b_0, &b_1),
-            tensors,
-            resources_0: b_0.to_vec(),
-            resources_1: b_1.to_vec(),
-            prepared_0: None,
-        }
+    pub(crate) fn from_prepared(data: ThoDataRef<'a, PreparedCrossBatch>, resources: Vec<R>, inner: BorrowedResourceBatch<'a, R>, id: SynKey) -> Result<Self, ThoError> {
+        data.as_ref().validate_resources(&resources)?;
+        Ok(Self { id: &id + Self::resources_id(&resources, inner.resources()), outer: CrossOuterBatch::Prepared { data, resources }, inner })
     }
 
-    pub fn from_decoded_parts(tensors: Vec<ThoDataRef<'a, ThoTensor<ChannelsData, SynKey>>>, b_0: Vec<R>, b_1: Vec<R>, id: SynKey) -> Self {
-        Self {
-            id,
-            tensors,
-            resources_0: b_0,
-            resources_1: b_1,
-            prepared_0: None,
+    pub(crate) fn raw_outer(&self) -> Result<&BorrowedResourceBatch<'a, R>, ThoError> {
+        match &self.outer {
+            CrossOuterBatch::Raw(batch) => Ok(batch),
+            CrossOuterBatch::Prepared { .. } => Err(ThoError::new("outer batch is already prepared")),
         }
-    }
-
-    // With a prepared outer batch, tensors contains only the raw inner batch.
-    // Resource metadata stays intact for diagonal filtering and slice indexing.
-    pub(crate) fn with_prepared_outer(mut self, prepared: Option<ThoDataRef<'a, PreparedCrossBatch>>) -> Self {
-        self.prepared_0 = prepared;
-        self
     }
 
     pub fn tensors(&self) -> Vec<&ThoTensor<ChannelsData, SynKey>> {
-        self.tensors.iter().map(ThoDataRef::as_ref).collect()
+        let outer = match &self.outer { CrossOuterBatch::Raw(batch) => batch.tensors(), CrossOuterBatch::Prepared { .. } => &[] };
+        outer.iter().chain(self.inner.tensors()).map(ThoDataRef::as_ref).collect()
     }
 
     pub fn batch_0(&self) -> &[R] {
-        self.resources_0.as_slice()
+        match &self.outer { CrossOuterBatch::Raw(batch) => batch.resources(), CrossOuterBatch::Prepared { resources, .. } => resources }
     }
 
-    pub fn batch_1(&self) -> &[R] {
-        self.resources_1.as_slice()
+    pub fn batch_1(&self) -> &[R] { self.inner.resources() }
+
+    fn borrow_inner_range(&self, range: std::ops::Range<usize>) -> Result<CrossInput<'_, R>, ThoError> {
+        let inner = self.inner.borrow_range(range)?;
+        let outer = match &self.outer {
+            CrossOuterBatch::Raw(batch) => CrossOuterBatch::Raw(batch.borrow_range(0..batch.len())?),
+            CrossOuterBatch::Prepared { data, resources } => CrossOuterBatch::Prepared { data: ThoDataRef::Borrowed(data.as_ref()), resources: resources.clone() },
+        };
+        Ok(CrossInput { id: &self.id + Self::resources_id(self.batch_0(), inner.resources()), outer, inner })
     }
 }
 
@@ -128,86 +122,89 @@ impl CrossInputIpcResource {
     }
 }
 
-#[derive(Debug, Serialize)]
-pub struct CrossInputFindMotifsIpcInputRef<'a> {
-    id: &'a SynKey,
-    tensors: Vec<&'a ThoTensor<ChannelsData, SynKey>>,
-    resources_0: Vec<CrossInputIpcResource>,
-    resources_1: Vec<CrossInputIpcResource>,
-    prepared_0: Option<&'a PreparedCrossBatch>,
+// Each wire batch carries its own metadata. Decoding must pass through the
+// same validation as local construction before any worker tensor is accessed.
+#[derive(Serialize, Deserialize)]
+struct RawBatchWire<T> {
+    tensors: Vec<T>,
+    resources: Vec<CrossInputIpcResource>,
 }
 
-impl<'a> CrossInputFindMotifsIpcInputRef<'a> {
-    pub fn new(input: &'a CrossInput<'_, Arc<Resource>>) -> Self {
-        Self {
-            id: input.id(),
-            tensors: input.tensors(),
-            resources_0: input.resources_0.iter().map(|resource| CrossInputIpcResource::from_resource(resource.as_ref())).collect(),
-            resources_1: input.resources_1.iter().map(|resource| CrossInputIpcResource::from_resource(resource.as_ref())).collect(),
-            prepared_0: input.prepared_0.as_ref().map(ThoDataRef::as_ref),
-        }
+#[derive(Serialize, Deserialize)]
+enum OuterBatchWire<T, P> {
+    Raw(RawBatchWire<T>),
+    Prepared { data: P, resources: Vec<CrossInputIpcResource> },
+}
+
+#[derive(Serialize, Deserialize)]
+struct CrossInputWire<T, P> {
+    id: SynKey,
+    outer: OuterBatchWire<T, P>,
+    inner: RawBatchWire<T>,
+}
+
+impl<'a> RawBatchWire<&'a ThoTensor<ChannelsData, SynKey>> {
+    fn from_batch(batch: &'a BorrowedResourceBatch<'_, Arc<Resource>>) -> Self {
+        Self { tensors: batch.tensors().iter().map(ThoDataRef::as_ref).collect(), resources: batch.resources().iter().map(|r| CrossInputIpcResource::from_resource(r)).collect() }
     }
 }
 
-#[derive(Debug, Deserialize)]
-pub struct CrossInputFindMotifsIpcInput {
-    id: SynKey,
-    tensors: Vec<ThoTensor<ChannelsData, SynKey>>,
-    resources_0: Vec<CrossInputIpcResource>,
-    resources_1: Vec<CrossInputIpcResource>,
-    prepared_0: Option<PreparedCrossBatch>,
+impl RawBatchWire<ThoTensor<ChannelsData, SynKey>> {
+    fn into_batch(self) -> Result<BorrowedResourceBatch<'static, Arc<Resource>>, ThoError> {
+        ResourceBatch::try_new(self.tensors.into_iter().map(ThoDataRef::Owned).collect(), self.resources.into_iter().map(|r| Arc::new(r.into_resource())).collect())
+    }
 }
 
 impl Serialize for CrossInput<'_, Arc<Resource>> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        CrossInputFindMotifsIpcInputRef::new(self).serialize(serializer)
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let outer = match &self.outer {
+            CrossOuterBatch::Raw(batch) => OuterBatchWire::Raw(RawBatchWire::from_batch(batch)),
+            CrossOuterBatch::Prepared { data, resources } => OuterBatchWire::Prepared { data: data.as_ref(), resources: resources.iter().map(|r| CrossInputIpcResource::from_resource(r)).collect() },
+        };
+        CrossInputWire { id: self.id.clone(), outer, inner: RawBatchWire::from_batch(&self.inner) }.serialize(serializer)
     }
 }
 
 impl<'de> Deserialize<'de> for CrossInput<'static, Arc<Resource>> {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let input = CrossInputFindMotifsIpcInput::deserialize(deserializer)?;
-        Ok(CrossInput::from_decoded_parts(
-            input.tensors.into_iter().map(ThoDataRef::Owned).collect(),
-            input.resources_0.into_iter().map(|resource| Arc::new(resource.into_resource())).collect(),
-            input.resources_1.into_iter().map(|resource| Arc::new(resource.into_resource())).collect(),
-            input.id,
-        )
-        .with_prepared_outer(input.prepared_0.map(ThoDataRef::Owned)))
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let wire = CrossInputWire::<ThoTensor<ChannelsData, SynKey>, PreparedCrossBatch>::deserialize(deserializer)?;
+        let inner = wire.inner.into_batch().map_err(serde::de::Error::custom)?;
+        let outer = match wire.outer {
+            OuterBatchWire::Raw(batch) => CrossOuterBatch::Raw(batch.into_batch().map_err(serde::de::Error::custom)?),
+            OuterBatchWire::Prepared { data, resources } => {
+                let resources = resources.into_iter().map(|r| Arc::new(r.into_resource())).collect::<Vec<_>>();
+                data.validate_resources(&resources).map_err(serde::de::Error::custom)?;
+                CrossOuterBatch::Prepared { data: ThoDataRef::Owned(data), resources }
+            }
+        };
+        Ok(Self { id: wire.id, outer, inner })
     }
 }
 
 #[typetag::serde]
 impl WorkerInput for CrossInput<'static, Arc<Resource>> {}
 
+impl CrossInput<'_, Arc<Resource>> {
+    fn map_worker_tensors<'o>(&self, map: impl Fn(&ThoTensor<ChannelsData, SynKey>) -> Result<ThoDataRef<'o, ThoTensor<ChannelsData, SynKey>>, ThoError>, map_prepared: impl FnOnce(&PreparedCrossBatch) -> Result<PreparedCrossBatch, ThoError>) -> Result<CrossInput<'o, Arc<Resource>>, ThoError> {
+        let outer = match &self.outer {
+            CrossOuterBatch::Raw(batch) => CrossOuterBatch::Raw(batch.map_tensors(&map)?),
+            CrossOuterBatch::Prepared { data, resources } => {
+                let data = map_prepared(data.as_ref())?;
+                data.validate_resources(resources)?;
+                CrossOuterBatch::Prepared { data: ThoDataRef::Owned(data), resources: resources.clone() }
+            }
+        };
+        Ok(CrossInput { id: self.id.clone(), outer, inner: self.inner.map_tensors(map)? })
+    }
+}
+
 impl WorkerStageInput for CrossInput<'_, Arc<Resource>> {
     fn clone_refs(&self) -> Result<Box<dyn WorkerInput>, ThoError> {
-        // Typetag requires an owned value, so clone worker references and resource metadata into a static input.
-        Ok(Box::new(
-            CrossInput::<'static, Arc<Resource>>::from_decoded_parts(
-                self.tensors.iter().map(|tensor| Ok(ThoDataRef::Owned(tensor.as_ref().clone_ref()?))).collect::<Result<Vec<_>, ThoError>>()?,
-                self.resources_0.clone(),
-                self.resources_1.clone(),
-                self.id.clone(),
-            )
-            .with_prepared_outer(self.prepared_0.as_ref().map(|prepared| prepared.as_ref().clone_refs_for_worker().map(ThoDataRef::Owned)).transpose()?),
-        ))
+        Ok(Box::new(self.map_worker_tensors(|tensor| tensor.clone_ref().map(ThoDataRef::Owned), PreparedCrossBatch::clone_refs_for_worker)?))
     }
 
     fn ref_to_tensor(&self, all_cuda_tensors: &AllTensors, remove: bool) -> Result<Self, ThoError> {
-        Ok(CrossInput::from_decoded_parts(
-            self.tensors.iter().map(|tensor| Ok(ThoDataRef::Owned(tensor.as_ref().ref_to_tensor(all_cuda_tensors, remove)?))).collect::<Result<Vec<_>, ThoError>>()?,
-            self.resources_0.clone(),
-            self.resources_1.clone(),
-            self.id.clone(),
-        )
-        .with_prepared_outer(self.prepared_0.as_ref().map(|prepared| prepared.as_ref().ref_to_tensor(all_cuda_tensors, remove).map(ThoDataRef::Owned)).transpose()?))
+        self.map_worker_tensors(|tensor| tensor.ref_to_tensor(all_cuda_tensors, remove).map(ThoDataRef::Owned), |prepared| prepared.ref_to_tensor(all_cuda_tensors, remove))
     }
 }
 
@@ -225,7 +222,7 @@ impl<'a, R: AsRef<Resource> + Debug + Send + Sync> Data for CrossInput<'a, R> {
     type Metrics = i64;
 
     fn size(&self) -> Self::Metrics {
-        self.resources_1.len() as i64
+        self.inner.len() as i64
     }
 
     fn tho_device_idx(&self) -> usize {
@@ -233,7 +230,10 @@ impl<'a, R: AsRef<Resource> + Debug + Send + Sync> Data for CrossInput<'a, R> {
     }
 
     fn mem_size(&self) -> u64 {
-        self.tensors.iter().map(|tensor| tensor.as_ref().mem_size()).sum::<u64>() + self.prepared_0.as_ref().map_or(0, |prepared| prepared.as_ref().mem_size())
+        self.inner.tensors().iter().map(|tensor| tensor.as_ref().mem_size()).sum::<u64>() + match &self.outer {
+            CrossOuterBatch::Raw(batch) => batch.tensors().iter().map(|tensor| tensor.as_ref().mem_size()).sum(),
+            CrossOuterBatch::Prepared { data, .. } => data.as_ref().mem_size(),
+        }
     }
 }
 
@@ -274,10 +274,7 @@ where
     where
         Self: 'o,
     {
-        async move {
-            let tensors = self.tensors.iter().map(|tensor| ThoDataRef::Borrowed(tensor.as_ref())).collect();
-            Ok(CrossInput::from_data_refs(tensors, self.resources_0.as_slice(), self.resources_1.as_slice(), self.id.clone()).with_prepared_outer(self.prepared_0.as_ref().map(|prepared| ThoDataRef::Borrowed(prepared.as_ref()))))
-        }
+        async move { self.borrow_inner_range(0..self.inner.len()) }
     }
 }
 
@@ -294,12 +291,7 @@ where
             let Some(selector) = selector else {
                 return BorrowRef::borrow_ref(self, to_device_idx).await;
             };
-            let batch_0_len = if self.prepared_0.is_some() { 0 } else { self.resources_0.len() };
-            let range = selector.resources_batch_range.start as usize..selector.resources_batch_range.end as usize;
-            let mut tensors = Vec::with_capacity(batch_0_len + range.len());
-            tensors.extend(self.tensors[..batch_0_len].iter().map(|tensor| ThoDataRef::Borrowed(tensor.as_ref())));
-            tensors.extend(self.tensors[batch_0_len + range.start..batch_0_len + range.end].iter().map(|tensor| ThoDataRef::Borrowed(tensor.as_ref())));
-            Ok(CrossInput::from_data_refs(tensors, self.resources_0.as_slice(), &self.resources_1[range], self.id.clone()).with_prepared_outer(self.prepared_0.as_ref().map(|prepared| ThoDataRef::Borrowed(prepared.as_ref()))))
+            self.borrow_inner_range(checked_batch_range(&selector.resources_batch_range, self.inner.len())?)
         }
     }
 }
@@ -340,6 +332,21 @@ pub struct UnfoldParams {
 impl UnfoldParams {
     pub fn new(dimension: i64, size: i64, step: i64) -> Self {
         Self { dimension, size, step }
+    }
+
+    pub(crate) fn validate(&self) -> Result<(), ThoError> {
+        // Cross batches are [channels, samples]; concatenation and slice indexing
+        // require unfolding the sample dimension with positive window and step.
+        if self.dimension != 1 || self.size <= 0 || self.step <= 0 {
+            return Err(ThoError::new("invalid cross-batch unfolding parameters"));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn windows(&self, samples: i64) -> Result<i64, ThoError> {
+        self.validate()?;
+        if samples < 0 { return Err(ThoError::new("negative resource sample length")); }
+        Ok(if samples < self.size { 0 } else { 1 + (samples - self.size) / self.step })
     }
 
     pub fn dimension(&self) -> i64 {
@@ -606,49 +613,26 @@ where
     where
         Self: Sized,
     {
-        assert!(!input.resources_0.is_empty(), "CrossUnfoldClc::do_run: no input resources");
         let unfold_params = &self.unfold_params;
-
-        debug!("CrossUnfoldClc::do_run: input.id={:?} input={input:?} unfold_params={unfold_params:?}", input.id);
-        debug!(
-            "CrossUnfoldClc::do_run: input.id={:?} input.tensors.len={} input.resources_0.len={} input.resources_1.len={}",
-            input.id,
-            input.tensors.len(),
-            input.resources_0.len(),
-            input.resources_1.len()
-        );
-
-        //FIXME tensors which are too small (because of freq_filter) are already removed from batch_0_t and batch_1_t but still present in sizes (as 0) so that resources_0/1 can be filtered. Do it all in unfold_and_cat
-        let tensors = input.tensors();
-        let (batch_0_t, batch_0_sizes, batch_1_start) = if let Some(prepared) = &input.prepared_0 {
-            let prepared = prepared.as_ref();
-            if prepared.params != *unfold_params || prepared.sizes.len() != input.resources_0.len() {
-                return Err(ThoError::new("prepared outer batch does not match cross comparison parameters"));
+        // Filtering and window metadata are one operation; no caller reconstructs
+        // correspondence by zipping a filtered tensor list with source resources.
+        let (batch_0_t, resource_ids_sizes_0) = match &input.outer {
+            CrossOuterBatch::Prepared { data, .. } => {
+                let prepared = data.as_ref();
+                if prepared.params() != *unfold_params {
+                    return Err(ThoError::new("prepared outer batch does not match cross comparison parameters"));
+                }
+                // This alias stays in the synchronous calculation; the registered
+                // prepared batch owns storage between invocations.
+                (tch_result(prepared.tensor().local()?.f_alias())?, prepared.slices())
             }
-            // This alias lives only inside this synchronous calculation. The
-            // registered prepared batch owns the storage across invocations.
-            (tch_result(prepared.tensor.local()?.f_alias())?, prepared.sizes.clone(), 0)
-        } else {
-            let (tensor, sizes) = unfold_and_cat(&tensors[0..input.resources_0.len()], unfold_params)?;
-            (tensor, sizes, input.resources_0.len())
+            CrossOuterBatch::Raw(batch) => {
+                let (tensor, layout) = unfold_and_cat(batch, unfold_params)?;
+                (tensor, resource_slices(layout))
+            }
         };
-        // let (batch_0_t, batch_0_sizes) =  cat_and_unfold(&input.tensors[0..input.resources_0.len()], &unfold_params)?; TODO doesn't work because sizes need to match splits to track mask, i.e. single spit can't come from more than one resource
-
-        debug!("CrossUnfoldClc::do_run: input.id={:?} batch_0_sizes={batch_0_sizes:?}", input.id);
-
-        //TODO if tensor is filtered because it's less than window
-        // assert_eq!(batch_0_sizes.len(), input.resources_0.len());
-        let resource_ids_sizes_0: Vec<_> = input.resources_0.iter().zip(batch_0_sizes.into_iter()).filter(|v| v.1 != 0).map(|(resource, size)| ResourceSlices::new(resource.as_ref().id(), size as usize)).collect();
-
-        let (batch_1_t, batch_1_sizes) = unfold_and_cat(&tensors[batch_1_start..], unfold_params)?;
-
-        // assert_eq!(batch_1_sizes.len(), input.resources_1.len());
-        debug!("CrossUnfoldClc::do_run: input.id={:?} batch_1_sizes={batch_1_sizes:?}", input.id);
-
-        let resource_ids_sizes_1: Vec<_> = input.resources_1.iter().zip(batch_1_sizes.into_iter()).filter(|v| v.1 != 0).map(|(resource, size)| ResourceSlices::new(resource.as_ref().id(), size as usize)).collect();
-
-        debug!("CrossUnfoldClc::do_run: input.id={:?} resource_ids_sizes_0={resource_ids_sizes_0:?}", input.id);
-        debug!("CrossUnfoldClc::do_run: input.id={:?} resource_ids_sizes_1={resource_ids_sizes_1:?}", input.id);
+        let (batch_1_t, layout) = unfold_and_cat(&input.inner, unfold_params)?;
+        let resource_ids_sizes_1 = resource_slices(layout);
 
         debug!("CrossUnfoldClc::do_run: input.id={:?} batch_0_t={batch_0_t:?}  batch_1_t={batch_1_t:?} mem_0={} mem_1={}", input.id, tensor_mem_size(&batch_0_t), tensor_mem_size(&batch_1_t));
 
@@ -668,33 +652,29 @@ where
     }
 }
 
+fn resource_slices<R: AsRef<Resource>>(layout: Vec<ResourceWindows<R>>) -> Vec<ResourceSlices> {
+    layout.into_iter().filter(|entry| entry.windows > 0).map(|entry| ResourceSlices::new(entry.resource.as_ref().id(), entry.windows as usize)).collect()
+}
+
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "cross_batch_clc/unfold_and_cat"))]
-pub fn unfold_and_cat(input: &[&ThoTensor<ChannelsData, SynKey>], unfold_params: &UnfoldParams) -> Result<(Tensor, Vec<i64>), ThoError> {
-    debug!("cross_batch_clc::unfold_and_cat: input={input:?} unfold_params={unfold_params:?}");
-
-    assert!(!input.is_empty(), "cross_batch_clc/unfold_and_cat: input is empty");
-
-    let (tensors, sizes): (Vec<Tensor>, Vec<i64>) = input.iter().try_fold((vec![], vec![]), |(mut unfolded_tensors, mut sizes), t| -> Result<_, ThoError> {
-        if t.size().dim_1() >= unfold_params.size {
-            // A failed unfold must retry through OOM handling, not cache a
-            // partially prepared batch with that resource silently omitted.
-            let unfolded = tch_result(t.local()?.f_unfold(unfold_params.dimension, unfold_params.size, unfold_params.step))?;
-            debug!("cross_batch_clc/unfold_and_cat: 0.  t.id={:?} t.size={:?} self.unfold_params={:?} unfolded.size={:?}", t.id(), t.size(), unfold_params, unfolded.size());
-            sizes.push(unfolded.size()[1]); //number of blocks
-            unfolded_tensors.push(unfolded);
+pub(crate) fn unfold_and_cat<R: Clone>(input: &BorrowedResourceBatch<'_, R>, params: &UnfoldParams) -> Result<(Tensor, Vec<ResourceWindows<R>>), ThoError> {
+    params.validate()?;
+    let mut tensors = Vec::with_capacity(input.len());
+    let mut layout = Vec::with_capacity(input.len());
+    for (resource, tensor, samples) in input.iter() {
+        let windows = params.windows(samples)?;
+        if windows > 0 {
+            // Tensor failures must reach OOM handling, not silently drop a resource.
+            tensors.push(tch_result(tensor.as_ref().local()?.f_unfold(params.dimension, params.size, params.step))?);
         } else {
-            warn!("cross_batch_clc/unfold_and_cat: 0.  t.id={:?} t.size={:?} self.unfold_params={:?}  skipped", t.id(), t.size(), unfold_params);
-            sizes.push(0);
+            warn!("cross_batch_clc/unfold_and_cat: tensor={:?} samples={samples} params={params:?} skipped", tensor.as_ref().id());
         }
-        Ok((unfolded_tensors, sizes))
-    })?;
-
+        layout.push(ResourceWindows { resource: resource.clone(), samples, windows });
+    }
     if tensors.is_empty() {
         return Err(ThoError::new("batch is empty"));
     }
-
-    let batch_0_t = tch_result(Tensor::f_concat(tensors.as_slice(), 1))?;
-    Ok((batch_0_t, sizes))
+    Ok((tch_result(Tensor::f_concat(&tensors, 1))?, layout))
 }
 
 #[cfg(test)]
@@ -702,6 +682,8 @@ mod tests {
     use crate::stages::cross_batch_clc::{CrossBatchFn, CrossInput, CrossUnfoldClc, UnfoldParams};
     use crate::stages::dists_tracker::{DistsMask, DistsMaskType};
     use crate::stages::find_motifs::{MasksCtx, MeanDistsCtx};
+    use crate::stages::resource_batch::ResourceBatch;
+    use thoosa_common::runner::common::cachable::ThoDataRef;
     use log::debug;
     use std::sync::Arc;
     use tch::Device::{Cpu, Cuda};
@@ -757,8 +739,6 @@ mod tests {
 
         let tensor_1 = ThoTensor::new(SynKey::new([mono_key!(2u32, "tensor_1")]), Tensor::from_slice(&[2.00, 2.01, 2.10, 2.11, 2.20, 2.21]).view((3, 2)))?;
 
-        let tensors = [&tensor_00, &tensor_01, &tensor_1];
-
         let resource_00 = Arc::new(Resource::new(0, 0, "file_00", 10));
         let resource_01 = Arc::new(Resource::new(1, 0, "file_01", 10));
         let chunk_0_resources = vec![Arc::clone(&resource_00), Arc::clone(&resource_01)];
@@ -766,7 +746,11 @@ mod tests {
         let resource_1 = Arc::new(Resource::new(2, 0, "file_1", 10));
         let chunk_1_resources = vec![Arc::clone(&resource_1)];
 
-        let input = CrossInput::new(&tensors, chunk_0_resources.as_slice(), chunk_1_resources.as_slice(), "test".into());
+        let input = CrossInput::new(
+            ResourceBatch::try_new(vec![ThoDataRef::Borrowed(&tensor_00), ThoDataRef::Borrowed(&tensor_01)], chunk_0_resources)?,
+            ResourceBatch::try_new(vec![ThoDataRef::Borrowed(&tensor_1)], chunk_1_resources)?,
+            "test".into(),
+        );
         let ctx = RunCtxImpl::new(1, "test");
         let out = cross_batch_clc.do_run(&input, &ctx)?;
 
@@ -782,6 +766,66 @@ mod tests {
         assert!(dists.allclose(&expected_dists, 0.0, 0.0, false));
         assert!(mask.equal(&expected_mask));
 
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod batch_tests {
+    use super::*;
+    use tch::{Kind, kind::FLOAT_CPU};
+    use thoosa_common::ipc::worker_msg::CudaWorkerId;
+
+    fn resources() -> Vec<Arc<Resource>> {
+        // Source lengths intentionally differ from post-filter tensor lengths.
+        (10..13).map(|id| Arc::new(Resource::new(id, 1, format!("resource_{id}"), 100))).collect()
+    }
+
+    fn remote_batch() -> Result<BorrowedResourceBatch<'static, Arc<Resource>>, ThoError> {
+        let worker = CudaWorkerId { device_idx: 1, generation: thoosa_shared::CudaDeviceGeneration(7) };
+        ResourceBatch::try_new([5, 1, 7].into_iter().enumerate().map(|(i, len)| ThoDataRef::Owned(ThoTensor::new_ref(format!("tensor_{i}").into(), i as u64, vec![1, len], Kind::Float, None, worker))).collect(), resources())
+    }
+
+    #[test]
+    fn test_unfold_filters_with_resource_boundaries() -> Result<(), ThoError> {
+        let tensors = [5, 1, 7].into_iter().map(|len| Ok(ThoDataRef::Owned(ThoTensor::new(format!("len_{len}").into(), tch_result(Tensor::f_zeros([1, len], FLOAT_CPU))?)?))).collect::<Result<_, ThoError>>()?;
+        let batch = ResourceBatch::try_new(tensors, resources())?;
+        let (tensor, layout) = unfold_and_cat(&batch, &UnfoldParams::new(1, 3, 2))?;
+        assert_eq!(tensor.size(), vec![1, 5, 3]);
+        assert_eq!(layout.iter().map(|entry| (entry.resource.as_ref().id(), entry.samples, entry.windows)).collect::<Vec<_>>(), vec![(10, 5, 2), (11, 1, 0), (12, 7, 3)]);
+        assert_eq!(resource_slices(layout), vec![ResourceSlices::new(10, 2), ResourceSlices::new(12, 3)]);
+        assert!(unfold_and_cat(&batch, &UnfoldParams::new(0, 3, 2)).is_err());
+        assert!(unfold_and_cat(&batch, &UnfoldParams::new(1, 3, 0)).is_err());
+        assert!(unfold_and_cat(&batch, &UnfoldParams::new(1, 0, 2)).is_err());
+        assert!(unfold_and_cat(&batch, &UnfoldParams::new(1, 8, 2)).is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_batch_selection_and_wire_validation() -> anyhow::Result<()> {
+        let input = CrossInput::new(remote_batch()?, remote_batch()?, "cross".into());
+        let selected = input.select_ref(1, Some((1..3).into())).await?;
+        assert_eq!(selected.inner.resources().iter().map(|r| r.as_ref().id()).collect::<Vec<_>>(), vec![11, 12]);
+        assert_eq!(selected.inner.lengths(), &[1, 7]);
+        assert!(input.select_ref(1, Some((-1..1).into())).await.is_err());
+        assert!(input.select_ref(1, Some((0..4).into())).await.is_err());
+        let wire = serde_json::to_value(&selected)?;
+        let decoded: CrossInput<'static, Arc<Resource>> = serde_json::from_value(wire.clone())?;
+        assert_eq!(decoded.inner.resources().iter().map(|r| r.as_ref().id()).collect::<Vec<_>>(), vec![11, 12]);
+        assert_eq!(decoded.inner.lengths(), &[1, 7]);
+        assert_eq!(decoded.raw_outer()?.lengths(), &[5, 1, 7]);
+        // Reference cloning uses the same paired transformation as worker materialization.
+        let cloned = selected.clone_refs()?;
+        assert_eq!(serde_json::to_value(cloned)?.get("inner"), wire.get("inner"));
+        for outer in [false, true] {
+            let mut malformed = wire.clone();
+            let batch = if outer { &mut malformed["outer"]["Raw"] } else { &mut malformed["inner"] };
+            batch["resources"].as_array_mut().expect("resource array").pop();
+            assert!(serde_json::from_value::<CrossInput<'static, Arc<Resource>>>(malformed).is_err());
+        }
+        let mut malformed = wire;
+        malformed["inner"]["tensors"][0]["size"] = serde_json::json!([1, -1]);
+        assert!(serde_json::from_value::<CrossInput<'static, Arc<Resource>>>(malformed).is_err());
         Ok(())
     }
 }
