@@ -79,7 +79,6 @@ where
     label_loader: Arc<LL>,
     num_label_nets: u32,
 
-    #[expect(dead_code, reason = "Retains the shared owner for the lifetime of this stage or input.")]
     ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
     store: Arc<dyn MotifsStore>,
     opt_config: Arc<OptConfig>,
@@ -211,7 +210,10 @@ where
             let train_resources = Arc::new(train_resources);
             let valid_resources = Arc::new(valid_resources);
 
+            // Release the workspace lock before training uses its temporary directory.
+            let checkpoint_dir = self.ws.read().tmp_path().clone();
             let train_net = Arc::new(TrainNet::new(
+                checkpoint_dir,
                 move |_ctx: C, rc: &TrainFinalNetRunConfig| {
                     let label_loader = Arc::clone(&label_loader);
                     let train_resources = Arc::clone(&train_resources);

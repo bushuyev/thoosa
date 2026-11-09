@@ -550,6 +550,8 @@ where
 
         debug!("TrainMotifNets::run: sorted motifs_rates_selected_motifs_run_config_ids={motifs_rates_selected_motifs_run_config_ids:?}");
 
+        // Copy the workspace path before spawning trials so no workspace lock spans training.
+        let checkpoint_dir = self.ws.read().tmp_path().clone();
         let futures = motifs_rates_selected_motifs_run_config_ids.into_iter().map(|(motif_id_rate, select_motifs_run_config_id)| {
             let mut ctx = ctx.branch(false);
             let ctx_run = ctx.branch(false);
@@ -562,6 +564,7 @@ where
             let epoch_size = self.epoch_size;
             let reusable_completed_trials = reusable_completed_trials.clone();
             let descr = self.descr.clone();
+            let checkpoint_dir = checkpoint_dir.clone();
 
             async move {
                 let motif_loader_input = Arc::new(MotifLoaderInput::new((motif_id_rate.0, "motif_id").into(), Some(vec![select_motifs_run_config_id])));
@@ -585,6 +588,7 @@ where
 
                 let train_net = Arc::new(
                     TrainNet::new(
+                        checkpoint_dir,
                         move |mut ctx: C, rc: &TrainMotifNetRunConfig| {
                             let motif_loader = Arc::clone(&motif_loader_for_batch);
                             let motif_input = Arc::clone(&motif_input_for_batch);

@@ -156,6 +156,7 @@ where
     NP: Default + Debug + Send + Sync + 'static,
     FC: Fn(&RC) -> u32 + Send + Sync + 'static,
 {
+    checkpoint_dir: PathBuf,
     batch: BF,
     train_step_factory: Arc<dyn TrainStepFactory<DX, DY, C, NP, RC>>,
     opt_config: Arc<OptConfig>,
@@ -196,8 +197,9 @@ where
     NP: Default + Debug + Send + Sync + 'static,
     FC: Fn(&RC) -> u32 + Send + Sync + 'static,
 {
-    pub fn new(batch: BF, train_step_factory: Arc<dyn TrainStepFactory<DX, DY, C, NP, RC>>, opt_config: Arc<OptConfig>, run_config_source: Arc<thoosa_shared::run_configs::TrainingRunConfigs<P>>, epochs: FC, validation_step: u32, descr: String) -> Self {
+    pub fn new(checkpoint_dir: PathBuf, batch: BF, train_step_factory: Arc<dyn TrainStepFactory<DX, DY, C, NP, RC>>, opt_config: Arc<OptConfig>, run_config_source: Arc<thoosa_shared::run_configs::TrainingRunConfigs<P>>, epochs: FC, validation_step: u32, descr: String) -> Self {
         Self {
+            checkpoint_dir,
             batch,
             train_step_factory,
             pd: PhantomData,
@@ -224,9 +226,10 @@ where
             let epochs = (self.epochs)(&run_config);
 
             // The path is part of worker initialization so the state owner can
-            // checkpoint without exporting its VarStore.
-            std::fs::create_dir_all("/tmp/thoosa")?;
-            let best_checkpoint_path = PathBuf::from("/tmp/thoosa").join(format!("thoosa_train_net_best_{}_{}.safetensors", now_ms(), random::<u64>()));
+            // checkpoint without exporting its VarStore. Use the caller's workspace
+            // temporary directory so checkpoint publication stays on its filesystem.
+            std::fs::create_dir_all(&self.checkpoint_dir)?;
+            let best_checkpoint_path = self.checkpoint_dir.join(format!("thoosa_train_net_best_{}_{}.safetensors", now_ms(), random::<u64>()));
             let best_checkpoint = TmpFile::new(best_checkpoint_path.clone());
             let (train_step, params) = t!(self.train_step_factory.new_step(run_config.clone(), ctx.branch(false), best_checkpoint_path.clone())).await?;
             let train_step = Arc::new(train_step);
@@ -624,7 +627,7 @@ pub mod tests {
         let stage_ref = Arc::downgrade(local_stage);
         let factory = mock_train_step_factory::MockTrainStepFactoryBuilder::new(stage).finish();
         let run_configs = thoosa_shared::run_configs::OptRunConfigs::new(thoosa_shared::run_configs::GridRunConfigs::new(thoosa_shared::run_configs::ConstConfigs::new(Vec::<thoosa_shared::val::NamedVal<DummyRunConfigFields>>::new()), vec![]), vec![]);
-        let train_net = Arc::new(TrainNet::new(batch, Arc::new(factory), Arc::new(OptConfig::new(1, 1)), Arc::new(run_configs), |_rc: &DummyRunConfig| 1, 1, "cleanup regression".to_string()));
+        let train_net = Arc::new(TrainNet::new(std::env::temp_dir(), batch, Arc::new(factory), Arc::new(OptConfig::new(1, 1)), Arc::new(run_configs), |_rc: &DummyRunConfig| 1, 1, "cleanup regression".to_string()));
         // Exercise the trial directly: opt_train intentionally converts failed trials to a penalty score.
         Ok((train_net.run_inner(mock_run_ctx::default(1), 1, run_config, 1, "cleanup regression".to_string()), stage_ref))
     }
@@ -850,7 +853,7 @@ pub mod tests {
                 );
                 let configs = thoosa_shared::run_configs::OptRunConfigs::new(thoosa_shared::run_configs::GridRunConfigs::new(thoosa_shared::run_configs::ConstConfigs::new(Vec::<thoosa_shared::val::NamedVal<DummyRunConfigFields>>::new()), vec![]), vec![]);
                 let factory: TestBatchFactory = Box::new(move |_, _| ready(Ok(Arc::clone(&batch))).boxed());
-                let train_net = Arc::new(TrainNet::new(factory, Arc::new(DummyTrainStepFactory), Arc::new(OptConfig::new(1, 1)), Arc::new(configs), |_: &DummyRunConfig| 3, 1, "epoch rollback".into()));
+                let train_net = Arc::new(TrainNet::new(std::env::temp_dir(), factory, Arc::new(DummyTrainStepFactory), Arc::new(OptConfig::new(1, 1)), Arc::new(configs), |_: &DummyRunConfig| 3, 1, "epoch rollback".into()));
                 let (_checkpoint, loss, ()) = train_net.run_inner(mock_run_ctx::default(1), 1, DummyRunConfig::new(None, 1), 1, "epoch rollback".into()).await?;
                 assert!(loss.is_finite());
                 assert_eq!(train_calls.load(Ordering::SeqCst), 3, "an OOM skips the failed epoch without replaying its batches");
@@ -870,7 +873,7 @@ pub mod tests {
         let configs = thoosa_shared::run_configs::OptRunConfigs::new(thoosa_shared::run_configs::GridRunConfigs::new(thoosa_shared::run_configs::ConstConfigs::new(Vec::<thoosa_shared::val::NamedVal<DummyRunConfigFields>>::new()), vec![]), vec![]);
         let factory: TestBatchFactory = Box::new(move |_, _| ready(Ok(Arc::clone(&batch))).boxed());
 
-        let train_net = Arc::new(TrainNet::new(factory, Arc::new(DummyTrainStepFactory), Arc::new(OptConfig::new(1, 1)), Arc::new(configs), |_: &DummyRunConfig| 10, 1, "persistent OOM".into()));
+        let train_net = Arc::new(TrainNet::new(std::env::temp_dir(), factory, Arc::new(DummyTrainStepFactory), Arc::new(OptConfig::new(1, 1)), Arc::new(configs), |_: &DummyRunConfig| 10, 1, "persistent OOM".into()));
         let error = train_net.run_inner(mock_run_ctx::default(1), 1, DummyRunConfig::new(None, 1), 1, "persistent OOM".into()).await.unwrap_err();
         assert!(error.is_oom());
         assert!(error.to_string().contains("exclusive runner access"));
@@ -883,8 +886,11 @@ pub mod tests {
         GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
         let configs = thoosa_shared::run_configs::OptRunConfigs::new(thoosa_shared::run_configs::GridRunConfigs::new(thoosa_shared::run_configs::ConstConfigs::new(Vec::<thoosa_shared::val::NamedVal<DummyRunConfigFields>>::new()), vec![]), vec![]);
+        let tmp_dir = tempfile::tempdir()?;
+        let checkpoint_dir = tmp_dir.path().join("best_checkpoint");
         // The only validation is in the final epoch. The old deferred save never ran.
         let train_net = Arc::new(TrainNet::new(
+            checkpoint_dir.clone(),
             batch_factory_with_stream_errors(None, None),
             Arc::new(DummyTrainStepFactory),
             Arc::new(OptConfig::new(1, 1)),
@@ -894,6 +900,7 @@ pub mod tests {
             "final checkpoint regression".to_string(),
         ));
         let (checkpoint, loss, ()) = train_net.run_inner(mock_run_ctx::default(1), 1, DummyRunConfig::new(None, 1), 1, "final checkpoint regression".to_string()).await?;
+        assert_eq!(checkpoint.path().parent(), Some(checkpoint_dir.as_path()), "best checkpoint must be saved in the configured temporary directory");
         let tensors = tch_result(Tensor::read_safetensors(checkpoint.path()))?;
         let bias = tch_result(tensors.iter().find(|(name, _)| name.ends_with("bias")).ok_or_else(|| ThoError::new("checkpoint has no bias"))?.1.f_double_value(&[0]))?;
         assert!((loss as f64 - bias * bias).abs() < 1e-6, "best loss must describe the completed checkpoint");
@@ -1015,6 +1022,7 @@ pub mod tests {
 
         let validation_step = 10;
         let train_net: Arc<TrainNet<MockRunCtx, _, _, _, _, _, _, (), _>> = Arc::new(TrainNet::new(
+            std::env::temp_dir(),
             move |_c: MockRunCtx, _rc: &DummyRunConfig| ready(Ok(Arc::clone(&mock_test_batch))).boxed(),
             Arc::new(DummyTrainStepFactory),
             Arc::clone(&opt_config),

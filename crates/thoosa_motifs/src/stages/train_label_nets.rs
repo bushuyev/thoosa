@@ -418,7 +418,6 @@ where
     run_configs: Arc<thoosa_shared::run_configs::TrainingRunConfigs<TrainLabelNetRunConfigFields>>,
     pd: PhantomData<L>,
     applied_motif_loader: Arc<LM>,
-    #[expect(dead_code, reason = "Retains the shared owner for the lifetime of this stage or input.")]
     ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
     num_nets: u32,
     store: Arc<dyn MotifsStore>,
@@ -628,6 +627,8 @@ where
 
             let labels_train_and_valid_sets_len = self.labels.as_ref().map(|filtered_labels| filtered_labels.len()).unwrap_or(labels_train_and_valid_sets.len());
             let labels_filter = self.labels.clone();
+            // Copy the workspace path before spawning trials so no workspace lock spans training.
+            let checkpoint_dir = self.ws.read().tmp_path().clone();
             let futures = labels_train_and_valid_sets
                 .into_iter()
                 .filter(|(label, _)| labels_filter.as_ref().map(|labels| labels.iter().any(|filter_label| filter_label.eq_ignore_ascii_case(label))).unwrap_or(true))
@@ -645,6 +646,7 @@ where
                     let labels_others_train_valid_resources = Arc::clone(&labels_others_train_valid_resources);
                     let num_nets = self.num_nets;
                     let sync_label_batch = Arc::clone(&self.sync_label_batch);
+                    let checkpoint_dir = checkpoint_dir.clone();
                     async move {
                         debug!("TrainLabelNets::run: label={label} resources={resources_1:?}");
 
@@ -664,6 +666,7 @@ where
                         debug!("TrainLabelNets::run: label={label} resources_0_valid={resources_0_valid:?}");
 
                         let train_net = Arc::new(TrainNet::new(
+                            checkpoint_dir,
                             move |_ctx_for_batch: C, rc: &TrainLabelNetRunConfig| {
                                 let applied_motif_loader = Arc::clone(&applied_motif_loader);
 
