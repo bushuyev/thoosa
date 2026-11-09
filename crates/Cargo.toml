@@ -132,13 +132,10 @@ debug-assertions = false
 overflow-checks = false
 
 
-[patch.crates-io]
-tch = {
-    git = "https://github.com/bushuyev/tch-rs.git",
-    branch = "tch-0.26-torch-2.15-local",
-}
+[patch.crates-io.tch]
+git = "https://github.com/bushuyev/tch-rs.git"
+branch = "tch-0.26-torch-2.15-local"
 
-torch-sys = {
-    git = "https://github.com/bushuyev/tch-rs.git",
-    branch = "tch-0.26-torch-2.15-local",
-}
+[patch.crates-io.torch-sys]
+git = "https://github.com/bushuyev/tch-rs.git"
+branch = "tch-0.26-torch-2.15-local"
