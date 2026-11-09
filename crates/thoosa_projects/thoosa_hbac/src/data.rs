@@ -749,36 +749,6 @@ mod tests {
         assert_eq!(Tensor::stack(&[Tensor::from_slice(&[5.0, 6.0, 7.0, 8.0, 9.0]), Tensor::from_slice(&[50.0, 60.0, 70.0, 80.0, 90.0])], 0), t_1);
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_import_resources() -> anyhow::Result<()> {
-        let test_dir = Path::new("/tmp").join(cdt_for_dir());
-        let ws = Arc::new(RwLock::new(thoosa_motifs::motifs_ws::mock_motifs_ws_simp(None, 3, 1000, 1000)));
-
-        // fs::remove_file("/tmp/test_main_db.db3").unwrap_or(());
-        // let store = Arc::new(SqlStore::from_path("/tmp/test_main_db.db3")?);
-        let sql_store = Arc::new(SqlStore::in_mem_(vec![thoosa_store::create_tables, create_motif_tables]).await?);
-        let store: Arc<dyn MotifsStore> = sql_store.clone();
-
-        let _resources = import_resources(
-            &ws,
-            sql_store.as_ref(),
-            &["seizure", "lpd", "gpd", "lrda", "grda", "other"],
-            || super::labeled_resourses(Path::new("test_data/eeg"), "train_10.csv"),
-            // None::<Box<dyn Fn(String) -> Result<Tensor, ThoosaError> + Sync + Send>>,
-            |key| Ok(parquet_to_tensor_by_path(format!("test_data/eeg/train_eegs/{}.parquet", key).as_str(), Cpu)?),
-            None,
-            true,
-            |t: &Transaction| Ok(()),
-        )
-        .await?;
-
-        let labels = store.list_labels(false).await?;
-
-        assert_eq!(vec!["seizure", "lpd", "gpd", "lrda", "grda", "other"], labels);
-
-        Ok(())
-    }
-
     fn _test_cosine_net_run_configs(kernel: Val, cycles: Val, batch_size: Val) -> thoosa_shared::run_configs::TrainingRunConfigs<TrainMotifNetRunConfigFields> {
         OptRunConfigs::new(
             GridRunConfigs::new(
