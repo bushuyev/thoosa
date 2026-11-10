@@ -13,3 +13,4 @@
 **/build/
 **/cmake-build-*
 **/version.rs
+/crates/.env.txt

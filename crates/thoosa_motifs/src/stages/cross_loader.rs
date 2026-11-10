@@ -927,6 +927,23 @@ impl BorrowRef for CrossInputSelectorWrap {
 }
 
 impl SelectRef<CrossInputSelector> for CrossInputSelectorWrap {
+    /// Materialize the selected outer (`batch_0`) and inner (`batch_1`) comparison inputs.
+    /// Each side uses `RangeOrSlice`: `Full` keeps all resources, `Range(start..end)`
+    /// selects whole resources by batch index, and `Slice((index, start..end))`
+    /// selects samples from one resource's tensor, retaining all channels. Both
+    /// ranges are half-open; sample offsets refer to the loaded tensor, not windows.
+    ///
+    /// `CrossLoaderAdjuster::adjust` changes only `batch_1_selector`. In range mode,
+    /// `SplitsAdjuster` produces `done_to..min(done_to + split_len, input_len)` in
+    /// resource indices. If OOM degradation cannot reduce the batch below one
+    /// resource, `degrade` switches to slice mode. Then `adjust` wraps the sample
+    /// range from `slice_ctx` as `Slice((slice_resource_idx, range))`. Progress
+    /// advances only after a partial output is assembled, so retries keep the same
+    /// starting point and may reduce the chunk size further.
+    ///
+    /// The adjuster leaves the outer selector unchanged (normally `Full`), allowing
+    /// reuse of `prepared_outer` across inner chunks. A changed outer selection
+    /// instead materializes raw inputs so preparation matches the selected resources.
     fn select_ref<'o>(&'o self, to_tho_device_idx: usize, selector: CrossInputSelector) -> impl Future<Output = Result<<Self as BorrowRef>::Out<'o>, ThoError>> + Send
     where
         CrossInputSelector: 'o,
