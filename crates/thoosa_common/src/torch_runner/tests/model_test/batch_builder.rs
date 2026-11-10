@@ -8,7 +8,7 @@ use thoosa_shared::ThoError;
 use thoosa_shared::traits::{AsyncStage, OutId, RunCtx, Stage, WithId};
 
 use crate as thoosa_common;
-use crate::runner::common::cachable::{Cached, DevicesWrap, SelectRef};
+use crate::runner::common::cachable::{Cached, BorrowRef, DevicesWrap};
 use crate::runner::run_ctx::RunCtxImpl;
 use crate::tho_tensor::ThoTensor;
 
@@ -85,7 +85,7 @@ impl AsyncStage for BatchBuilder {
         let mut rows: Vec<Tensor> = Vec::with_capacity(label_vec.len());
         for (idx, feat) in feats.iter().enumerate() {
             let label = label_vec[idx];
-            let b_t = feat.select_ref(0, None).await?;
+            let b_t = feat.borrow_ref(0).await?;
 
             let t: &Tensor = &*b_t.as_ref().local()?;
             let y = Tensor::full([t.size()[0], 1], label, (t.kind(), t.device()));

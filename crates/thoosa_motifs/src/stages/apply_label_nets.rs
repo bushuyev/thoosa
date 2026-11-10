@@ -31,8 +31,6 @@ use thoosa_common::nets::common_nets::ThoModuleWithStore;
 use thoosa_common::nets::nodes::ThoModule;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
-#[cfg(test)]
-use thoosa_common::runner::common::cachable::SelectRef;
 use thoosa_common::runner::common::cachable::{BorrowRef, ConsumeData, DevicesWrap, ThoDataRef};
 use thoosa_common::runner::global_ctx::GlobalCtx;
 #[cfg(test)]
@@ -63,8 +61,6 @@ use crate::stages::apply_motif_nets::SyncApplyMotifNet;
 #[cfg(test)]
 use crate::stages::load_motif_net::MotifNetMeta;
 use crate::stages::stage_ids::APPLY_LABEL_NET;
-#[cfg(test)]
-use crate::stages::stft::SyncStftSelector;
 use thoosa_common::dims::ChannelsData;
 use thoosa_common::instance_cache::InstanceCache;
 use thoosa_common::ipc::cuda_worker::{AllTensors, WokerRunCtx, WorkerStageInput};
@@ -273,7 +269,7 @@ where
                 #[cfg(test)]
                 {
                     {
-                        let input = SelectRef::select_ref(&input, ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
+                        let input = BorrowRef::borrow_ref(&input, ctx.tho_device_idx()).await?;
                         trace!("ApplyLabelNets::run: input=\n{}", input.as_ref());
                         Ok::<(), ThoError>(())
                     }?;
@@ -287,7 +283,7 @@ where
                 #[cfg(test)]
                 {
                     {
-                        let probs = SelectRef::select_ref(&motif_probs, ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
+                        let probs = BorrowRef::borrow_ref(&motif_probs, ctx.tho_device_idx()).await?;
                         trace!("ApplyLabelNets::run: probs=\n{}", probs.as_ref().data());
                         Ok::<(), ThoError>(())
                     }?;
@@ -1005,7 +1001,6 @@ mod tests {
     use crate::stages::apply_label_nets::{ApplyLabelNets, logit};
     use crate::stages::apply_motif_nets::ApplyMotifNets;
     use crate::stages::find_motifs_run_config::FindMotifsRunConfig;
-    use crate::stages::stft::SyncStftSelector;
     use crate::train_nets::{FinalNetParams, LabelNetParams, LabelNetTypeParams, MotifCosine2DNetArgs, MotifNetParams, MotifNetTypeArgs, TrainMotifNetRunConfig};
     use log::debug;
     use parking_lot::RwLock;
@@ -1020,7 +1015,7 @@ mod tests {
     use thoosa_common::nets::batches::BatchLengths;
     use thoosa_common::nets::common_nets::{CommonTrainingRunConfig, LinLenNetParams, ThoModuleWithStore};
     use thoosa_common::nets::nodes::{ThoClosureModule, ThoModule};
-    use thoosa_common::runner::common::cachable::{DevicesWrap, SelectRef};
+    use thoosa_common::runner::common::cachable::{BorrowRef, DevicesWrap};
     use thoosa_common::runner::common::mock_run_ctx;
     use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
@@ -1302,9 +1297,9 @@ mod tests {
         for (output, expected_id) in [&out, &other, &later].into_iter().zip(expected_ids) {
             assert_eq!(output.id(), &expected_id, "each resource must keep its aggregate output identity");
         }
-        let out = SelectRef::select_ref(&out, 0, None::<SyncStftSelector>).await?;
+        let out = BorrowRef::borrow_ref(&out, 0).await?;
         for other in [&other, &later] {
-            let other = SelectRef::select_ref(other, 0, None::<SyncStftSelector>).await?;
+            let other = BorrowRef::borrow_ref(other, 0).await?;
             assert!(tch_result(out.as_ref().local()?.f_allclose(&*other.as_ref().local()?, 1e-6, 1e-6, false))?, "per-resource output ids must not change label order");
         }
         let out = tch_result(out.as_ref().local()?.f_squeeze_dim(-1))?;

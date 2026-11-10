@@ -240,15 +240,12 @@ impl BorrowRef for ClcResourcesMotifsDistInputDeviceWrapper {
 }
 
 impl SelectRef<ClcResourcesMotifsDistInputDeviceWrapperSelector> for ClcResourcesMotifsDistInputDeviceWrapper {
-    fn select_ref<'a>(&'a self, to_device_idx: usize, selector: Option<ClcResourcesMotifsDistInputDeviceWrapperSelector>) -> impl Future<Output = Result<<Self as BorrowRef>::Out<'a>, ThoError>> + Send
+    fn select_ref<'a>(&'a self, to_device_idx: usize, selector: ClcResourcesMotifsDistInputDeviceWrapperSelector) -> impl Future<Output = Result<<Self as BorrowRef>::Out<'a>, ThoError>> + Send
     where
         ClcResourcesMotifsDistInputDeviceWrapperSelector: 'a,
         Self: 'a,
     {
         async move {
-            let Some(selector) = selector else {
-                return BorrowRef::borrow_ref(self, to_device_idx).await;
-            };
             let range = selector.resources_batch_range.start as usize..selector.resources_batch_range.end as usize;
             let mut batch = Vec::with_capacity(range.len());
             for tensor in &self.batch[range.clone()] {

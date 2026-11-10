@@ -11,7 +11,6 @@ use crate::stages::resources_motifs_clc_dist::{ClcResourcesMotifsDist, ClcResour
 use crate::stages::slices_iter::{ResourceSlices, SlicesIter};
 use crate::stages::stacked_moitfs_loader::{StackedMotifsInput, StackedMotifsLoader, StackedMotifsOutput, StackedMotifsOutputId};
 use crate::stages::stage_ids::EXTEND_MOTIFS;
-use crate::stages::stft::SyncStftSelector;
 use anyhow::Context as _;
 use async_trait::async_trait;
 use log::{debug, warn};
@@ -202,7 +201,7 @@ where
     async fn clc_stacked_motifs_statistics(load_and_clc_dist: Arc<MotifStats<ML, L, C>>, motif_data: Arc<DevicesWrap<StackedMotifsOutput>>, slices_selector_metric: Metrics, mut ctx: C) -> Result<Arc<DevicesWrap<ThoTensor<ChannelsMotifsDists, SynKey>>>, ThoError> {
         // TODO: move this into a dedicated stage and cache the resulting motifs stats separately from stacked motifs.
         let (channels_motif_ids, find_motifs_run_config, max_motif_slices) = {
-            let motif_data = SelectRef::select_ref(&motif_data, ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
+            let motif_data = BorrowRef::borrow_ref(&motif_data, ctx.tho_device_idx()).await?;
             let motif_data = motif_data.as_ref();
             let channels_motif_ids = motif_data.motifs.extra().0.clone();
             let find_motifs_run_config = Arc::clone(&motif_data.motifs.extra().1);
@@ -661,15 +660,12 @@ impl BorrowRef for SelectMotifsInputSelectorWrap {
 }
 
 impl SelectRef<SelectMotifsInputSelector> for SelectMotifsInputSelectorWrap {
-    fn select_ref<'a>(&'a self, to_device_idx: usize, selector: Option<SelectMotifsInputSelector>) -> impl Future<Output = Result<<Self as BorrowRef>::Out<'a>, ThoError>> + Send
+    fn select_ref<'a>(&'a self, to_device_idx: usize, selector: SelectMotifsInputSelector) -> impl Future<Output = Result<<Self as BorrowRef>::Out<'a>, ThoError>> + Send
     where
         SelectMotifsInputSelector: 'a,
         Self: 'a,
     {
         async move {
-            let Some(selector) = selector else {
-                return BorrowRef::borrow_ref(self, to_device_idx).await;
-            };
             let selector = selector.batch_selector;
             let (batch_wrappers, resource_ids, resource_offsets) = match &selector {
                 RangeOrSlice::Full => (self.batch.as_slice(), self.resource_ids.as_slice(), self.resource_offsets.as_slice()),
@@ -685,7 +681,7 @@ impl SelectRef<SelectMotifsInputSelector> for SelectMotifsInputSelectorWrap {
                 RangeOrSlice::Slice((_, range)) => {
                     let channels = batch_wrappers[0].size().dim_0();
                     let tensor_selector = ChannelsDataSelector([0, range.start].into()..[channels, range.end].into());
-                    batch.push(t!(SelectRef::select_ref(&batch_wrappers[0], to_device_idx, Some(tensor_selector))).await?);
+                    batch.push(t!(SelectRef::select_ref(&batch_wrappers[0], to_device_idx, tensor_selector)).await?);
                     let range_offset = u32::try_from(range.start).with_context(|| format!("invalid batch slice start: {}", range.start))?;
                     let resource_offsets = vec![resource_offsets[0] + range_offset];
                     let stacked_motifs = t!(self.stacked_motifs.load_from_any_device_(to_device_idx)).await?;
@@ -1148,7 +1144,7 @@ mod tests {
         let motifs_stats = ExtendMotifsStage::<MockTensorLoader, MockMotifLoader, MockRunCtx>::clc_stacked_motifs_statistics(clc_dist, motif_data, metric, ctx.branch(false)).await?;
 
         let _ctx_for_data = ctx.branch(false);
-        let motifs_stats = SelectRef::select_ref(&motifs_stats, 0, Some(SyncStftSelector)).await?;
+        let motifs_stats = SelectRef::select_ref(&motifs_stats, 0, SyncStftSelector).await?;
         let motifs_stats_t = motifs_stats.local()?;
 
         assert_eq!(motifs_stats_t.size(), vec![2, 4]);

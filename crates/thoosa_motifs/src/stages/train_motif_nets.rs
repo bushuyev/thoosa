@@ -25,7 +25,7 @@ type MotifsInitFn = InitFn<dyn crate::motifs_ws::MotifsWorkspace>;
 use thoosa_common::ipc::proxy::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage};
 use thoosa_common::ipc::wraps::SyncStageIpcWrapper;
 use thoosa_common::ipc::wraps::{WorkerWrapper, WorkerWrapperWithState};
-use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, SelectRef, ThoDataRef};
+use thoosa_common::runner::common::cachable::{Cached, BorrowRef, DevicesWrap, ThoDataRef};
 use thoosa_common::runner::oom_handler::{Adjusters, NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, OOMHandler, WithRunCtxContext, run_ctx_adjuster};
 use thoosa_common::runner::run_ctx::RunCtxImpl;
 use thoosa_shared::traits::MaxParallelCtx;
@@ -36,7 +36,7 @@ use crate::stages::motif_loader::{
 };
 use crate::stages::motifs_batch_builder::make_batch_with;
 use crate::stages::stage_ids::TRAIN_MOTIF_NETS;
-use crate::stages::stft::{Stft, SyncStft, SyncStftSelector};
+use crate::stages::stft::{Stft, SyncStft};
 use crate::stages::train_label_nets::{SYNC_LABEL_BATCH_ENDPOINT, sync_label_batch_endpoint_init};
 use crate::train_nets::{MotifNetParams, MotifNetTypeArgs, MotifNetTypeParams, MotifsBy, TrainMotifNetRunConfig, TrainMotifNetRunConfigFields};
 use mockall_double::double;
@@ -221,7 +221,7 @@ where
         let motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>> = t!(Arc::clone(&self.motif_loader).run_cached(Arc::clone(&self.motif_loader_input), ctx.branch(false),)).await?;
 
         if GlobalCtx::global().is_ipc() {
-            let motif = t!(motif.select_ref(ctx.tho_device_idx(), None::<SyncStftSelector>)).await?;
+            let motif = t!(motif.borrow_ref(ctx.tho_device_idx())).await?;
             let motif = motif.as_ref().data();
             let motif = motif.clone_ref()?;
 
@@ -245,13 +245,13 @@ where
             //TODO extract and use train_motif_step_endpoint_init
             let cosine_motif = match &run_config.net {
                 MotifNetTypeArgs::CosineNet(_) => {
-                    let motif_ref = t!(motif.select_ref(ctx.tho_device_idx(), None::<SyncStftSelector>)).await?;
+                    let motif_ref = t!(motif.borrow_ref(ctx.tho_device_idx())).await?;
                     Some(Arc::new(copy_motif(motif_ref.as_ref().data())?))
                 }
                 MotifNetTypeArgs::Cosine2DNet(args) => {
                     let stft = Arc::new(RandomSlicesStft::new_for_dims(args.stft_config.clone())?);
                     let motif_input = {
-                        let motif_ref = t!(motif.select_ref(ctx.tho_device_idx(), None::<SyncStftSelector>)).await?;
+                        let motif_ref = t!(motif.borrow_ref(ctx.tho_device_idx())).await?;
                         copy_motif(motif_ref.as_ref().data())
                     }?;
                     let motif_specs = t!(run_stft_as_motif_slices(&stft, motif_input, ctx.branch(false), "train_motif_nets_motif_stft")).await?;
@@ -604,7 +604,7 @@ where
                                     async move {
                                         let motif = motif.await?;
                                         let stft_input = {
-                                            let motif_ref = motif.select_ref(ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
+                                            let motif_ref = motif.borrow_ref(ctx.tho_device_idx()).await?;
                                             let motif = motif_ref.as_ref();
                                             copy_motif(motif.data())
                                         }?;

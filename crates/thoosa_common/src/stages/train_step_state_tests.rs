@@ -575,7 +575,7 @@ async fn test_train_transaction_cpu() -> Result<(), ThoError> {
         for cycle in 0..3 {
             let input = uneven_input(true)?;
             let wrapper = TrainStepInputWrapper::new(uneven_input(true)?);
-            let selected = wrapper.select_ref(0, Some((0..2).into())).await?;
+            let selected = wrapper.select_ref(0, (0..2).into()).await?;
             let mut state = MutexGuard::map(split.train_module.lock().await, |state| &mut state.module);
             let saved_info = state.state_info()?;
             let mut saved_tensors = Vec::new();

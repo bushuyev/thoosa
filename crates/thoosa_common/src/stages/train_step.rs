@@ -728,15 +728,12 @@ impl<DI: Dims, DO: Dims> BorrowRef for TrainStepInputWrapper<DI, DO> {
 }
 
 impl<DI: Dims, DO: Dims> SelectRef<TrainStepInputSelector> for TrainStepInputWrapper<DI, DO> {
-    fn select_ref<'a>(&'a self, to_tho_device_idx: usize, selector: Option<TrainStepInputSelector>) -> impl Future<Output = Result<<Self as BorrowRef>::Out<'a>, ThoError>> + Send
+    fn select_ref<'a>(&'a self, to_tho_device_idx: usize, selector: TrainStepInputSelector) -> impl Future<Output = Result<<Self as BorrowRef>::Out<'a>, ThoError>> + Send
     where
         TrainStepInputSelector: 'a,
         Self: 'a,
     {
         async move {
-            let Some(selector) = selector else {
-                return BorrowRef::borrow_ref(self, to_tho_device_idx).await;
-            };
             let selected = if self.input.train() {
                 // The selector changes execution granularity, never the logical training batch.
                 let len = self.batch_len()?;

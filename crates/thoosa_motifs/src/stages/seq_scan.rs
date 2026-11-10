@@ -1,7 +1,6 @@
 use crate::motifs_store::MotifsStore;
 use crate::stages::cross_loader::ResourcesConfigInput;
 use crate::stages::find_motifs::{FilteredLoaderStage, LoaderStageChoice};
-use crate::stages::stft::SyncStftSelector;
 use anyhow::Context as _;
 use async_trait::async_trait;
 use log::{debug, info};
@@ -14,7 +13,7 @@ use tch::Tensor;
 use tch::kind::Kind;
 use thoosa_common::dims::ChannelsData;
 use thoosa_common::resources::SavableResult;
-use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, SelectRef};
+use thoosa_common::runner::common::cachable::{Cached, BorrowRef, DevicesWrap};
 use thoosa_common::stages::freq_filter::FreqFilter;
 use thoosa_common::stages::seq_scan::{MeanAbsSeqScanMetricConfig, MeanPowerSeqScanMetricConfig, SeqScanMetric, SeqScanRunConfig};
 use thoosa_common::stages::stages_seq::{PairStage, SingleOrPair};
@@ -212,7 +211,7 @@ where
                     batch_len = 0;
 
                     {
-                        let tensor = loaded.select_ref(ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
+                        let tensor = loaded.borrow_ref(ctx.tho_device_idx()).await?;
                         assign_resource_to_buckets_chunked(resource, &*tensor.local()?, &configured_stage.run_config, max_chunk_len, &mut buckets)
                     }?;
                     continue;
@@ -255,7 +254,7 @@ where
         return Ok(());
     }
 
-    let tensors = futures_util::future::try_join_all(batch_tensors.iter().map(|tensor| tensor.select_ref(ctx.tho_device_idx(), None::<SyncStftSelector>))).await?;
+    let tensors = futures_util::future::try_join_all(batch_tensors.iter().map(|tensor| tensor.borrow_ref(ctx.tho_device_idx()))).await?;
     {
         for (resource, tensor) in batch_resources.iter().zip(tensors.iter()) {
             assign_resource_to_buckets(resource, &*tensor.local()?, run_config, buckets)?;

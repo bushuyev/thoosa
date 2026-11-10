@@ -1409,7 +1409,6 @@ mod cli_tests {
     use crate::stages::find_motifs_run_config::{
         AccumulateStatsRangeOrValue, AggrRangeOrValue, CrossLoaderRunConfigRangeOrValue, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, FinderKindRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, QuantileAggrRangeOrValue, SlicesFilterRangeOrValue,
     };
-    use crate::stages::stft::SyncStftSelector;
     use crate::tch_test_utils::resource_tensor_two_easy_motifs;
     use clap::Parser;
     use log::debug;
@@ -1421,7 +1420,7 @@ mod cli_tests {
     use tch::Tensor;
     use thoosa_common::args::CommonArgs;
     use thoosa_common::debug_plot;
-    use thoosa_common::runner::common::cachable::{DevicesWrap, SelectRef};
+    use thoosa_common::runner::common::cachable::{BorrowRef, DevicesWrap};
     use thoosa_common::runner::common::{MockRunCtx, mock_run_ctx};
     use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
@@ -1772,8 +1771,8 @@ mod cli_tests {
             let pulse_sin_filtered_t = freq_filter.run(Arc::new(DevicesWrap::wrap(ThoTensor::new("".into(), pulse_sin_t.shallow_clone())?)), ctx.branch(false)).await?;
 
             {
-                let pulse_triangle_t = SelectRef::select_ref(&pulse_triangle_filtered_t, ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
-                let pulse_sin_t = SelectRef::select_ref(&pulse_sin_filtered_t, ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
+                let pulse_triangle_t = BorrowRef::borrow_ref(&pulse_triangle_filtered_t, ctx.tho_device_idx()).await?;
+                let pulse_sin_t = BorrowRef::borrow_ref(&pulse_sin_filtered_t, ctx.tho_device_idx()).await?;
 
                 debug_plot!(&*pulse_triangle_t.as_ref().local()?, "pulse_triangle_{freq}_filtered_t")?;
                 debug_plot!(&*pulse_sin_t.as_ref().local()?, "pulse_sin_{freq}_filtered_t")?;

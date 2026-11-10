@@ -1053,7 +1053,6 @@ mod tests {
     use crate::motifs_store::{MockMotifsStoreBuilder, MotifsStore, create_motif_tables};
     use crate::stages::apply_motif_nets::{ApplyMotifNets, motif_test_net_};
     use crate::stages::cross_loader::ResourcesConfigInput;
-    use crate::stages::stft::SyncStftSelector;
     use crate::stages::tensor_loader::mock_tensor_loader;
     use crate::stages::train_label_nets::{ResourcesBatch, TrainLabelNetRunConfig, TrainLabelNetRunConfigFields, TrainLabelNetRunConfigResult, new_train_label_nets};
     use crate::tch_test_utils::motifs_tensor;
@@ -1077,7 +1076,7 @@ mod tests {
     use thoosa_common::nets::batches::AsyncDataBatch;
     use thoosa_common::nets::common_nets::{CommonTrainingRunConfig, CommonTrainingRunConfigFields, LinLenNetParams, OptConfig};
     use thoosa_common::resources::{Labeled, NetResources, SavableResult};
-    use thoosa_common::runner::common::cachable::{DevicesWrap, SelectRef};
+    use thoosa_common::runner::common::cachable::{BorrowRef, DevicesWrap};
     use thoosa_common::runner::common::{MockRunCtx, mock_run_ctx};
     use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
@@ -1339,8 +1338,8 @@ mod tests {
             resources_0_valid,
             Arc::new(|x_1_wrapped: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>, x_0_wrapped: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>, ctx: MockRunCtx| {
                 async move {
-                    let x_1 = try_join_all(x_1_wrapped.iter().map(|x| x.select_ref(ctx.tho_device_idx(), None::<SyncStftSelector>))).await?;
-                    let x_0 = try_join_all(x_0_wrapped.iter().map(|x| x.select_ref(ctx.tho_device_idx(), None::<SyncStftSelector>))).await?;
+                    let x_1 = try_join_all(x_1_wrapped.iter().map(|x| x.borrow_ref(ctx.tho_device_idx()))).await?;
+                    let x_0 = try_join_all(x_0_wrapped.iter().map(|x| x.borrow_ref(ctx.tho_device_idx()))).await?;
                     {
                         debug!("ResourcesBatch::train_batch_iter: x_1={x_1:?} x_0={x_0:?}");
                         let x_1 = tch_result(Tensor::f_stack(&x_1.into_iter().map(|v| tch_result(v.local()?.f_detach_copy())).collect::<Result<Vec<_>, ThoError>>()?, 0))?;
@@ -1400,8 +1399,8 @@ mod tests {
             resources_0_valid,
             Arc::new(|x_1_wrapped: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>, x_0_wrapped: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>, ctx: MockRunCtx| {
                 async move {
-                    let x_1 = try_join_all(x_1_wrapped.iter().map(|x| x.select_ref(ctx.tho_device_idx(), None::<SyncStftSelector>))).await?;
-                    let x_0 = try_join_all(x_0_wrapped.iter().map(|x| x.select_ref(ctx.tho_device_idx(), None::<SyncStftSelector>))).await?;
+                    let x_1 = try_join_all(x_1_wrapped.iter().map(|x| x.borrow_ref(ctx.tho_device_idx()))).await?;
+                    let x_0 = try_join_all(x_0_wrapped.iter().map(|x| x.borrow_ref(ctx.tho_device_idx()))).await?;
                     {
                         debug!("ResourcesBatch::train_batch_iter: x_1={x_1:?} x_0={x_0:?}");
                         let x_1 = tch_result(Tensor::f_stack(&x_1.into_iter().map(|v| tch_result(v.local()?.f_detach_copy())).collect::<Result<Vec<_>, ThoError>>()?, 0))?;

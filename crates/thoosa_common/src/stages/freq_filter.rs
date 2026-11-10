@@ -863,7 +863,7 @@ mod tests {
     use super::*;
     use crate::ipc::cuda_worker::{CudaWorker, InitFn};
     use crate::ipc::worker_msg::OpResult;
-    use crate::runner::common::cachable::SelectRef;
+    use crate::runner::common::cachable::BorrowRef;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use crate::transforms::filters::ZeroPadding;
     use crate::ws::mock_ws_simp;
@@ -1065,7 +1065,7 @@ mod tests {
                         // Keep the async loader alive across replacement, just as
                         // RandomSlicesLoader does between training trial attempts.
                         let output = Arc::clone(&filter).run(Arc::clone(&input), RunCtxImpl::new(1, "filter reset")).await?;
-                        let output = output.select_ref(0, None::<ChannelsDataSelector>).await?;
+                        let output = output.borrow_ref(0).await?;
                         assert!(tch_result(output.as_ref().local()?.f_allclose(&expected, 1e-4, 1e-5, false))?, "filter changed after reset {cycle}");
                         let current = SyncFreqFilter::<RunCtxImpl>::new(init.clone()).await?;
                         assert!(Arc::ptr_eq(&previous, &current), "recovery replaced the cached proxy instead of its endpoint");
@@ -1115,7 +1115,7 @@ mod tests {
                     // the successful future whose output now has no replicas.
                     let after = Arc::clone(&filter).run_cached(input, ctx.branch(false)).await?;
                     assert!(!Arc::ptr_eq(&before, &after), "reset left an empty output in the cache");
-                    let output = after.select_ref(0, None::<ChannelsDataSelector>).await?;
+                    let output = after.borrow_ref(0).await?;
                     assert!(tch_result(output.as_ref().local()?.f_allclose(&expected, 1e-4, 1e-5, false))?, "recomputed filter output changed after reset");
                     Ok(())
                 })

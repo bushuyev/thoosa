@@ -179,20 +179,15 @@ impl BorrowRef for ABClcSyncStageInputWrapper {
 }
 
 impl SelectRef<ABClcSyncStageInputWrapperSelector> for ABClcSyncStageInputWrapper {
-    fn select_ref<'a>(&'a self, to_device_idx: usize, selector: Option<ABClcSyncStageInputWrapperSelector>) -> impl Future<Output = Result<<Self as BorrowRef>::Out<'a>, ThoError>> + Send
+    fn select_ref<'a>(&'a self, to_device_idx: usize, selector: ABClcSyncStageInputWrapperSelector) -> impl Future<Output = Result<<Self as BorrowRef>::Out<'a>, ThoError>> + Send
     where
         ABClcSyncStageInputWrapperSelector: 'a,
         Self: 'a,
     {
         async move {
-            match selector {
-                None => BorrowRef::borrow_ref(self, to_device_idx).await,
-                Some(selector) => {
-                    let from_a = SelectRef::select_ref(&self.a_out, to_device_idx, Some(selector.a_select)).await?;
-                    let from_b = SelectRef::select_ref(&self.b_out, to_device_idx, Some(selector.b_select)).await?;
-                    Ok(ABClcSyncStageInput::from_data_refs(from_a, from_b))
-                }
-            }
+            let from_a = SelectRef::select_ref(&self.a_out, to_device_idx, selector.a_select).await?;
+            let from_b = SelectRef::select_ref(&self.b_out, to_device_idx, selector.b_select).await?;
+            Ok(ABClcSyncStageInput::from_data_refs(from_a, from_b))
         }
     }
 }

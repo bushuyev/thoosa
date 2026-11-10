@@ -77,7 +77,14 @@ impl ExecutionContext<'_> {
         for<'a> W::Out<'a>: Borrow<S::In<'a>> + Send,
     {
         let _inputs = input.protect(device);
-        stage.execute(SelectRef::select_ref(&input, device, selector), self, ctx).await
+        // Keep materialization lazy so state preparation still precedes input borrowing.
+        let prepared = async {
+            match selector {
+                Some(selector) => SelectRef::select_ref(&input, device, selector).await,
+                None => BorrowRef::borrow_ref(&input, device).await,
+            }
+        };
+        stage.execute(prepared, self, ctx).await
     }
 
     pub async fn consume_stage<'i, S, W>(&self, stage: Arc<S>, input: W, device: usize, ctx: S::Ctx) -> Result<ConsumeResult<S::In<'i>, S::Out>, ThoError>

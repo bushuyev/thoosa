@@ -198,10 +198,10 @@ async fn check_prepared_outer() -> Result<(), ThoError> {
         let selected = selectable
             .select_ref(
                 1,
-                Some(CrossInputSelector {
+                CrossInputSelector {
                     batch_0_selector: RangeOrSlice::Range(2..3),
                     batch_1_selector: RangeOrSlice::Slice((1, 2..5)),
-                }),
+                },
             )
             .await?;
         assert_eq!(selected.batch_0()[0].as_ref().id(), 3);
@@ -218,10 +218,10 @@ async fn check_prepared_outer() -> Result<(), ThoError> {
             selectable
                 .select_ref(
                     1,
-                    Some(CrossInputSelector {
+                    CrossInputSelector {
                         batch_0_selector: RangeOrSlice::Full,
                         batch_1_selector: selector
-                    })
+                    }
                 )
                 .await
                 .is_err()

@@ -565,7 +565,7 @@ impl BorrowRef for StackAppliedMotifNetsInputWrapper {
 }
 
 impl SelectRef<()> for StackAppliedMotifNetsInputWrapper {
-    async fn select_ref<'a>(&'a self, to_device_idx: usize, _selector: Option<()>) -> Result<Self::Out<'a>, ThoError>
+    async fn select_ref<'a>(&'a self, to_device_idx: usize, _selector: ()) -> Result<Self::Out<'a>, ThoError>
     where
         (): 'a,
         Self: 'a,
@@ -844,16 +844,13 @@ impl BorrowRef for ApplyMotifNetInputWrapper {
 }
 
 impl SelectRef<ChannelsDataSelector> for ApplyMotifNetInputWrapper {
-    fn select_ref<'a>(&'a self, to_device_idx: usize, selector: Option<ChannelsDataSelector>) -> impl Future<Output = Result<<Self as BorrowRef>::Out<'a>, ThoError>> + Send
+    fn select_ref<'a>(&'a self, to_device_idx: usize, selector: ChannelsDataSelector) -> impl Future<Output = Result<<Self as BorrowRef>::Out<'a>, ThoError>> + Send
     where
         ChannelsDataSelector: 'a,
         Self: 'a,
     {
         async move {
-            let Some(selector) = selector else {
-                return BorrowRef::borrow_ref(self, to_device_idx).await;
-            };
-            let batch = t!(SelectRef::select_ref(&self.batch, to_device_idx, Some(selector))).await?;
+            let batch = t!(SelectRef::select_ref(&self.batch, to_device_idx, selector)).await?;
             Ok(ApplyMotifNetInput::from_data_ref(batch))
         }
     }
@@ -1378,7 +1375,6 @@ pub mod tests {
     use crate::motifs_store::{MockMotifsStoreBuilder, MotifsStore};
     use crate::stages::apply_motif_nets::{ApplyMotifNets, dummy_motif_net, motif_test_net_, valid_partial_output_len};
     use crate::stages::find_motifs_run_config::FindMotifsRunConfig;
-    use crate::stages::stft::SyncStftSelector;
     use crate::tch_test_utils;
     use crate::train_nets::{MotifCosine2DNetArgs, MotifNetParams, MotifNetTypeArgs, TrainMotifNetRunConfig};
     use log::LevelFilter::Debug;
@@ -1398,7 +1394,7 @@ pub mod tests {
     use thoosa_common::dims::{AnyDims, Batch, ChannelsData, Slice};
     use thoosa_common::nets::common_nets::{CommonTrainingRunConfig, StftRunConfig, ThoModuleWithStore};
     use thoosa_common::nets::nodes::ThoModule;
-    use thoosa_common::runner::common::cachable::{DevicesWrap, SelectRef};
+    use thoosa_common::runner::common::cachable::{BorrowRef, DevicesWrap};
     use thoosa_common::runner::common::{MockRunCtx, mock_run_ctx};
     use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
@@ -1658,7 +1654,7 @@ pub mod tests {
         let slices = ((input_n_0 as i64 - motif_width) / apply_motif_net_step as i64) + 1;
         let ctx_for_data = mock_run_ctx::default(1);
         {
-            let r = SelectRef::select_ref(&out, ctx_for_data.tho_device_idx(), None::<SyncStftSelector>).await?;
+            let r = BorrowRef::borrow_ref(&out, ctx_for_data.tho_device_idx()).await?;
             let r = r.as_ref();
             debug!("test_apply_motif_nets_3_channels_1_motif:  matches={:?}", r);
             assert_eq!(r.extra().as_slice(), &[slices, slices, slices]);
@@ -1772,7 +1768,7 @@ pub mod tests {
         let max_len = *expected_lengths.iter().max().expect("no max len");
 
         {
-            let out = SelectRef::select_ref(&out, 1, None::<SyncStftSelector>).await?;
+            let out = BorrowRef::borrow_ref(&out, 1).await?;
             let out = out.as_ref();
             assert_eq!(out.extra().as_slice(), expected_lengths.as_slice());
             assert_eq!(out.data().size(), vec![2, max_len]);
@@ -1877,7 +1873,7 @@ pub mod tests {
         let ctx_for_data = thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(run_ctx)).branch(false);
 
         {
-            let r = SelectRef::select_ref(&out, ctx_for_data.tho_device_idx(), None::<SyncStftSelector>).await?;
+            let r = BorrowRef::borrow_ref(&out, ctx_for_data.tho_device_idx()).await?;
             let r = r.as_ref();
             debug!("test_apply_motif_nets_3_channels_1_motif:  matches={:?}", r);
             assert_eq!(r.extra().as_slice(), &[slices]);

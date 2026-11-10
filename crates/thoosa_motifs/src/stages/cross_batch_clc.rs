@@ -324,15 +324,12 @@ impl<'a, R> SelectRef<CrossInputBatch1Selector> for CrossInput<'a, R>
 where
     R: AsRef<Resource> + Clone + Debug + Send + Sync + 'static,
 {
-    fn select_ref<'o>(&'o self, to_device_idx: usize, selector: Option<CrossInputBatch1Selector>) -> impl Future<Output = Result<<Self as BorrowRef>::Out<'o>, ThoError>> + Send
+    fn select_ref<'o>(&'o self, _to_device_idx: usize, selector: CrossInputBatch1Selector) -> impl Future<Output = Result<<Self as BorrowRef>::Out<'o>, ThoError>> + Send
     where
         CrossInputBatch1Selector: 'o,
         Self: 'o,
     {
         async move {
-            let Some(selector) = selector else {
-                return BorrowRef::borrow_ref(self, to_device_idx).await;
-            };
             self.borrow_inner_range(checked_batch_range(&selector.resources_batch_range, self.inner.len())?)
         }
     }
@@ -857,11 +854,11 @@ mod batch_tests {
     #[tokio::test]
     async fn test_batch_selection_and_wire_validation() -> anyhow::Result<()> {
         let input = CrossInput::new("cross".into(), remote_batch()?, remote_batch()?);
-        let selected = input.select_ref(1, Some((1..3).into())).await?;
+        let selected = input.select_ref(1, (1..3).into()).await?;
         assert_eq!(selected.inner.resources().iter().map(|r| r.as_ref().id()).collect::<Vec<_>>(), vec![11, 12]);
         assert_eq!(selected.inner.lengths(), &[1, 7]);
-        assert!(input.select_ref(1, Some((-1..1).into())).await.is_err());
-        assert!(input.select_ref(1, Some((0..4).into())).await.is_err());
+        assert!(input.select_ref(1, (-1..1).into()).await.is_err());
+        assert!(input.select_ref(1, (0..4).into()).await.is_err());
         let wire = serde_json::to_value(&selected)?;
         let decoded: CrossInput<'static, Arc<Resource>> = serde_json::from_value(wire.clone())?;
         assert_eq!(decoded.inner.resources().iter().map(|r| r.as_ref().id()).collect::<Vec<_>>(), vec![11, 12]);

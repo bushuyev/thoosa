@@ -880,7 +880,7 @@ impl RangeOrSlice {
             let selector = ChannelsDataSelector([0, range.start].into()..[channels, range.end].into());
             // Derive the selected length from the result; Resource::length still
             // describes the original file and may differ after filtering/slicing.
-            loaded.push(batch.resources()[*index].clone(), t!(SelectRef::select_ref(tensor, to_device_idx, Some(selector))).await?)?;
+            loaded.push(batch.resources()[*index].clone(), t!(SelectRef::select_ref(tensor, to_device_idx, selector)).await?)?;
         } else {
             let range = match self {
                 Self::Range(range) => checked_batch_range(range, batch.len())?,
@@ -921,18 +921,18 @@ impl BorrowRef for CrossInputSelectorWrap {
     where
         Self: 'o,
     {
-        self.select_ref(to_tho_device_idx, None)
+        // Full input borrowing uses the default selection without recursing into BorrowRef.
+        self.select_ref(to_tho_device_idx, CrossInputSelector::default())
     }
 }
 
 impl SelectRef<CrossInputSelector> for CrossInputSelectorWrap {
-    fn select_ref<'o>(&'o self, to_tho_device_idx: usize, selector: Option<CrossInputSelector>) -> impl Future<Output = Result<<Self as BorrowRef>::Out<'o>, ThoError>> + Send
+    fn select_ref<'o>(&'o self, to_tho_device_idx: usize, selector: CrossInputSelector) -> impl Future<Output = Result<<Self as BorrowRef>::Out<'o>, ThoError>> + Send
     where
         CrossInputSelector: 'o,
         Self: 'o,
     {
         async move {
-            let selector = selector.unwrap_or_default();
             // Inner resource/slice retries reuse the same outer preparation.
             // Retain the raw path for selectors that actually change the outer batch.
             let prepared = if matches!(selector.batch_0_selector, RangeOrSlice::Full) {
@@ -1372,7 +1372,7 @@ mod tests {
         let _selector = CrossInputSelector::default();
 
         let _run_ctx = RunCtxImpl::new(1, "test");
-        let data = SelectRef::select_ref(&input, 1, None).await?;
+        let data = BorrowRef::borrow_ref(&input, 1).await?;
 
         assert_eq!(data.tensors().len(), 4);
 
@@ -1419,7 +1419,7 @@ mod tests {
         assert!(matches!(&selector.batch_1_selector, RangeOrSlice::Slice((0, range)) if range.start == 0 && range.end == 4));
 
         let _run_ctx = RunCtxImpl::new(1, "test_adjuster_slice");
-        let data = SelectRef::select_ref(&input, 1, Some(selector.clone())).await?;
+        let data = SelectRef::select_ref(&input, 1, selector.clone()).await?;
 
         assert_eq!(data.tensors()[1].size()[1], 4);
 
@@ -1432,7 +1432,7 @@ mod tests {
         };
         assert!(matches!(&selector.batch_1_selector, RangeOrSlice::Slice((0, range)) if range.start == 4 && range.end == 8));
 
-        let data = SelectRef::select_ref(&input, 1, Some(selector.clone())).await?;
+        let data = SelectRef::select_ref(&input, 1, selector.clone()).await?;
 
         assert_eq!(data.tensors()[1].size()[1], 4);
 
@@ -1476,7 +1476,7 @@ mod tests {
         assert!(matches!(&selector.batch_1_selector, RangeOrSlice::Slice((0, range)) if range.start == 0 && range.end == 3));
 
         let _run_ctx = RunCtxImpl::new(1, "test_adjuster_slice_resources");
-        let data = SelectRef::select_ref(&input, 1, Some(selector.clone())).await?;
+        let data = SelectRef::select_ref(&input, 1, selector.clone()).await?;
 
         assert_eq!(data.batch_1()[0].id(), resources_1[0].id());
         assert_eq!(data.tensors()[1].size()[1], 3);
@@ -1490,7 +1490,7 @@ mod tests {
         };
         assert!(matches!(&selector.batch_1_selector, RangeOrSlice::Slice((0, range)) if range.start == 3 && range.end == 6));
 
-        let data = SelectRef::select_ref(&input, 1, Some(selector.clone())).await?;
+        let data = SelectRef::select_ref(&input, 1, selector.clone()).await?;
 
         assert_eq!(data.batch_1()[0].id(), resources_1[0].id());
         assert_eq!(data.tensors()[1].size()[1], 3);
@@ -1504,7 +1504,7 @@ mod tests {
         };
         assert!(matches!(&selector.batch_1_selector, RangeOrSlice::Slice((1, range)) if range.start == 0 && range.end == 3));
 
-        let data = SelectRef::select_ref(&input, 1, Some(selector)).await?;
+        let data = SelectRef::select_ref(&input, 1, selector).await?;
 
         assert_eq!(data.batch_1()[0].id(), resources_1[1].id());
         assert_eq!(data.tensors()[1].size()[1], 3);

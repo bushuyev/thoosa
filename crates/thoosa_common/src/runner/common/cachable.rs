@@ -517,67 +517,58 @@ where
     S: ThoSelector + Clone + Debug + Send,
     O: Select<S, Output = O> + Data + CopyToDevice + Send + Sync,
 {
-    fn select_ref<'o>(&'o self, to_tho_device_idx: usize, selector: Option<S>) -> impl std::future::Future<Output = Result<<Self as BorrowRef>::Out<'o>, ThoError>> + std::marker::Send
+    fn select_ref<'o>(&'o self, to_tho_device_idx: usize, selector: S) -> impl std::future::Future<Output = Result<<Self as BorrowRef>::Out<'o>, ThoError>> + std::marker::Send
     where
         O: 'o,
         S: 'o,
         Self: 'o,
     {
         async move {
-            match selector {
-                None => {
-                    debug!("DevicesWrap::borrow_to: no selector self.data.id={:?}", self.data.id);
+            debug!("DevicesWrap::borrow_to: selector={selector:?} self.data.id={:?}", self.data.id);
 
-                    BorrowRef::borrow_ref(self, to_tho_device_idx).await
-                }
-                Some(selector) => {
-                    debug!("DevicesWrap::borrow_to: selector={selector:?} self.data.id={:?}", self.data.id);
+            if self.data.is_resident_on_device(to_tho_device_idx) {
+                debug!("DevicesWrap::borrow_to: self.data.id={:?} is_resident_on_device", self.data.id);
 
-                    if self.data.is_resident_on_device(to_tho_device_idx) {
-                        debug!("DevicesWrap::borrow_to: self.data.id={:?} is_resident_on_device", self.data.id);
-
-                        let guard = t!(self.data.cached_data[to_tho_device_idx].read()).await;
-                        match guard.as_ref() {
-                            None => {
-                                self.data.mark_not_resident_on_device(to_tho_device_idx);
-                                warn!("BorrowRef<S> for DevicesWrap::borrow_to: resident_on_device  flag for {to_tho_device_idx} was stale")
-                            }
-                            Some(data) => {
-                                let sub_t: O = data.subview(selector.clone())?;
-                                debug!("DevicesWrap::with_selected_data_ref: sub_t.size={:?}", sub_t.size());
-
-                                return Ok(ThoDataRef::Owned(sub_t));
-                            }
-                        }
+                let guard = t!(self.data.cached_data[to_tho_device_idx].read()).await;
+                match guard.as_ref() {
+                    None => {
+                        self.data.mark_not_resident_on_device(to_tho_device_idx);
+                        warn!("BorrowRef<S> for DevicesWrap::borrow_to: resident_on_device  flag for {to_tho_device_idx} was stale")
                     }
+                    Some(data) => {
+                        let sub_t: O = data.subview(selector.clone())?;
+                        debug!("DevicesWrap::with_selected_data_ref: sub_t.size={:?}", sub_t.size());
 
-                    for (source_device_idx, op) in self.data.cached_data.iter().enumerate() {
-                        if !self.data.is_resident_on_device(source_device_idx) {
-                            continue;
-                        }
-
-                        let source_read_guard: RwLockReadGuard<'_, Option<O>> = t!(op.read()).await;
-
-                        if let Some(src) = source_read_guard.as_ref() {
-                            let sub_t: O = src.subview(selector.clone())?;
-
-                            debug!("DevicesWrap::with_selected_data_ref: sub_t.size={:?} copying to to_device_idx={to_tho_device_idx} self.data.copy_to_device={:?}", sub_t.size(), self.data.copy_to_device);
-
-                            let data = match &self.data.copy_to_device {
-                                Some(copy_to_device) => t!(copy_to_device.copy(&sub_t, to_tho_device_idx)).await?,
-                                None => sub_t,
-                            };
-
-                            debug!("DevicesWrap::with_selected_data_ref: data={data:?}");
-
-                            return Ok(ThoDataRef::Owned(data));
-                        }
-                        drop(source_read_guard);
+                        return Ok(ThoDataRef::Owned(sub_t));
                     }
-
-                    Err(ThoError::NotFound(Some(format!("select_ref: id={:?} selector={selector:?}", self.data.id))))
                 }
             }
+
+            for (source_device_idx, op) in self.data.cached_data.iter().enumerate() {
+                if !self.data.is_resident_on_device(source_device_idx) {
+                    continue;
+                }
+
+                let source_read_guard: RwLockReadGuard<'_, Option<O>> = t!(op.read()).await;
+
+                if let Some(src) = source_read_guard.as_ref() {
+                    let sub_t: O = src.subview(selector.clone())?;
+
+                    debug!("DevicesWrap::with_selected_data_ref: sub_t.size={:?} copying to to_device_idx={to_tho_device_idx} self.data.copy_to_device={:?}", sub_t.size(), self.data.copy_to_device);
+
+                    let data = match &self.data.copy_to_device {
+                        Some(copy_to_device) => t!(copy_to_device.copy(&sub_t, to_tho_device_idx)).await?,
+                        None => sub_t,
+                    };
+
+                    debug!("DevicesWrap::with_selected_data_ref: data={data:?}");
+
+                    return Ok(ThoDataRef::Owned(data));
+                }
+                drop(source_read_guard);
+            }
+
+            Err(ThoError::NotFound(Some(format!("select_ref: id={:?} selector={selector:?}", self.data.id))))
         }
     }
 }
@@ -1103,6 +1094,8 @@ pub trait BorrowRef {
     /// Scalar and already-materialized kernel inputs return an empty lease.
     fn protect(&self, device: usize) -> ResidencyLease;
 
+    /// Materialize the complete input on the requested device without selecting a subset.
+    /// The returned value keeps any required read locks alive while the input is in use.
     fn borrow_ref<'o>(&'o self, to_tho_device_idx: usize) -> impl Future<Output = Result<Self::Out<'o>, ThoError>> + Send
     where
         Self: 'o;
@@ -1133,7 +1126,9 @@ pub trait SelectRef<S>: BorrowRef
 where
     S: ThoSelector + Clone + Debug + Send,
 {
-    fn select_ref<'o>(&'o self, to_tho_device_idx: usize, selector: Option<S> /*TODO remove Option*/) -> impl Future<Output = Result<<Self as BorrowRef>::Out<'o>, ThoError>> + Send
+    /// Apply `selector` and materialize the resulting input on the requested device.
+    /// This supports smaller views or execution chunks during OOM retries; use `borrow_ref` for the complete input.
+    fn select_ref<'o>(&'o self, to_tho_device_idx: usize, selector: S) -> impl Future<Output = Result<<Self as BorrowRef>::Out<'o>, ThoError>> + Send
     where
         S: 'o,
         Self: 'o;
@@ -1144,7 +1139,7 @@ where
     BR: SelectRef<S> + Sync + Send,
     S: ThoSelector + Clone + Debug + Send,
 {
-    fn select_ref<'o>(&'o self, to_tho_device_idx: usize, selector: Option<S>) -> impl Future<Output = Result<<Self as BorrowRef>::Out<'o>, ThoError>> + Send
+    fn select_ref<'o>(&'o self, to_tho_device_idx: usize, selector: S) -> impl Future<Output = Result<<Self as BorrowRef>::Out<'o>, ThoError>> + Send
     where
         S: 'o,
         Self: 'o,
@@ -1199,11 +1194,11 @@ mod tests {
     use std::time::Duration;
     use thoosa_shared::CopyToDevice;
     use thoosa_shared::tracked_await::t;
-    use thoosa_shared::traits::{DummyWithId as DummyCachableId, RangeSelector, RunCtx, WithId};
+    use thoosa_shared::traits::{DummyWithId as DummyCachableId, RunCtx, WithId};
     use tokio::sync::{Notify, Semaphore};
     use tokio::time::timeout;
     extern crate self as caching_runner;
-    use crate::runner::common::cachable::{DevicesWrap, InflightRole, SelectRef, join_or_start_inflight};
+    use crate::runner::common::cachable::{join_or_start_inflight, BorrowRef, DevicesWrap, InflightRole};
     use crate::runner::common::mock_run_ctx;
     pub use crate::runner::common::*;
     use crate::runner::global_ctx;
@@ -1540,7 +1535,7 @@ mod tests {
 
         let _ctx_for_data = mock_run_ctx::default(1);
 
-        let data_on_1 = tested.select_ref(1, None).await?;
+        let data_on_1 = tested.borrow_ref(1).await?;
 
         assert_eq!(data_on_1.as_ref().device(), &1);
         drop(data_on_1); //dump_to_cpu: can't drop self.id=DummyCachableId("id"), locked
@@ -1570,10 +1565,10 @@ mod tests {
 
         //TODO check asserts were actually invoked
         let ctx_for_data = mock_run_ctx::default(1);
-        let a = wrap_a.select_ref(ctx_for_data.tho_device_idx(), None::<RangeSelector>).await?;
-        let first = futures_util::future::try_join_all(wrap_vec.iter().map(|item| item.select_ref(ctx_for_data.tho_device_idx(), None::<RangeSelector>))).await?;
-        let b = wrap_b.select_ref(ctx_for_data.tho_device_idx(), None::<RangeSelector>).await?;
-        let second = futures_util::future::try_join_all(wrap_vec_second.iter().map(|item| item.select_ref(ctx_for_data.tho_device_idx(), None::<RangeSelector>))).await?;
+        let a = wrap_a.borrow_ref(ctx_for_data.tho_device_idx()).await?;
+        let first = futures_util::future::try_join_all(wrap_vec.iter().map(|item| item.borrow_ref(ctx_for_data.tho_device_idx()))).await?;
+        let b = wrap_b.borrow_ref(ctx_for_data.tho_device_idx()).await?;
+        let second = futures_util::future::try_join_all(wrap_vec_second.iter().map(|item| item.borrow_ref(ctx_for_data.tho_device_idx()))).await?;
         {
             assert_eq!(a.as_ref().device(), &1);
             assert_eq!(b.as_ref().device(), &1);
@@ -1594,7 +1589,7 @@ mod tests {
         let wrap_a = Arc::new(DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "a")));
 
         let ctx_for_data = mock_run_ctx::default(1);
-        let a = wrap_a.select_ref(ctx_for_data.tho_device_idx(), None::<RangeSelector>).await?;
+        let a = wrap_a.borrow_ref(ctx_for_data.tho_device_idx()).await?;
         {
             assert_eq!(a.as_ref().device(), &1);
             Ok::<(), ThoError>(())

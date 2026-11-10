@@ -1768,7 +1768,7 @@ mod tests {
 
         let _ctx_for_data = thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(ctx)).branch(false);
 
-        let t = motif.select_ref(0, Some(SyncStftSelector)).await?;
+        let t = motif.select_ref(0, SyncStftSelector).await?;
 
         let dist = 0.; //average_euclidean_distance(t.local()?).unwrap();
 
@@ -1825,7 +1825,7 @@ mod tests {
         let slices: Arc<DevicesWrap<ThoTensor<MotifSlices, SynKey>>> = random_slices_loader.run(Arc::clone(&input), thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(ctx)).branch(false)).await?;
 
         let _ctx_for_data = thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(ctx)).branch(false);
-        let t = slices.select_ref(0, Some(SyncStftSelector)).await?;
+        let t = slices.select_ref(0, SyncStftSelector).await?;
 
         let dist = average_euclidean_distance(&*t.local()?)?;
 

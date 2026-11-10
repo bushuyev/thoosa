@@ -439,34 +439,29 @@ where
     D: Dims + Send + Sync + 'static,
     Id: CachableIdTr + Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
 {
-    fn select_ref<'o>(&'o self, to_tho_device_idx: usize, selector: Option<SelectBucketsInputSelector>) -> impl Future<Output = Result<<Self as BorrowRef>::Out<'o>, ThoError>> + Send
+    fn select_ref<'o>(&'o self, to_tho_device_idx: usize, selector: SelectBucketsInputSelector) -> impl Future<Output = Result<<Self as BorrowRef>::Out<'o>, ThoError>> + Send
     where
         SelectBucketsInputSelector: 'o,
         Self: 'o,
     {
         async move {
-            let (tensor, sample_offset) = match selector {
-                None => {
-                    return BorrowRef::borrow_ref(self, to_tho_device_idx).await;
-                }
-                Some(selector) => {
-                    let tensor = t!(self.tensor.load_from_any_device_(0)).await?;
-                    // Keep the synchronous guard in its own scope before copying to another device.
-                    let (selected_audio, sample_range) = {
-                        let audio = tensor.local()?;
-                        let audio_size = audio.size();
-                        if audio_size.len() != 2 {
-                            return Err(ThoError::new(format!("BucketingTensorInput::borrow_to: expected audio shape [channels, samples], got {audio_size:?}")));
-                        }
-                        let sample_range = bucket_selector_sample_range(&selector, audio_size[1], self.bucket_window_samples, self.bucket_step_samples)?;
-                        let sample_len = sample_range.end.checked_sub(sample_range.start).ok_or_else(|| ThoError::new(format!("BucketingTensorInput::borrow_to: invalid sample_range={sample_range:?}")))?;
-                        (tch_result(audio.f_narrow(1, sample_range.start, sample_len))?, sample_range)
-                    };
-                    let selected_tensor = ThoTensor::new(tensor.id().clone(), selected_audio)?;
-                    drop(tensor);
-                    let selected_tensor = if to_tho_device_idx == 0 { selected_tensor } else { t!(selected_tensor.copy_to_device(to_tho_device_idx)).await? };
-                    (ThoDataRef::Owned(selected_tensor), sample_range.start)
-                }
+            let (tensor, sample_offset) = {
+                let tensor = t!(self.tensor.load_from_any_device_(0)).await?;
+                // Keep the synchronous guard in its own scope before copying to another device.
+                let (selected_audio, sample_range) = {
+                    let audio = tensor.local()?;
+                    let audio_size = audio.size();
+                    if audio_size.len() != 2 {
+                        return Err(ThoError::new(format!("BucketingTensorInput::borrow_to: expected audio shape [channels, samples], got {audio_size:?}")));
+                    }
+                    let sample_range = bucket_selector_sample_range(&selector, audio_size[1], self.bucket_window_samples, self.bucket_step_samples)?;
+                    let sample_len = sample_range.end.checked_sub(sample_range.start).ok_or_else(|| ThoError::new(format!("BucketingTensorInput::borrow_to: invalid sample_range={sample_range:?}")))?;
+                    (tch_result(audio.f_narrow(1, sample_range.start, sample_len))?, sample_range)
+                };
+                let selected_tensor = ThoTensor::new(tensor.id().clone(), selected_audio)?;
+                drop(tensor);
+                let selected_tensor = if to_tho_device_idx == 0 { selected_tensor } else { t!(selected_tensor.copy_to_device(to_tho_device_idx)).await? };
+                (ThoDataRef::Owned(selected_tensor), sample_range.start)
             };
             Ok(BucketingSyncInput::from_data_ref(self.resource_id, tensor, sample_offset))
         }
@@ -1335,7 +1330,6 @@ mod tests {
     use crate::stages::find_motifs_run_config::{AccumulateStats, Aggr, FindMotifsRunConfig, MaxAggr, Metrics, NormThicknessRunConfig, SlicesFilter};
     use crate::stages::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
     use crate::stages::motif_stats::{MotifStats, MotifStatsInput, MotifStatsOutput};
-    use crate::stages::stft::SyncStftSelector;
     use crate::stages::tensor_loader::RawTensorLoader;
     use crate::tch_test_utils;
     use futures_util::{StreamExt, TryStreamExt};
@@ -1352,7 +1346,7 @@ mod tests {
     use tch::Tensor;
     use thoosa_common::data_with_extra::DataWithExtra;
     use thoosa_common::resources::Simple;
-    use thoosa_common::runner::common::cachable::{DevicesWrap, SelectRef};
+    use thoosa_common::runner::common::cachable::{BorrowRef, DevicesWrap};
     use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::runner::run_ctx::RunCtxImpl;
@@ -1814,7 +1808,7 @@ mod tests {
             let motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>> = Arc::clone(&motif_loader_impl).run(Arc::new(MotifLoaderInput::new(mono_key!(*motif_id, "").into(), None)), ctx.branch(false)).await?;
             debug!("heavy_run_mel_path: motif={motif:?}");
             {
-                let motif_ref = SelectRef::select_ref(&motif, ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
+                let motif_ref = BorrowRef::borrow_ref(&motif, ctx.tho_device_idx()).await?;
                 let motif = motif_ref.as_ref();
                 for (ref_idx, ref_motif) in all_motifs.iter().enumerate() {
                     let motif_t = motif.data().local()?.unsqueeze(0);

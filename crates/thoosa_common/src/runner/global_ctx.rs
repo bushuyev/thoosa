@@ -1139,7 +1139,7 @@ mod tests {
     use crate::dims::AnyDims;
     use crate::ipc::cuda_worker::CudaWorker;
     use crate::ipc::tests::run_ipc_test;
-    use crate::runner::common::cachable::{DevicesWrap, SelectRef};
+    use crate::runner::common::cachable::{BorrowRef, DevicesWrap};
     use crate::runner::global_ctx::GlobalCtx;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use crate::runner::run_ctx::RunCtxImpl;
@@ -1160,7 +1160,6 @@ mod tests {
     use tch::kind::FLOAT_CPU;
     use thoosa_shared::CopyToDevice;
     use thoosa_shared::ThoError;
-    use thoosa_shared::traits::RangeSelector;
     use thoosa_shared::traits::RunCtx;
 
     use crate::runner::purge::CachePurger;
@@ -1535,7 +1534,7 @@ mod tests {
         let root_ctx = RunCtxImpl::new(1, "root_ctx");
 
         let sum_0 = {
-            let t_0 = t_0.select_ref(root_ctx.tho_device_idx(), None::<RangeSelector>).await?;
+            let t_0 = t_0.borrow_ref(root_ctx.tho_device_idx()).await?;
             let t_0_cpu = t_0.copy_to_device(0).await?;
             Ok::<_, ThoError>(t_0_cpu.local()?.sum_dim_intlist(0, false, None).double_value(&[]))
         }?;
@@ -1550,7 +1549,7 @@ mod tests {
 
         let t_0 = tmp_cache.get(&777u32).unwrap();
         let sum_1 = {
-            let t_0 = t_0.select_ref(root_ctx.tho_device_idx(), None::<RangeSelector>).await?;
+            let t_0 = t_0.borrow_ref(root_ctx.tho_device_idx()).await?;
             let t_0_cpu = t_0.copy_to_device(0).await?;
             Ok::<_, ThoError>(t_0_cpu.local()?.sum_dim_intlist(0, false, None).double_value(&[]))
         }?;

@@ -13,7 +13,7 @@ use std::sync::Arc;
 use tch::Kind::Float;
 use tch::Tensor;
 use thoosa_common::data_with_extra::DataWithExtra;
-use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, SelectRef};
+use thoosa_common::runner::common::cachable::{Cached, BorrowRef, DevicesWrap};
 use thoosa_common::tch_error::tch_result;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
@@ -217,7 +217,7 @@ where
 
         let loaded_motifs = t!(collect_futures_with_progress(futures, motif_ids_len, FuturesOrdering::Ordered, thoosa_shared::CollectionErrorPolicy::Propagate, "StackedMotifsLoader::run",)).await?;
 
-        let data_refs = try_join_all(loaded_motifs.iter().map(|motif| motif.select_ref(ctx.tho_device_idx(), None::<SyncStftSelector>))).await?;
+        let data_refs = try_join_all(loaded_motifs.iter().map(|motif| motif.borrow_ref(ctx.tho_device_idx()))).await?;
         let data = data_refs.iter().map(|motif| motif.as_ref()).collect::<Vec<_>>();
         {
             let channels_motifs = data.iter().fold(
