@@ -45,8 +45,6 @@ fn executor_closed_error(msg: impl Into<String>) -> ThoError {
     ThoError::new_with_cause(msg, ThoError::SyncStageRunner(SyncStageRunnerError::SubmitErrorClosed))
 }
 
-
-
 static NEXT_JOB_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Owns one sequential retry chain, including the waits between attempts. Tokens
@@ -149,7 +147,10 @@ impl RetryToken {
             // that child cannot release exclusivity owned by an outer retry loop.
             let mut exclusive = self.inner.exclusive_job_id.write();
             if exclusive.is_none() {
-                *exclusive = Some(ExclusiveOwner { job_id: self.inner.job_id, family_id: self.inner.family_id.lock().expect("submitted retry family") });
+                *exclusive = Some(ExclusiveOwner {
+                    job_id: self.inner.job_id,
+                    family_id: self.inner.family_id.lock().expect("submitted retry family"),
+                });
             }
         }
     }
@@ -162,7 +163,6 @@ impl RetryToken {
         }
     }
 }
-
 
 struct Job {
     id: JobId,
@@ -297,7 +297,6 @@ struct LiveJob {
     unwinding: bool,
     interrupted: Arc<AtomicBool>,
 }
-
 
 #[derive(Debug)]
 #[allow(dead_code)]
@@ -534,7 +533,11 @@ impl SyncStageRunner {
                 }
                 if is_oom && max_other_parallel == 0 {
                     retry.reserve_exclusive();
-                    *error = SyncStageRunnerError::JobError { job_id: retry.inner.job_id, inner: Box::new(error.clone()) }.into();
+                    *error = SyncStageRunnerError::JobError {
+                        job_id: retry.inner.job_id,
+                        inner: Box::new(error.clone()),
+                    }
+                    .into();
                 } else {
                     retry.clear_exclusive();
                 }
@@ -882,7 +885,17 @@ impl SyncStageRunner {
         }
     }
 
-    fn process_command(cmd: ManagerCmd, jobs: &mut HashMap<JobId, LiveJob>, active_caps: &mut BTreeMap<usize, usize>, active_count: &mut usize, max_parallel_jobs: usize, execution_waiter: &mut SyncExecutionWaiter, pending_drains: &mut Vec<oneshot::Sender<()>>, gate: Option<&Arc<CudaActivityGate>>, exclusive: Option<ExclusiveOwner>) {
+    fn process_command(
+        cmd: ManagerCmd,
+        jobs: &mut HashMap<JobId, LiveJob>,
+        active_caps: &mut BTreeMap<usize, usize>,
+        active_count: &mut usize,
+        max_parallel_jobs: usize,
+        execution_waiter: &mut SyncExecutionWaiter,
+        pending_drains: &mut Vec<oneshot::Sender<()>>,
+        gate: Option<&Arc<CudaActivityGate>>,
+        exclusive: Option<ExclusiveOwner>,
+    ) {
         debug!("SyncStageRunner::run_manager: manager cmd={cmd:?}");
 
         match cmd {
@@ -1196,7 +1209,17 @@ impl SyncStageRunner {
         }
     }
 
-    fn handle_resume(jobs: &mut HashMap<JobId, LiveJob>, active_caps: &mut BTreeMap<usize, usize>, active_count: &mut usize, max_parallel_jobs: usize, exclusive_job_id: Option<ExclusiveOwner>, job_id: JobId, reply: oneshot::Sender<()>, activity_paused: bool, execution_waiter: &mut SyncExecutionWaiter) {
+    fn handle_resume(
+        jobs: &mut HashMap<JobId, LiveJob>,
+        active_caps: &mut BTreeMap<usize, usize>,
+        active_count: &mut usize,
+        max_parallel_jobs: usize,
+        exclusive_job_id: Option<ExclusiveOwner>,
+        job_id: JobId,
+        reply: oneshot::Sender<()>,
+        activity_paused: bool,
+        execution_waiter: &mut SyncExecutionWaiter,
+    ) {
         let Some(job) = jobs.get_mut(&job_id) else {
             let _ = reply.send(());
             return;
@@ -1383,25 +1406,43 @@ mod tests {
                 let parent = runner_with_limits(1, &limits);
                 let child = if target == 1 { Arc::clone(&parent) } else { runner_with_limits(target, &limits) };
                 let child_run = Arc::clone(&child);
-                let values = parent.submit(0, async move {
-                    thoosa_shared::collect_futures_with_progress::collect_futures_with_progress(
-                        (0..3).map(move |index| {
-                            let child = Arc::clone(&child_run);
-                            async move {
-                                let value = child.submit(0, async move { Ok(index) }, None).await?;
-                                // Post-submit work must finish while the collector's parent
-                                // stays suspended, rather than each child trying to resume it.
-                                tokio::task::yield_now().await;
-                                Ok(value)
-                            }
-                        }), 3, thoosa_shared::FuturesOrdering::Ordered, thoosa_shared::CollectionErrorPolicy::Propagate, "scheduled descendants",
-                    ).await
-                }, None).await.unwrap();
+                let values = parent
+                    .submit(
+                        0,
+                        async move {
+                            thoosa_shared::collect_futures_with_progress::collect_futures_with_progress(
+                                (0..3).map(move |index| {
+                                    let child = Arc::clone(&child_run);
+                                    async move {
+                                        let value = child.submit(0, async move { Ok(index) }, None).await?;
+                                        // Post-submit work must finish while the collector's parent
+                                        // stays suspended, rather than each child trying to resume it.
+                                        tokio::task::yield_now().await;
+                                        Ok(value)
+                                    }
+                                }),
+                                3,
+                                thoosa_shared::FuturesOrdering::Ordered,
+                                thoosa_shared::CollectionErrorPolicy::Propagate,
+                                "scheduled descendants",
+                            )
+                            .await
+                        },
+                        None,
+                    )
+                    .await
+                    .unwrap();
                 assert_eq!(values, vec![0, 1, 2]);
-                if target == 1 { drop(child); } else { Arc::try_unwrap(child).unwrap().shutdown().await; }
+                if target == 1 {
+                    drop(child);
+                } else {
+                    Arc::try_unwrap(child).unwrap().shutdown().await;
+                }
                 Arc::try_unwrap(parent).unwrap().shutdown().await;
             }
-        }).await.expect("collector descendants must make progress with one scheduling slot");
+        })
+        .await
+        .expect("collector descendants must make progress with one scheduling slot");
     }
 
     #[tokio::test]
@@ -1415,30 +1456,53 @@ mod tests {
             let unrelated = tokio::spawn({
                 let exec = Arc::clone(&exec);
                 let ran = Arc::clone(&unrelated_ran);
-                async move { exec.submit(0, async move { ran.store(true, Ordering::SeqCst); Ok(()) }, None).await }
+                async move {
+                    exec.submit(
+                        0,
+                        async move {
+                            ran.store(true, Ordering::SeqCst);
+                            Ok(())
+                        },
+                        None,
+                    )
+                    .await
+                }
             });
             let nested = Arc::clone(&exec);
             let ran = Arc::clone(&unrelated_ran);
-            exec.submit(0, async move {
-                // Direct child OOMs must neither replace nor clear the outer reservation.
-                assert!(nested.submit::<_, ()>(0, async { Err(ThoError::oom()) }, None).await.unwrap_err().is_oom());
-                let collector_runner = Arc::clone(&nested);
-                let results = thoosa_shared::collect_futures_with_progress::collect_futures_with_progress(
-                    (0..2).map(move |_| {
-                        let exec = Arc::clone(&collector_runner);
-                        async move { exec.submit(0, async { Ok(7) }, None).await }
-                    }), 2, thoosa_shared::FuturesOrdering::Ordered, thoosa_shared::CollectionErrorPolicy::Propagate, "exclusive retry descendants",
-                ).await?;
-                assert_eq!(results, vec![7, 7]);
-                assert!(!ran.load(Ordering::SeqCst), "unrelated work entered the reserved dependency tree");
-                Err::<(), _>(ThoError::oom())
-            }, Some(retry.token())).await.unwrap_err();
+            exec.submit(
+                0,
+                async move {
+                    // Direct child OOMs must neither replace nor clear the outer reservation.
+                    assert!(nested.submit::<_, ()>(0, async { Err(ThoError::oom()) }, None).await.unwrap_err().is_oom());
+                    let collector_runner = Arc::clone(&nested);
+                    let results = thoosa_shared::collect_futures_with_progress::collect_futures_with_progress(
+                        (0..2).map(move |_| {
+                            let exec = Arc::clone(&collector_runner);
+                            async move { exec.submit(0, async { Ok(7) }, None).await }
+                        }),
+                        2,
+                        thoosa_shared::FuturesOrdering::Ordered,
+                        thoosa_shared::CollectionErrorPolicy::Propagate,
+                        "exclusive retry descendants",
+                    )
+                    .await?;
+                    assert_eq!(results, vec![7, 7]);
+                    assert!(!ran.load(Ordering::SeqCst), "unrelated work entered the reserved dependency tree");
+                    Err::<(), _>(ThoError::oom())
+                },
+                Some(retry.token()),
+            )
+            .await
+            .unwrap_err();
             assert_eq!(exec.exclusive_job_id.read().map(|owner| owner.job_id), Some(retry.token.inner.job_id));
             assert!(!unrelated_ran.load(Ordering::SeqCst));
             drop(retry);
             unrelated.await.unwrap().unwrap();
             Arc::try_unwrap(exec).unwrap().shutdown().await;
-        }).await.expect("exclusive retries must admit their whole dependency tree");
+        })
+        .await
+        .expect("exclusive retries must admit their whole dependency tree");
     }
 
     #[tokio::test]
@@ -1448,22 +1512,28 @@ mod tests {
                 let limits = Arc::new(FuturesLimits::new_with_parallelism(1, 1));
                 let exec = runner_with_limits(device, &limits);
                 let nested = Arc::clone(&exec);
-                exec.submit(0, async move {
-                    let cache = crate::instance_cache::InstanceCache::new();
-                    let child = Arc::clone(&nested);
-                    let value = cache.get_or_try_insert_with::<(), _, _, _, _>(device, nested.cuda_gate().cloned(), 0, move || async move {
-                        child.submit(0, async { Ok(Arc::new(17)) }, None).await
-                    }).await?;
-                    assert_eq!(*value, 17);
-                    let gate = nested.cuda_gate().cloned();
-                    let computation = async move { nested.submit(0, async { Ok(23) }, None).await }.boxed().shared();
-                    let cached = crate::runner::common::cachable::CachedFuture::for_device(computation, gate);
-                    assert_eq!(cached.await?, 23);
-                    Ok(())
-                }, None).await.unwrap();
+                exec.submit(
+                    0,
+                    async move {
+                        let cache = crate::instance_cache::InstanceCache::new();
+                        let child = Arc::clone(&nested);
+                        let value = cache.get_or_try_insert_with::<(), _, _, _, _>(device, nested.cuda_gate().cloned(), 0, move || async move { child.submit(0, async { Ok(Arc::new(17)) }, None).await }).await?;
+                        assert_eq!(*value, 17);
+                        let gate = nested.cuda_gate().cloned();
+                        let computation = async move { nested.submit(0, async { Ok(23) }, None).await }.boxed().shared();
+                        let cached = crate::runner::common::cachable::CachedFuture::for_device(computation, gate);
+                        assert_eq!(cached.await?, 23);
+                        Ok(())
+                    },
+                    None,
+                )
+                .await
+                .unwrap();
                 Arc::try_unwrap(exec).unwrap().shutdown().await;
             }
-        }).await.expect("detached initializers must retain scheduling dependencies on CPU and CUDA");
+        })
+        .await
+        .expect("detached initializers must retain scheduling dependencies on CPU and CUDA");
     }
 
     #[tokio::test]
@@ -1472,37 +1542,51 @@ mod tests {
             let limits = Arc::new(FuturesLimits::new_with_parallelism(1, 1));
             let exec = runner_with_limits(0, &limits);
             let nested = Arc::clone(&exec);
-            exec.submit(0, async move {
-                let cache = crate::instance_cache::InstanceCache::new();
-                let (started, ready) = oneshot::channel();
-                let (release, released) = oneshot::channel();
-                let mut waiter = Box::pin(cache.get_or_try_insert_with::<(), _, _, _, _>(0, None, 0, move || async move {
-                    started.send(()).unwrap();
-                    released.await.unwrap();
-                    Ok(Arc::new(17))
-                }));
-                tokio::select! { _ = ready => {}, _ = &mut waiter => panic!("initializer should still be pending") }
-                drop(waiter);
-                // The detached initializer remains alive, but its cancelled
-                // waiter must not keep the parent suspended behind a new child.
-                assert_eq!(nested.submit(0, async { Ok(1) }, None).await?, 1);
-                release.send(()).unwrap();
-                assert_eq!(*cache.get_or_try_insert_with::<(), _, _, _, _>(0, None, 0, || async { Ok(Arc::new(99)) }).await?, 17);
+            exec.submit(
+                0,
+                async move {
+                    let cache = crate::instance_cache::InstanceCache::new();
+                    let (started, ready) = oneshot::channel();
+                    let (release, released) = oneshot::channel();
+                    let mut waiter = Box::pin(cache.get_or_try_insert_with::<(), _, _, _, _>(0, None, 0, move || async move {
+                        started.send(()).unwrap();
+                        released.await.unwrap();
+                        Ok(Arc::new(17))
+                    }));
+                    tokio::select! { _ = ready => {}, _ = &mut waiter => panic!("initializer should still be pending") }
+                    drop(waiter);
+                    // The detached initializer remains alive, but its cancelled
+                    // waiter must not keep the parent suspended behind a new child.
+                    assert_eq!(nested.submit(0, async { Ok(1) }, None).await?, 1);
+                    release.send(()).unwrap();
+                    assert_eq!(*cache.get_or_try_insert_with::<(), _, _, _, _>(0, None, 0, || async { Ok(Arc::new(99)) }).await?, 17);
 
-                let (started, ready) = oneshot::channel();
-                let (release, released) = oneshot::channel();
-                let computation = async move { started.send(()).unwrap(); released.await.unwrap(); Ok(23) }.boxed().shared();
-                let cached = crate::runner::common::cachable::CachedFuture::for_device(computation, None);
-                let mut waiter = Box::pin(cached.clone());
-                tokio::select! { _ = ready => {}, _ = &mut waiter => panic!("cached computation should still be pending") }
-                drop(waiter);
-                assert_eq!(nested.submit(0, async { Ok(2) }, None).await?, 2);
-                release.send(()).unwrap();
-                assert_eq!(cached.await?, 23);
-                Ok(())
-            }, None).await.unwrap();
+                    let (started, ready) = oneshot::channel();
+                    let (release, released) = oneshot::channel();
+                    let computation = async move {
+                        started.send(()).unwrap();
+                        released.await.unwrap();
+                        Ok(23)
+                    }
+                    .boxed()
+                    .shared();
+                    let cached = crate::runner::common::cachable::CachedFuture::for_device(computation, None);
+                    let mut waiter = Box::pin(cached.clone());
+                    tokio::select! { _ = ready => {}, _ = &mut waiter => panic!("cached computation should still be pending") }
+                    drop(waiter);
+                    assert_eq!(nested.submit(0, async { Ok(2) }, None).await?, 2);
+                    release.send(()).unwrap();
+                    assert_eq!(cached.await?, 23);
+                    Ok(())
+                },
+                None,
+            )
+            .await
+            .unwrap();
             Arc::try_unwrap(exec).unwrap().shutdown().await;
-        }).await.expect("cancelled waits must not pin capacity behind detached computations");
+        })
+        .await
+        .expect("cancelled waits must not pin capacity behind detached computations");
     }
 
     #[tokio::test]

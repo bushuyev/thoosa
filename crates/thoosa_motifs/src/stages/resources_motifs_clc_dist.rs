@@ -1,8 +1,8 @@
 use crate::dims::ChannelsMotifsDists;
 use crate::distance::MaskMaker::{Le, LocalMin};
 use crate::stages::cross_batch_clc::{UnfoldParams, unfold_and_cat};
-use crate::stages::resource_batch::ResourceBatch;
 use crate::stages::dists_tracker::{DistsMask, DistsMaskType};
+use crate::stages::resource_batch::ResourceBatch;
 use crate::stages::slices_iter::{ResourceSlices, SlicesIter};
 use crate::stages::stacked_moitfs_loader::StackedMotifsOutput;
 use log::{debug, trace};

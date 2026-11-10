@@ -133,6 +133,23 @@ where
     }
 }
 
+/// Process resource in batches to minimize resource loading overhead.
+///
+/// The outer loop loads a batch of resources whose combined size does not
+/// exceed `max_batch`. The inner loop then iterates over the resource list,
+/// loading another batch (also limited by `max_batch`) and executing `CLC`
+/// for every pair in the Cartesian product of the two batches.
+///
+/// For example, given resources [a, b, c, d, e], where a and b fit into one
+/// batch, c must be loaded separately, and d and e fit together:
+///
+///   Outer batch: [a, b]
+///     Inner batch: [a, b]  -> CLC for [a, b] x [a, b]
+///     Inner batch: [c]     -> CLC for [a, b] x [c]
+///     Inner batch: [d, e]  -> CLC for [a, b] x [d, e]
+///
+/// The outer loop then advances to the next batch and repeats the process.
+///
 pub struct CrossLoader<ResC, L, CLC, RSV, R, C>
 where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,
@@ -230,6 +247,7 @@ where
         pending_consumer: &mut Option<JoinHandle<Result<(), ThoError>>>,
     ) -> Result<(), ThoError> {
         debug!("CrossLoader::run_loaded_batch: find_motifs_run_config_id={} t_0_batch={t_0_batch:?} t_1_batch={t_1_batch:?}", self.find_motifs_run_config_id);
+
         let cross_unfold_clc = Arc::clone(&self.cross_unfold_clc);
         let batch_1_slice_lengths = t_1_batch.lengths().to_vec();
 
@@ -338,7 +356,7 @@ where
             for (i_1, resource_1) in resources.iter().enumerate().skip(skip_0_i) {
                 debug!("CrossLoader::run_inner_batches: i_1={i_1:?} resource_1={resource_1:?}");
 
-                GlobalCtx::global().cuda_activity_gate(1).expect("no gate").wait_if_paused().await?;
+                GlobalCtx::global().cuda_activity_gate(ctx.tho_device_idx()).expect("no gate").wait_if_paused().await?;
 
                 debug!("CrossLoader::run_inner_batches: i_1={i_1:?} resource_1={resource_1:?} waited");
 
@@ -570,6 +588,7 @@ impl Data for CrossInputSelectorWrap {
 }
 
 impl CrossInputSelectorWrap {
+    #[rustfmt::skip]
     pub fn new(id: SynKey, batch_0: LoadedResourceBatch, batch_1: LoadedResourceBatch, cache_area: CacheArea) -> Self {
         Self {
             id,
@@ -863,7 +882,10 @@ impl RangeOrSlice {
             // describes the original file and may differ after filtering/slicing.
             loaded.push(batch.resources()[*index].clone(), t!(SelectRef::select_ref(tensor, to_device_idx, Some(selector))).await?)?;
         } else {
-            let range = match self { Self::Range(range) => checked_batch_range(range, batch.len())?, _ => 0..batch.len() };
+            let range = match self {
+                Self::Range(range) => checked_batch_range(range, batch.len())?,
+                _ => 0..batch.len(),
+            };
             for index in range {
                 let tensor = ThoDataRef::ReadLocked(t!(batch.tensors()[index].load_from_any_device_(to_device_idx)).await?);
                 loaded.push(batch.resources()[index].clone(), tensor)?;
@@ -925,9 +947,9 @@ impl SelectRef<CrossInputSelector> for CrossInputSelectorWrap {
             match prepared {
                 Some(prepared) => {
                     prepared.as_ref().validate_lengths(self.batch_0.lengths())?;
-                    CrossInput::from_prepared(prepared, self.batch_0.resources().to_vec(), inner, self.id.clone())
+                    CrossInput::from_prepared(self.id.clone(), prepared, self.batch_0.resources().to_vec(), inner)
                 }
-                None => Ok(CrossInput::new(t!(selector.batch_0_selector.borrow_to(&self.batch_0, to_tho_device_idx)).await?, inner, self.id.clone())),
+                None => Ok(CrossInput::new(self.id.clone(), t!(selector.batch_0_selector.borrow_to(&self.batch_0, to_tho_device_idx)).await?, inner)),
             }
         }
     }

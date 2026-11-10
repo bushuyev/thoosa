@@ -87,29 +87,33 @@ impl InstanceCache {
         // context with the detached install. Only the awaiting caller owns suspension.
         let context = thoosa_shared::job_context::JobContext::current();
         let dependencies = context.dependencies();
-        context.wait(async move { tokio::spawn(dependencies.run(async move {
-            let initialize = async { entry.get_or_try_init(create).await.cloned() };
-            match activity {
-                Some(activity) => {
-                    let dependencies = activity.clone();
-                    activity
-                        .run(async {
-                            tokio::select! {
-                                biased;
-                                error = dependencies.wait_for_interruption() => Err(error),
-                                instance = initialize => {
-                                    dependencies.check_dependencies()?;
-                                    instance
-                                },
-                            }
-                        })
-                        .await
-                }
-                None => initialize.await,
-            }
-        }))
-        .await
-        .map_err(|error| ThoError::new(format!("instance initialization task failed: {error}")))? }).await?
+        context
+            .wait(async move {
+                tokio::spawn(dependencies.run(async move {
+                    let initialize = async { entry.get_or_try_init(create).await.cloned() };
+                    match activity {
+                        Some(activity) => {
+                            let dependencies = activity.clone();
+                            activity
+                                .run(async {
+                                    tokio::select! {
+                                        biased;
+                                        error = dependencies.wait_for_interruption() => Err(error),
+                                        instance = initialize => {
+                                            dependencies.check_dependencies()?;
+                                            instance
+                                        },
+                                    }
+                                })
+                                .await
+                        }
+                        None => initialize.await,
+                    }
+                }))
+                .await
+                .map_err(|error| ThoError::new(format!("instance initialization task failed: {error}")))?
+            })
+            .await?
     }
 }
 

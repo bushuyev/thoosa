@@ -1,8 +1,8 @@
 //! Logical scheduling ownership, separate from physical CUDA activity leases.
+use crate::tracked_await::t;
+use crate::{CudaActivityScope, SyncStageRunnerError, ThoError};
 use std::future::Future;
 use tokio::sync::{mpsc, oneshot};
-use crate::{CudaActivityScope, SyncStageRunnerError, ThoError};
-use crate::tracked_await::t;
 
 type JobId = u64;
 
@@ -24,7 +24,9 @@ pub struct JobContext {
 tokio::task_local! { static CONTEXT: JobContext; }
 
 impl JobContext {
-    pub fn current() -> Self { CONTEXT.try_with(Clone::clone).unwrap_or_default() }
+    pub fn current() -> Self {
+        CONTEXT.try_with(Clone::clone).unwrap_or_default()
+    }
 
     pub fn for_job(family_id: JobId, job: CurrentJob) -> Self {
         Self { family_id: Some(family_id), job: Some(job) }
@@ -57,7 +59,6 @@ pub enum ManagerCmd {
     DrainForRecovery { reply: oneshot::Sender<()> },
     Recheck,
 }
-
 
 /// Temporarily removes a parent job from the manager's active-capacity accounting
 /// while that job awaits a nested `submit`.
@@ -157,4 +158,3 @@ impl Drop for ParentSuspendGuard {
         });
     }
 }
-

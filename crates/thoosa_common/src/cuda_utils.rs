@@ -983,7 +983,6 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_copy_d2h_from_ptr_reports_error() {
-
         let cu_ctx = ThoCudaContext::new(0).expect("failed to create CUDA context");
         cu_ctx.bind_to_thread().expect("failed to bind CUDA context for error test");
 
@@ -999,13 +998,11 @@ mod tests {
 
         let res = super::copy_d2h(&Arc::new(thoosa_shared::CudaActivityGate::new(1)), bogus_cpu_tensor, buf_size, &bufs_pool).await;
 
-
         assert!(res.is_err(), "expected copy_d2h_from_ptr_result to error for invalid device ptr");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn heavy_compare_unfold() -> Result<(), ThoError> {
-
         for mem_k in [0.1, 0.5, 1.] {
             for buffs in [2, 4, 8, 16, 32] {
                 let cuda_copier = CudaCopier::make_instance_for_cuda_device(0, mem_k, buffs)?;
@@ -1093,7 +1090,6 @@ mod tests {
         let unpacked = unpack_bits_u8(&packed, Some(numelts)).view((channels, n));
 
         let unpacked_size = unpacked.numel() * unpacked.kind().elt_size_in_bytes();
-
 
         assert!(mask.to_device(Cpu).allclose(&unpacked, 0.01, 0.01, false), "roundtrip mismatch");
 

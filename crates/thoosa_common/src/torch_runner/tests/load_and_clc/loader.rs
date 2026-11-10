@@ -95,11 +95,9 @@ impl LocalSelect<SynKey, LoadedRange> for ThoTensor<LoadedTensor, SynKey> {
 
         let sub_tensor = tch_result(t.f_i((ranges[0].clone(), ranges[1].clone())))?;
 
-        let new_id = id.clone(); //SimpleId::from(format!("{}:{ranges:?}", self.id().0));
+        debug!("Select for ThoTensor<LoadedTensor, SimpleId>: id={id:?} ranges={ranges:?} sub_tensor={sub_tensor:?}");
 
-        debug!("Select for ThoTensor<LoadedTensor, SimpleId>: ranges={ranges:?} sub_tensor={sub_tensor:?}");
-
-        ThoTensor::new(new_id, sub_tensor)
+        ThoTensor::new(id.clone(), sub_tensor)
     }
 }
 

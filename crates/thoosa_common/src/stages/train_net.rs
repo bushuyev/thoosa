@@ -873,7 +873,16 @@ pub mod tests {
         let configs = thoosa_shared::run_configs::OptRunConfigs::new(thoosa_shared::run_configs::GridRunConfigs::new(thoosa_shared::run_configs::ConstConfigs::new(Vec::<thoosa_shared::val::NamedVal<DummyRunConfigFields>>::new()), vec![]), vec![]);
         let factory: TestBatchFactory = Box::new(move |_, _| ready(Ok(Arc::clone(&batch))).boxed());
 
-        let train_net = Arc::new(TrainNet::new(std::env::temp_dir(), factory, Arc::new(DummyTrainStepFactory), Arc::new(OptConfig::new(1, 1)), Arc::new(configs), |_: &DummyRunConfig| 10, 1, "persistent OOM".into()));
+        let train_net = Arc::new(TrainNet::new(
+            std::env::temp_dir(),
+            factory,
+            Arc::new(DummyTrainStepFactory),
+            Arc::new(OptConfig::new(1, 1)),
+            Arc::new(configs),
+            |_: &DummyRunConfig| 10,
+            1,
+            "persistent OOM".into(),
+        ));
         let error = train_net.run_inner(mock_run_ctx::default(1), 1, DummyRunConfig::new(None, 1), 1, "persistent OOM".into()).await.unwrap_err();
         assert!(error.is_oom());
         assert!(error.to_string().contains("exclusive runner access"));

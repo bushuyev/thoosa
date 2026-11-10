@@ -1,12 +1,12 @@
 //! Resource identity and the actual (possibly filtered or selected) tensor length
 //! form one batch invariant. Source Resource::length is deliberately not used.
-use std::sync::Arc;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use thoosa_common::dims::ChannelsData;
 use thoosa_common::runner::common::cachable::{DevicesWrap, ThoDataRef};
 use thoosa_common::tho_tensor::ThoTensor;
-use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::ThoError;
+use thoosa_shared::comp_id::SynKey;
 
 pub trait ResourceBatchTensor {
     fn sample_len(&self) -> Result<i64, ThoError>;
@@ -42,7 +42,13 @@ pub struct ResourceBatch<T, R> {
 }
 
 impl<T, R> Default for ResourceBatch<T, R> {
-    fn default() -> Self { Self { tensors: Vec::new(), resources: Vec::new(), lengths: Vec::new() } }
+    fn default() -> Self {
+        Self {
+            tensors: Vec::new(),
+            resources: Vec::new(),
+            lengths: Vec::new(),
+        }
+    }
 }
 
 impl<T: ResourceBatchTensor, R> ResourceBatch<T, R> {
@@ -64,11 +70,21 @@ impl<T: ResourceBatchTensor, R> ResourceBatch<T, R> {
 }
 
 impl<T, R> ResourceBatch<T, R> {
-    pub fn len(&self) -> usize { self.resources.len() }
-    pub fn is_empty(&self) -> bool { self.resources.is_empty() }
-    pub fn tensors(&self) -> &[T] { &self.tensors }
-    pub fn resources(&self) -> &[R] { &self.resources }
-    pub fn lengths(&self) -> &[i64] { &self.lengths }
+    pub fn len(&self) -> usize {
+        self.resources.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.resources.is_empty()
+    }
+    pub fn tensors(&self) -> &[T] {
+        &self.tensors
+    }
+    pub fn resources(&self) -> &[R] {
+        &self.resources
+    }
+    pub fn lengths(&self) -> &[i64] {
+        &self.lengths
+    }
     pub fn iter(&self) -> impl Iterator<Item = (&R, &T, i64)> {
         self.resources.iter().zip(&self.tensors).zip(&self.lengths).map(|((resource, tensor), length)| (resource, tensor, *length))
     }

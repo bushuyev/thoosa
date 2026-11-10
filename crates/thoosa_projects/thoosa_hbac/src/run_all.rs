@@ -500,7 +500,7 @@ pub fn run_all_config_test(run_all_args: &RunAllArgs, profile: &RunAllSettings) 
 
 pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
     let find_and_select = FindAndSelect::GridOnly {
-        find_motifs_run_config_range_or_value: run_all_find_motifs_config_grid_0(4, 4, 8),
+        find_motifs_run_config_range_or_value: run_all_find_motifs_config_grid_0(8, 8, 16),
         fixed_find_motifs_config: FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false),
         extend_motifs_run_config: Some(run_all_extend_motifs_config_grid_0::<SelectMotifsRunConfigFields>()),
         select_motifs_run_config: run_all_select_motifs_config_grid_0::<SelectMotifsRunConfigFields>(),

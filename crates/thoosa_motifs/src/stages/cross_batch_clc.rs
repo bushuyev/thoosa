@@ -58,17 +58,25 @@ pub struct CrossInput<'a, R: AsRef<Resource>> {
 }
 
 impl<'a, R: AsRef<Resource> + Clone> CrossInput<'a, R> {
-    pub fn new(outer: BorrowedResourceBatch<'a, R>, inner: BorrowedResourceBatch<'a, R>, id: SynKey) -> Self {
-        Self { id: &id + Self::resources_id(outer.resources(), inner.resources()), outer: CrossOuterBatch::Raw(outer), inner }
+    pub fn new(id: SynKey, outer: BorrowedResourceBatch<'a, R>, inner: BorrowedResourceBatch<'a, R>) -> Self {
+        Self {
+            id: &id + Self::resources_id(outer.resources(), inner.resources()),
+            outer: CrossOuterBatch::Raw(outer),
+            inner,
+        }
     }
 
     fn resources_id(b_0: &[R], b_1: &[R]) -> SynKey {
         SynKey::new(b_0.iter().chain(b_1.iter()).map(|resource| mono_key!(resource.as_ref().id(), format!("resource_id{}", resource.as_ref().id()))).collect::<Vec<_>>())
     }
 
-    pub(crate) fn from_prepared(data: ThoDataRef<'a, PreparedCrossBatch>, resources: Vec<R>, inner: BorrowedResourceBatch<'a, R>, id: SynKey) -> Result<Self, ThoError> {
+    pub(crate) fn from_prepared(id: SynKey, data: ThoDataRef<'a, PreparedCrossBatch>, resources: Vec<R>, inner: BorrowedResourceBatch<'a, R>) -> Result<Self, ThoError> {
         data.as_ref().validate_resources(&resources)?;
-        Ok(Self { id: &id + Self::resources_id(&resources, inner.resources()), outer: CrossOuterBatch::Prepared { data, resources }, inner })
+        Ok(Self {
+            id: &id + Self::resources_id(&resources, inner.resources()),
+            outer: CrossOuterBatch::Prepared { data, resources },
+            inner,
+        })
     }
 
     pub(crate) fn raw_outer(&self) -> Result<&BorrowedResourceBatch<'a, R>, ThoError> {
@@ -79,23 +87,38 @@ impl<'a, R: AsRef<Resource> + Clone> CrossInput<'a, R> {
     }
 
     pub fn tensors(&self) -> Vec<&ThoTensor<ChannelsData, SynKey>> {
-        let outer = match &self.outer { CrossOuterBatch::Raw(batch) => batch.tensors(), CrossOuterBatch::Prepared { .. } => &[] };
+        let outer = match &self.outer {
+            CrossOuterBatch::Raw(batch) => batch.tensors(),
+            CrossOuterBatch::Prepared { .. } => &[],
+        };
         outer.iter().chain(self.inner.tensors()).map(ThoDataRef::as_ref).collect()
     }
 
     pub fn batch_0(&self) -> &[R] {
-        match &self.outer { CrossOuterBatch::Raw(batch) => batch.resources(), CrossOuterBatch::Prepared { resources, .. } => resources }
+        match &self.outer {
+            CrossOuterBatch::Raw(batch) => batch.resources(),
+            CrossOuterBatch::Prepared { resources, .. } => resources,
+        }
     }
 
-    pub fn batch_1(&self) -> &[R] { self.inner.resources() }
+    pub fn batch_1(&self) -> &[R] {
+        self.inner.resources()
+    }
 
     fn borrow_inner_range(&self, range: std::ops::Range<usize>) -> Result<CrossInput<'_, R>, ThoError> {
         let inner = self.inner.borrow_range(range)?;
         let outer = match &self.outer {
             CrossOuterBatch::Raw(batch) => CrossOuterBatch::Raw(batch.borrow_range(0..batch.len())?),
-            CrossOuterBatch::Prepared { data, resources } => CrossOuterBatch::Prepared { data: ThoDataRef::Borrowed(data.as_ref()), resources: resources.clone() },
+            CrossOuterBatch::Prepared { data, resources } => CrossOuterBatch::Prepared {
+                data: ThoDataRef::Borrowed(data.as_ref()),
+                resources: resources.clone(),
+            },
         };
-        Ok(CrossInput { id: &self.id + Self::resources_id(self.batch_0(), inner.resources()), outer, inner })
+        Ok(CrossInput {
+            id: &self.id + Self::resources_id(self.batch_0(), inner.resources()),
+            outer,
+            inner,
+        })
     }
 }
 
@@ -145,7 +168,10 @@ struct CrossInputWire<T, P> {
 
 impl<'a> RawBatchWire<&'a ThoTensor<ChannelsData, SynKey>> {
     fn from_batch(batch: &'a BorrowedResourceBatch<'_, Arc<Resource>>) -> Self {
-        Self { tensors: batch.tensors().iter().map(ThoDataRef::as_ref).collect(), resources: batch.resources().iter().map(|r| CrossInputIpcResource::from_resource(r)).collect() }
+        Self {
+            tensors: batch.tensors().iter().map(ThoDataRef::as_ref).collect(),
+            resources: batch.resources().iter().map(|r| CrossInputIpcResource::from_resource(r)).collect(),
+        }
     }
 }
 
@@ -159,9 +185,17 @@ impl Serialize for CrossInput<'_, Arc<Resource>> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let outer = match &self.outer {
             CrossOuterBatch::Raw(batch) => OuterBatchWire::Raw(RawBatchWire::from_batch(batch)),
-            CrossOuterBatch::Prepared { data, resources } => OuterBatchWire::Prepared { data: data.as_ref(), resources: resources.iter().map(|r| CrossInputIpcResource::from_resource(r)).collect() },
+            CrossOuterBatch::Prepared { data, resources } => OuterBatchWire::Prepared {
+                data: data.as_ref(),
+                resources: resources.iter().map(|r| CrossInputIpcResource::from_resource(r)).collect(),
+            },
         };
-        CrossInputWire { id: self.id.clone(), outer, inner: RawBatchWire::from_batch(&self.inner) }.serialize(serializer)
+        CrossInputWire {
+            id: self.id.clone(),
+            outer,
+            inner: RawBatchWire::from_batch(&self.inner),
+        }
+        .serialize(serializer)
     }
 }
 
@@ -191,10 +225,17 @@ impl CrossInput<'_, Arc<Resource>> {
             CrossOuterBatch::Prepared { data, resources } => {
                 let data = map_prepared(data.as_ref())?;
                 data.validate_resources(resources)?;
-                CrossOuterBatch::Prepared { data: ThoDataRef::Owned(data), resources: resources.clone() }
+                CrossOuterBatch::Prepared {
+                    data: ThoDataRef::Owned(data),
+                    resources: resources.clone(),
+                }
             }
         };
-        Ok(CrossInput { id: self.id.clone(), outer, inner: self.inner.map_tensors(map)? })
+        Ok(CrossInput {
+            id: self.id.clone(),
+            outer,
+            inner: self.inner.map_tensors(map)?,
+        })
     }
 }
 
@@ -230,10 +271,11 @@ impl<'a, R: AsRef<Resource> + Debug + Send + Sync> Data for CrossInput<'a, R> {
     }
 
     fn mem_size(&self) -> u64 {
-        self.inner.tensors().iter().map(|tensor| tensor.as_ref().mem_size()).sum::<u64>() + match &self.outer {
-            CrossOuterBatch::Raw(batch) => batch.tensors().iter().map(|tensor| tensor.as_ref().mem_size()).sum(),
-            CrossOuterBatch::Prepared { data, .. } => data.as_ref().mem_size(),
-        }
+        self.inner.tensors().iter().map(|tensor| tensor.as_ref().mem_size()).sum::<u64>()
+            + match &self.outer {
+                CrossOuterBatch::Raw(batch) => batch.tensors().iter().map(|tensor| tensor.as_ref().mem_size()).sum(),
+                CrossOuterBatch::Prepared { data, .. } => data.as_ref().mem_size(),
+            }
     }
 }
 
@@ -338,14 +380,16 @@ impl UnfoldParams {
         // Cross batches are [channels, samples]; concatenation and slice indexing
         // require unfolding the sample dimension with positive window and step.
         if self.dimension != 1 || self.size <= 0 || self.step <= 0 {
-            return Err(ThoError::new("invalid cross-batch unfolding parameters"));
+            return Err(ThoError::new(format!("invalid cross-batch unfolding parameters: {self:?}")));
         }
         Ok(())
     }
 
     pub(crate) fn windows(&self, samples: i64) -> Result<i64, ThoError> {
         self.validate()?;
-        if samples < 0 { return Err(ThoError::new("negative resource sample length")); }
+        if samples < 0 {
+            return Err(ThoError::new("negative resource sample length"));
+        }
         Ok(if samples < self.size { 0 } else { 1 + (samples - self.size) / self.step })
     }
 
@@ -683,11 +727,11 @@ mod tests {
     use crate::stages::dists_tracker::{DistsMask, DistsMaskType};
     use crate::stages::find_motifs::{MasksCtx, MeanDistsCtx};
     use crate::stages::resource_batch::ResourceBatch;
-    use thoosa_common::runner::common::cachable::ThoDataRef;
     use log::debug;
     use std::sync::Arc;
     use tch::Device::{Cpu, Cuda};
     use tch::Tensor;
+    use thoosa_common::runner::common::cachable::ThoDataRef;
     use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::runner::run_ctx::RunCtxImpl;
     use thoosa_common::runner::sync_stage::SyncStage;
@@ -747,9 +791,9 @@ mod tests {
         let chunk_1_resources = vec![Arc::clone(&resource_1)];
 
         let input = CrossInput::new(
+            "test".into(),
             ResourceBatch::try_new(vec![ThoDataRef::Borrowed(&tensor_00), ThoDataRef::Borrowed(&tensor_01)], chunk_0_resources)?,
             ResourceBatch::try_new(vec![ThoDataRef::Borrowed(&tensor_1)], chunk_1_resources)?,
-            "test".into(),
         );
         let ctx = RunCtxImpl::new(1, "test");
         let out = cross_batch_clc.do_run(&input, &ctx)?;
@@ -782,13 +826,22 @@ mod batch_tests {
     }
 
     fn remote_batch() -> Result<BorrowedResourceBatch<'static, Arc<Resource>>, ThoError> {
-        let worker = CudaWorkerId { device_idx: 1, generation: thoosa_shared::CudaDeviceGeneration(7) };
-        ResourceBatch::try_new([5, 1, 7].into_iter().enumerate().map(|(i, len)| ThoDataRef::Owned(ThoTensor::new_ref(format!("tensor_{i}").into(), i as u64, vec![1, len], Kind::Float, None, worker))).collect(), resources())
+        let worker = CudaWorkerId {
+            device_idx: 1,
+            generation: thoosa_shared::CudaDeviceGeneration(7),
+        };
+        ResourceBatch::try_new(
+            [5, 1, 7].into_iter().enumerate().map(|(i, len)| ThoDataRef::Owned(ThoTensor::new_ref(format!("tensor_{i}").into(), i as u64, vec![1, len], Kind::Float, None, worker))).collect(),
+            resources(),
+        )
     }
 
     #[test]
     fn test_unfold_filters_with_resource_boundaries() -> Result<(), ThoError> {
-        let tensors = [5, 1, 7].into_iter().map(|len| Ok(ThoDataRef::Owned(ThoTensor::new(format!("len_{len}").into(), tch_result(Tensor::f_zeros([1, len], FLOAT_CPU))?)?))).collect::<Result<_, ThoError>>()?;
+        let tensors = [5, 1, 7]
+            .into_iter()
+            .map(|len| Ok(ThoDataRef::Owned(ThoTensor::new(format!("len_{len}").into(), tch_result(Tensor::f_zeros([1, len], FLOAT_CPU))?)?)))
+            .collect::<Result<_, ThoError>>()?;
         let batch = ResourceBatch::try_new(tensors, resources())?;
         let (tensor, layout) = unfold_and_cat(&batch, &UnfoldParams::new(1, 3, 2))?;
         assert_eq!(tensor.size(), vec![1, 5, 3]);
@@ -803,7 +856,7 @@ mod batch_tests {
 
     #[tokio::test]
     async fn test_batch_selection_and_wire_validation() -> anyhow::Result<()> {
-        let input = CrossInput::new(remote_batch()?, remote_batch()?, "cross".into());
+        let input = CrossInput::new("cross".into(), remote_batch()?, remote_batch()?);
         let selected = input.select_ref(1, Some((1..3).into())).await?;
         assert_eq!(selected.inner.resources().iter().map(|r| r.as_ref().id()).collect::<Vec<_>>(), vec![11, 12]);
         assert_eq!(selected.inner.lengths(), &[1, 7]);

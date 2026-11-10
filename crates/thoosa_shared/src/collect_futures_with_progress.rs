@@ -114,65 +114,67 @@ where
 {
     // Suspend the waiting scheduled frame once for the entire collection. A
     // child must be able to do post-submit work without first resuming its parent.
-    JobContext::current().wait(async {
-    let mut limit_rx = buffer_limit.as_ref().clone();
-    let mut limit = *limit_rx.borrow_and_update();
-    assert!(limit > 0, "buffer_limit must be > 0; JoinSet version cannot make progress with 0");
-    let eta_guard = (len > 0).then(|| CollectEtaInvocationGuard::new(descr, len, limit.min(len.max(1))));
-    let eta_id = eta_guard.as_ref().map(CollectEtaInvocationGuard::id);
-    let mut futures = futures.enumerate();
-    let mut tasks = JoinSet::new();
-    // JoinError carries a Tokio task ID, not the input index. Retain the mapping
-    // so a panic/cancellation occupies its ordered slot instead of leaving a gap.
-    let mut indices = HashMap::new();
-    let mut completed = BTreeMap::new();
-    let mut next_idx = 0;
-    let mut outcomes = Vec::with_capacity(len);
-    let (mut ok, mut err) = (0, 0);
-    let mut updates_open = true;
-    let mut exhausted = fill_joinset(&mut tasks, &mut indices, &mut futures, limit, 0);
-    while !tasks.is_empty() {
-        tokio::select! {
-            changed = limit_rx.changed(), if updates_open => {
-                if changed.is_err() { updates_open = false; }
-            }
-            joined = tasks.join_next_with_id() => {
-                let (id, item) = match joined.expect("JoinSet must contain a task") {
-                    Ok((id, item)) => (id, item),
-                    Err(error) => (error.id(), Err(ThoError::from_source(error).context("join parallel task"))),
-                };
-                let idx = indices.remove(&id).expect("every submitted task has an input index");
-                if item.is_ok() { ok += 1; } else { err += 1; }
-                if let Some(id) = eta_id { collect_eta_record_completion(id); }
-                debug!("collect_futures_with_progress: descr={descr} progress={}/{len} ok={ok} err={err}", ok + err);
-                if eta_id.is_some() { collect_eta_maybe_log(false); }
-                match buffering {
-                    FuturesOrdering::Unordered => outcomes.push((idx, item)),
-                    FuturesOrdering::Ordered => {
-                        completed.insert(idx, item);
-                        while let Some(item) = completed.remove(&next_idx) {
-                            outcomes.push((next_idx, item));
-                            next_idx += 1;
+    JobContext::current()
+        .wait(async {
+            let mut limit_rx = buffer_limit.as_ref().clone();
+            let mut limit = *limit_rx.borrow_and_update();
+            assert!(limit > 0, "buffer_limit must be > 0; JoinSet version cannot make progress with 0");
+            let eta_guard = (len > 0).then(|| CollectEtaInvocationGuard::new(descr, len, limit.min(len.max(1))));
+            let eta_id = eta_guard.as_ref().map(CollectEtaInvocationGuard::id);
+            let mut futures = futures.enumerate();
+            let mut tasks = JoinSet::new();
+            // JoinError carries a Tokio task ID, not the input index. Retain the mapping
+            // so a panic/cancellation occupies its ordered slot instead of leaving a gap.
+            let mut indices = HashMap::new();
+            let mut completed = BTreeMap::new();
+            let mut next_idx = 0;
+            let mut outcomes = Vec::with_capacity(len);
+            let (mut ok, mut err) = (0, 0);
+            let mut updates_open = true;
+            let mut exhausted = fill_joinset(&mut tasks, &mut indices, &mut futures, limit, 0);
+            while !tasks.is_empty() {
+                tokio::select! {
+                    changed = limit_rx.changed(), if updates_open => {
+                        if changed.is_err() { updates_open = false; }
+                    }
+                    joined = tasks.join_next_with_id() => {
+                        let (id, item) = match joined.expect("JoinSet must contain a task") {
+                            Ok((id, item)) => (id, item),
+                            Err(error) => (error.id(), Err(ThoError::from_source(error).context("join parallel task"))),
+                        };
+                        let idx = indices.remove(&id).expect("every submitted task has an input index");
+                        if item.is_ok() { ok += 1; } else { err += 1; }
+                        if let Some(id) = eta_id { collect_eta_record_completion(id); }
+                        debug!("collect_futures_with_progress: descr={descr} progress={}/{len} ok={ok} err={err}", ok + err);
+                        if eta_id.is_some() { collect_eta_maybe_log(false); }
+                        match buffering {
+                            FuturesOrdering::Unordered => outcomes.push((idx, item)),
+                            FuturesOrdering::Ordered => {
+                                completed.insert(idx, item);
+                                while let Some(item) = completed.remove(&next_idx) {
+                                    outcomes.push((next_idx, item));
+                                    next_idx += 1;
+                                }
+                            }
                         }
                     }
                 }
+                limit = *limit_rx.borrow_and_update();
+                assert!(limit > 0, "buffer_limit must be > 0; JoinSet version cannot make progress with 0");
+                if !exhausted {
+                    // Out-of-order completions occupy ordered-buffer capacity until the
+                    // earlier slots finish, including slots that failed or panicked.
+                    exhausted = fill_joinset(&mut tasks, &mut indices, &mut futures, limit, completed.len());
+                }
             }
-        }
-        limit = *limit_rx.borrow_and_update();
-        assert!(limit > 0, "buffer_limit must be > 0; JoinSet version cannot make progress with 0");
-        if !exhausted {
-            // Out-of-order completions occupy ordered-buffer capacity until the
-            // earlier slots finish, including slots that failed or panicked.
-            exhausted = fill_joinset(&mut tasks, &mut indices, &mut futures, limit, completed.len());
-        }
-    }
-    debug_assert!(completed.is_empty() && indices.is_empty());
-    drop(eta_guard);
-    if eta_id.is_some() {
-        collect_eta_maybe_log(true);
-    }
-    outcomes
-    }).await
+            debug_assert!(completed.is_empty() && indices.is_empty());
+            drop(eta_guard);
+            if eta_id.is_some() {
+                collect_eta_maybe_log(true);
+            }
+            outcomes
+        })
+        .await
 }
 
 fn fill_joinset<T, F, I>(tasks: &mut JoinSet<Result<T, ThoError>>, indices: &mut HashMap<Id, usize>, futures: &mut I, limit: usize, completed_len: usize) -> bool

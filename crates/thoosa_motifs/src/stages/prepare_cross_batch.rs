@@ -80,8 +80,12 @@ impl PreparedCrossBatch {
         Ok(())
     }
 
-    pub fn tensor(&self) -> &ThoTensor<AnyDims, SynKey> { &self.tensor }
-    pub fn params(&self) -> UnfoldParams { self.params }
+    pub fn tensor(&self) -> &ThoTensor<AnyDims, SynKey> {
+        &self.tensor
+    }
+    pub fn params(&self) -> UnfoldParams {
+        self.params
+    }
     pub fn slices(&self) -> Vec<ResourceSlices> {
         self.layout.iter().filter(|entry| entry.windows > 0).map(|entry| ResourceSlices::new(entry.resource, entry.windows as usize)).collect()
     }
@@ -180,7 +184,14 @@ impl<C: RunCtx + 'static> SyncStage for PrepareCrossBatch<C> {
             return Err(ThoError::new("outer preparation requires an empty inner batch"));
         }
         let (tensor, layout) = unfold_and_cat(input.raw_outer()?, &self.params)?;
-        let layout = layout.into_iter().map(|entry| ResourceWindows { resource: entry.resource.as_ref().id(), samples: entry.samples, windows: entry.windows }).collect();
+        let layout = layout
+            .into_iter()
+            .map(|entry| ResourceWindows {
+                resource: entry.resource.as_ref().id(),
+                samples: entry.samples,
+                windows: entry.windows,
+            })
+            .collect();
         PreparedCrossBatch::new(ThoTensor::new(input.id().clone(), tensor)?, layout, self.params)
     }
 }
@@ -205,7 +216,17 @@ mod tests {
 
     #[test]
     fn test_prepared_batch_validates_layout_and_wire() -> anyhow::Result<()> {
-        let tensor = ThoTensor::new_ref("prepared".into(), 15, vec![1, 5, 3], Kind::Float, None, CudaWorkerId { device_idx: 1, generation: thoosa_shared::CudaDeviceGeneration(7) });
+        let tensor = ThoTensor::new_ref(
+            "prepared".into(),
+            15,
+            vec![1, 5, 3],
+            Kind::Float,
+            None,
+            CudaWorkerId {
+                device_idx: 1,
+                generation: thoosa_shared::CudaDeviceGeneration(7),
+            },
+        );
         let layout = vec![ResourceWindows { resource: 10, samples: 5, windows: 2 }, ResourceWindows { resource: 11, samples: 1, windows: 0 }, ResourceWindows { resource: 12, samples: 7, windows: 3 }];
         let prepared = PreparedCrossBatch::new(tensor, layout, UnfoldParams::new(1, 3, 2))?;
         let resources: Vec<Arc<Resource>> = (10..13).map(|id| Arc::new(Resource::new(id, 1, "resource", 100))).collect();
@@ -213,7 +234,7 @@ mod tests {
         prepared.validate_lengths(&[5, 1, 7])?;
         assert!(prepared.validate_resources(&[resources[2].clone(), resources[1].clone(), resources[0].clone()]).is_err());
         assert!(prepared.validate_lengths(&[5, 2, 7]).is_err());
-        let input = CrossInput::from_prepared(thoosa_common::runner::common::cachable::ThoDataRef::Borrowed(&prepared), resources, super::super::resource_batch::ResourceBatch::default(), "prepared_input".into())?;
+        let input = CrossInput::from_prepared("prepared_input".into(), thoosa_common::runner::common::cachable::ThoDataRef::Borrowed(&prepared), resources, super::super::resource_batch::ResourceBatch::default())?;
         let mut input_wire = serde_json::to_value(&input)?;
         input_wire["outer"]["Prepared"]["resources"].as_array_mut().expect("resource array").reverse();
         assert!(serde_json::from_value::<CrossInput<'static, Arc<Resource>>>(input_wire).is_err());
