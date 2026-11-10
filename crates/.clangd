@@ -3,8 +3,8 @@ CompileFlags:
      -std=c++23,
      -I/usr/include/c++/13,
      -I/usr/include/x86_64-linux-gnu/c++/13, 
-     -I/home/bu/dvl/torch/libtorch-2.7.1/include/, 
-     -I/home/bu/dvl/torch/libtorch-2.7.1/include/torch/csrc/api/include/, 
+     -I/home/bu/dvl/torch/libtorch-2.15.0-release/include/,
+     -I/home/bu/dvl/torch/libtorch-2.15.0-release/include/torch/csrc/api/include/,
      -stdlib=libstdc++, 
      --gcc-toolchain=/usr/lib/gcc/x86_64-linux-gnu/13/,
   ]
