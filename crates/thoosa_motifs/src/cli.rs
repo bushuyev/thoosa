@@ -456,7 +456,8 @@ pub struct RunAllArgs {
     #[arg(long)]
     pub selected_motif_nets_limit: Option<usize>, //filters motif nets for label training TODO move to train labels args
 
-    #[arg(long, default_value = "100")]
+    // This is a step in filtered samples; 100 skips short EEG motifs after decimation.
+    #[arg(long, default_value = "5")]
     pub motif_slices_step: u32,
 
     #[arg(long, default_value = "false")]

@@ -11,7 +11,7 @@ use thoosa_common::runner::run_ctx::RunCtxImpl;
 use thoosa_common::tch_error::tch_result;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::transforms::filters::InputFilterRangeOrValue::{AverageFilter, BandPassFilter, MedianFilter, SavGolFilter};
-use thoosa_common::transforms::filters::{AverageFilterParamsRangeOrValue, BandPassFilterParamsRangeOrValue, InputFilter, InputFilterRangeOrValue, MedianFilterParamsRangeOrValue, PaddingRangeOrValue, SavGolFilterParamsRangeOrValue, ZeroPaddingRangeOrValue};
+use thoosa_common::transforms::filters::{AverageFilterParamsRangeOrValue, BandPassFilterParamsRangeOrValue, InputFilter, InputFilterRangeOrValue, MedianFilterParamsRangeOrValue, NotchBandFilterParamsRangeOrValue, PaddingRangeOrValue, ReplicatePaddingRangeOrValue, SavGolFilterParamsRangeOrValue, ZeroPaddingRangeOrValue};
 use thoosa_common::ws::Workspace;
 use thoosa_motifs::cli::{RunAllArgs, dyn_step_find_and_select, median_window_from_find_and_select, run_grid, run_opt, run_plot};
 use thoosa_motifs::distance::{DotProductConfigRangeOrValue, EucDistConfigRangeOrValue, SimilarityMetricRangeOrValue};
@@ -24,7 +24,7 @@ use thoosa_motifs::stages::extend_motifs::ExtendMotifsStage;
 use thoosa_motifs::stages::find_and_select_motifs::{FindAndSelectMotifsInput, FindAndSelectMotifsRunConfig, FindAndSelectMotifsRunConfigFields, FindAndSelectMotifsRunConfigRangeOrValue, FindAndSelectMotifsStage};
 use thoosa_motifs::stages::find_motifs_run_config::{
     AccumulateStatsRangeOrValue, AggrRangeOrValue, CoherenceRunConfigRangeOrValue, CrossLoaderRunConfig, CrossLoaderRunConfigRangeOrValue, ExtendMotifsConfigRangeOrValue, ExtendMotifsRunConfigRangeOrValue, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, FinderKindRangeOrValue,
-    InlierRatioRunConfigRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MetricsRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, PeriodicityAcfRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue,
+    InlierRatioRunConfigRangeOrValue, InterestingTvNorm01RunConfigRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MetricsRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, PeriodicityAcfRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue,
     SelectMotifsRunConfigFields, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue,
 };
 use thoosa_motifs::stages::motif_loader::MotifLoader;
@@ -327,7 +327,8 @@ pub(crate) async fn run_all(ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::Mo
                     &store_in_train_final,
                     init_ctx_in_train_final,
                     Arc::clone(&all_config.train_final_opt_config),
-                    10, //TODO
+                    // Reuse the label-training scan density so final features have the same distribution.
+                    run_all_args.motif_slices_step,
                 ))
                 .await?,
             ))
@@ -500,136 +501,86 @@ pub fn run_all_config_test(run_all_args: &RunAllArgs, profile: &RunAllSettings) 
 
 pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
     let find_and_select = FindAndSelect::GridOnly {
-        find_motifs_run_config_range_or_value: run_all_find_motifs_config_grid_0(8, 8, 16),
+        find_motifs_run_config_range_or_value: run_all_find_motifs_config_grid_0(),
         fixed_find_motifs_config: FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false),
-        extend_motifs_run_config: Some(run_all_extend_motifs_config_grid_0::<SelectMotifsRunConfigFields>()),
+        // GridOnly currently selects the discovered occurrences without running extension.
+        extend_motifs_run_config: None,
         select_motifs_run_config: run_all_select_motifs_config_grid_0::<SelectMotifsRunConfigFields>(),
     };
 
-    // let find_and_select =  FindAndSelect::WithOpt {
-    //     find_and_select_run_config_range_or_value: FindAndSelectMotifsRunConfigRangeOrValue {
-    //         id: None,
-    //         find_motifs_run_config: run_all_find_motifs_config_opt_0::<FindAndSelectMotifsRunConfigFields, _, _>(median_window_from_find_and_select, dyn_step_find_and_select),
-    //         select_motifs_run_config: run_all_select_motifs_config_opt_0::<FindAndSelectMotifsRunConfigFields>(),
-    //     },
-    //     fixed_find_motifs_config: FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false),
-    //     find_and_select_motifs_opt_config: OptConfig::new(30, 10),
-    // };
-
-    /////////////////////train_motifs
-    let train_motif_nets_run_config_range_or_value: TrainMotifNetRunConfigRangeOrValue = TrainMotifNetRunConfigRangeOrValue {
+    let train_motif_nets_run_config_range_or_value = TrainMotifNetRunConfigRangeOrValue {
         id: None,
         common_training_args: CommonTrainingRunConfigRangeOrValue {
-            epochs: RangeOrValue::Value(10),
-            batch_size: RangeOrValue::Value(10),
-            // lr: RangeOrValue::Value(0.0001),
-            lr: RangeOrValue::Range {
-                range: Range { start: 0.00001, end: 0.001 },
-                step: None,
-            },
-            patience: RangeOrValue::Value(10),
+            // A ten-epoch detector can be discarded by max_motif_net_loss before it converges.
+            epochs: RangeOrValue::Value(60),
+            batch_size: RangeOrValue::Value(32),
+            lr: RangeOrValue::Range { range: 0.0001..0.003, step: None },
+            patience: RangeOrValue::Value(12),
             min_delta: RangeOrValue::Value(1e-4_f32),
-
             optimizer: Some(OptimizersRangeOrValue::AdamW(AdamWRangeOrValue {
                 beta1: RangeOrValue::Value(0.9),
                 beta2: RangeOrValue::Value(0.999),
-                wd: RangeOrValue::Value(0.01),
+                wd: RangeOrValue::Value(0.001),
                 amsgrad: RangeOrValue::Value(true),
             })),
         },
-        // net: train_nets::MotifNetTypeArgsRangeOrValue::ConvNet(train_nets::MotifConvNetArgsRangeOrValue {
-        //     num_layers: RangeOrValue::Range { range: Range { start: 3, end: 5 }, step: None },
-        //     step: RangeOrValue::Value(10),
-        //     channels: RangeOrValue::Value(32),
-        //     kernel: RangeOrValue::Value(10),
-        // }),
         net: train_nets::MotifNetTypeArgsRangeOrValue::CosineNet(MotifCosineNetArgsRangeOrValue {
-            // step: RangeOrValue::Value(1),
-            // channels: RangeOrValue::Range { range: Range { start: 4, end: 32 }, step: None },
-            // kernel: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: None },
-            a: RangeOrValue::Range { range: Range { start: 1.0, end: 10.0 }, step: None },
-            b: RangeOrValue::Range { range: Range { start: 0.0, end: 1.0 }, step: None },
-            init_mode: InitModeRangeOrValue::Mean(InitDummyRangeOrValue { _path_pd: Default::default() }),
-        }), // net: train_nets::MotifNetTypeArgsRangeOrValue::ConvNet(train_nets::MotifConvNetArgsRangeOrValue {
-            //     conv_layers: RangeOrValue::Range { range: Range { start: 2, end: 24 }, step: None },
-            //     head_layers: RangeOrValue::Range { range: Range { start: 2, end: 24 }, step: None },
-            //     step: RangeOrValue::Value(10),
-            //     channels: RangeOrValue::Range{ range: Range {start: 8, end: 256}, step: None },
-            //     // kernel: RangeOrValue::Value(10),
-            //     kernel: RangeOrValue::Range{ range: Range {start: 10, end: 100}, step: None },
-            //     head_pool: None,
-            // })
+            a: RangeOrValue::Range { range: 4.0..12.0, step: None },
+            // logit = a * cosine + b: unrelated windows should start below probability 0.5.
+            b: RangeOrValue::Range { range: -4.0..-1.0, step: None },
+            // Match normalized-distance discovery without letting high-amplitude slices dominate the prototype.
+            init_mode: InitModeRangeOrValue::ZScoreMean(InitDummyRangeOrValue { _path_pd: Default::default() }),
+        }),
     };
 
-    //////////////////////train labels
-    let train_label_nets_run_config_range_or_value: TrainLabelNetRunConfigRangeOrValue = TrainLabelNetRunConfigRangeOrValue {
+    let train_label_nets_run_config_range_or_value = TrainLabelNetRunConfigRangeOrValue {
         id: None,
         common_training_args: CommonTrainingRunConfigRangeOrValue {
-            epochs: RangeOrValue::Value(300),
+            epochs: RangeOrValue::Value(200),
+            // The balanced loader requires at least half a batch per label in each split.
             batch_size: RangeOrValue::Value(10),
-            lr: RangeOrValue::Range {
-                range: Range { start: 0.00001, end: 0.001 },
-                step: None,
-            },
-            patience: RangeOrValue::Value(10),
+            lr: RangeOrValue::Range { range: 0.0001..0.001, step: None },
+            patience: RangeOrValue::Value(20),
             min_delta: RangeOrValue::Value(1e-4_f32),
             optimizer: Some(OptimizersRangeOrValue::AdamW(AdamWRangeOrValue {
                 beta1: RangeOrValue::Value(0.9),
                 beta2: RangeOrValue::Value(0.999),
-                wd: RangeOrValue::Value(0.01),
+                wd: RangeOrValue::Range { range: 0.001..0.03, step: None },
                 amsgrad: RangeOrValue::Value(true),
             })),
         },
-
-        // net: LabelNetTypeArgsRangeOrValue::ConvNet(ConvNetArgsRangeOrValue {
-        //     num_conv_layers: RangeOrValue::Range { range: Range { start: 4, end: 32 }, step: None },
-        //     hidden_conv_channels: RangeOrValue::Range { range: Range { start: 8, end: 32 }, step: None },
-        //     // hidden_conv_channels: RangeOrValue::Value(64),
-        //     // num_head_layers: RangeOrValue::Value(10),
-        //     num_head_layers: RangeOrValue::Range { range: Range { start: 8, end: 32 }, step: None },
-        //     num_head_features: RangeOrValue::Range { range: Range { start: 8, end: 256 }, step: None },
-        //     // num_head_features: RangeOrValue::Value(256),
-        //     kernel: RangeOrValue::Value(100),
-        //     // kernel: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: None },
-        //     joint: ConvNetJointArgsRangeOrValue::AttnPool1d(AttnPool1dArgsRangeOrValue{ _path_pd: Default::default() }),
-        // }),
+        // Embedding width is head_size * n_heads. Bound capacity for the small per-label datasets.
         net: LabelNetTypeArgsRangeOrValue::SelfAttentionNet(SelfAttentionNetArgsRangeOrValue {
-            // d_model: RangeOrValue::Value(64),
-            head_size: RangeOrValue::Range { range: Range { start: 64, end: 256 }, step: None },
-            // head_size: RangeOrValue::Value(32),
-            n_heads: RangeOrValue::Range { range: Range { start: 4, end: 12 }, step: None },
-            // n_heads: RangeOrValue::Value(4),
-            // ff_mult: RangeOrValue::Range { range: Range { start: 2, end: 4 }, step: None },
+            head_size: RangeOrValue::Range { range: 16..64, step: None },
+            n_heads: RangeOrValue::Range { range: 2..4, step: None },
             ff_mult: RangeOrValue::Value(2),
-            // dropout: RangeOrValue::Value(0.1),
-            dropout: RangeOrValue::Range { range: Range { start: 0.01, end: 0.2 }, step: None },
+            dropout: RangeOrValue::Range { range: 0.1..0.4, step: None },
         }),
-
-        validation_step: RangeOrValue::Value(10),
+        // TrainLabelNets currently validates each epoch; keep the saved configuration consistent.
+        validation_step: RangeOrValue::Value(1),
     };
-    //////////////////////train final
-    let train_final_net_run_config_range_or_value: TrainFinalNetRunConfigRangeOrValue = TrainFinalNetRunConfigRangeOrValue {
+
+    let train_final_net_run_config_range_or_value = TrainFinalNetRunConfigRangeOrValue {
         id: None,
         common_training_args: CommonTrainingRunConfigRangeOrValue {
-            epochs: RangeOrValue::Value(300),
-            // batch_size: RangeOrValue::Value(2),
-            batch_size: RangeOrValue::Range { range: Range { start: 2, end: 10 }, step: None },
-            lr: RangeOrValue::Range {
-                range: Range { start: 0.00001, end: 0.001 },
-                step: None,
-            },
-            patience: RangeOrValue::Value(10),
+            epochs: RangeOrValue::Value(200),
+            // A fixed batch size also keeps validation-loss comparisons on the same batching scheme.
+            batch_size: RangeOrValue::Value(10),
+            lr: RangeOrValue::Range { range: 0.0001..0.003, step: None },
+            patience: RangeOrValue::Value(20),
             min_delta: RangeOrValue::Value(1e-4_f32),
             optimizer: Some(OptimizersRangeOrValue::AdamW(AdamWRangeOrValue {
                 beta1: RangeOrValue::Value(0.9),
                 beta2: RangeOrValue::Value(0.999),
-                wd: RangeOrValue::Value(0.01),
+                wd: RangeOrValue::Range { range: 0.001..0.03, step: None },
                 amsgrad: RangeOrValue::Value(true),
             })),
         },
         net: FinalNetArgsRangeOrValue {
-            num_layers: RangeOrValue::Range { range: Range { start: 4, end: 32 }, step: None },
-            mid_features: RangeOrValue::Range { range: Range { start: 8, end: 8000 }, step: None },
+            // There is already one hidden layer. mid_features multiplies the number of label nets,
+            // so the old 8..8000 range could build enormous networks from only six label scores.
+            num_layers: RangeOrValue::Range { range: 0..2, step: None },
+            mid_features: RangeOrValue::Range { range: 1..16, step: None },
         },
     };
     AllConfigs {
@@ -710,84 +661,79 @@ fn run_all_extend_motifs_config_grid_0<P: FieldName + 'static>() -> ExtendMotifs
     }
 }
 
-fn run_all_find_motifs_config_grid_0(min_k: u32, max_k: u32, steps: u32) -> FindMotifsRunConfigRangeOrValue<FindMotifsRunConfigFields> {
-    let median_window = move |named_vals: &[NamedVal<FindMotifsRunConfigFields>]| match named_vals.iter().find(|field| field.path().eq(&FindMotifsRunConfigFields::Window)) {
-        None => RangeOrValue::Value(100),
-        Some(value) => {
-            let window = value.val().to_i64(0) as u32;
-            debug!("Window: window={window}");
-            let end = window.saturating_mul(max_k);
-            let start = window / min_k;
-            RangeOrValue::Range {
-                range: Range { start, end },
-                step: Some(((end - start) / steps, 0)),
-            }
-        }
-    };
+fn run_all_find_motifs_config_grid_0() -> FindMotifsRunConfigRangeOrValue<FindMotifsRunConfigFields> {
     FindMotifsRunConfigRangeOrValue {
         id: None,
-        step: RangeOrValue::Value(10),
-        // window: RangeOrValue::Value(200),
-        window: RangeOrValue::Range {
-            range: Range { start: 100, end: 1010 },
-            step: Some((100, 0)),
-        },
+        step: RangeOrValue::Value(5),
+        // Windows are measured AFTER filtering: at 200 Hz these cover 0.4..1.6 seconds
+        // with stride 2, or 2..8 seconds with stride 10. Keep both transient and rhythmic features.
+        window: RangeOrValue::Range { range: 40..161, step: Some((40, 0)) },
         freq_filter: Some(vec![
-            // AverageFilter(AverageFilterParamsRangeOrValue {
-            //     window: RangeOrValue::dynamic(median_window),
-            //     step: RangeOrValue::Value(10),
-            // }),
-            BandPassFilter(BandPassFilterParamsRangeOrValue {
-                low_hz: RangeOrValue::Range { range: Range { start: 0., end: 100. }, step: Some((10., 1)) },
-                band_hz: RangeOrValue::Value(2.),
-                // kernel_size: RangeOrValue::Value(10),
-                // kernel_size: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: Some((50, 0)) },
-                kernel_size: RangeOrValue::dynamic(median_window),
-                stride: RangeOrValue::Value(10),
-                padding: PaddingRangeOrValue::Zero(ZeroPaddingRangeOrValue::default()),
-            })
-            // SavGolFilter(SavGolFilterParamsRangeOrValue {
-            //     window_len: RangeOrValue::dynamic(median_window),//RangeOrValue::Range { range: Range { start: 100, end: 200 }, step: None },
-            //     poly_order: RangeOrValue::Range { range: Range { start: 1, end: 10 }, step: Some((2, 0)) },
-            //     // stride: RangeOrValue::Value(10),
-            //     stride: RangeOrValue::dynamic(median_window),
-            //     padding: PaddingRangeOrValue::Zero(ZeroPaddingRangeOrValue::default()),
-            // }),
+            // Remove drift and high-frequency noise before decimation, retaining slow EEG activity.
+            // FFT notch filters operate at the original sample rate and preserve signal length.
+            InputFilterRangeOrValue::NotchBandFilter(NotchBandFilterParamsRangeOrValue {
+                low_hz: RangeOrValue::Value(0.0),
+                high_hz: RangeOrValue::Value(0.5),
+            }),
+            InputFilterRangeOrValue::NotchBandFilter(NotchBandFilterParamsRangeOrValue {
+                low_hz: RangeOrValue::Value(30.0),
+                high_hz: RangeOrValue::Value(100.0),
+            }),
+            // Retain a lightly smoothed branch as well as the slow morphology seen in earlier screening.
+            MedianFilter(MedianFilterParamsRangeOrValue { window: RangeOrValue::Range { range: 5..102, step: Some((96, 0)) } }),
+            InputFilterRangeOrValue::Vec(vec![
+                SavGolFilter(SavGolFilterParamsRangeOrValue {
+                    window_len: RangeOrValue::Value(9),
+                    poly_order: RangeOrValue::Value(2),
+                    stride: RangeOrValue::Value(2),
+                    padding: PaddingRangeOrValue::Replicate(ReplicatePaddingRangeOrValue::default()),
+                }),
+                SavGolFilter(SavGolFilterParamsRangeOrValue {
+                    // Odd windows keep the filter centered; replication avoids artificial zero edges.
+                    window_len: RangeOrValue::Value(193),
+                    poly_order: RangeOrValue::Value(1),
+                    stride: RangeOrValue::Value(10),
+                    padding: PaddingRangeOrValue::Replicate(ReplicatePaddingRangeOrValue::default()),
+                }),
+            ]),
         ]),
-        min_slices: Some(RangeOrValue::Value(4)),
+        // Ten occurrences leave at least two validation examples in the detector's 80/20 split.
+        min_slices: Some(RangeOrValue::Value(10)),
         max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue { count: RangeOrValue::Value(1000) })),
         finder_kind: FinderKindRangeOrValue::CrossLoader(CrossLoaderRunConfigRangeOrValue {
-            similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
+            // Discover waveform shape instead of grouping low-amplitude windows by raw distance.
+            similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(true) }),
             slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue {
-                aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue {
-                    q: RangeOrValue::Value(5.0),
-                    // q: RangeOrValue::Range { range: 0.0..0.1, step: Some((0.05, 2)) },
-                }),
+                // Quantiles are fractions. The former 5.0 was clamped to 1.0 (maximum distance).
+                aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue { q: RangeOrValue::Value(0.1) }),
             }),
         }),
     }
 }
 
-#[allow(dead_code)]
 fn run_all_select_motifs_config_grid_0<P: FieldName + 'static>() -> SelectMotifsRunConfigRangeOrValue<P> {
     SelectMotifsRunConfigRangeOrValue {
         id: None,
         motif_criteria: vec![
             MotifCriterionConstraintRangeOrValue {
                 metric: MetricsRangeOrValue::NormThickness(NormThicknessRunConfigRangeOrValue { eps: RangeOrValue::Value(1e-8) }),
-                min: RangeOrValue::Value(0.85),
+                // Allow physiological variation instead of requiring nearly identical occurrences.
+                min: RangeOrValue::Value(0.6),
             },
             MotifCriterionConstraintRangeOrValue {
-                metric: MetricsRangeOrValue::PeriodicityAcf(PeriodicityAcfRunConfigRangeOrValue {
-                    struct_lag_max: RangeOrValue::Value(1. / 64.),
-                    lag_min: RangeOrValue::Value(1. / 32.),
-                    lag_max: RangeOrValue::Value(0.5),
-                    struct0: RangeOrValue::Value(0.2),
-                    peak_good: RangeOrValue::Value(0.25),
-                    peak_bad: RangeOrValue::Value(0.65),
+                metric: MetricsRangeOrValue::InlierRatio(InlierRatioRunConfigRangeOrValue { k: RangeOrValue::Value(3.0), eps: RangeOrValue::Value(1e-8) }),
+                min: RangeOrValue::Value(0.7),
+            },
+            MotifCriterionConstraintRangeOrValue {
+                // Reject flat/monotone consensus shapes without PeriodicityAcf's anti-periodic bias:
+                // recurring discharges and rhythmic activity are useful features for this dataset.
+                metric: MetricsRangeOrValue::InterestingTvNorm01(InterestingTvNorm01RunConfigRangeOrValue {
+                    amp_q_lo: RangeOrValue::Value(0.05),
+                    amp_q_hi: RangeOrValue::Value(0.95),
+                    tv0: RangeOrValue::Value(1.0),
                     eps: RangeOrValue::Value(1e-8),
                 }),
-                min: RangeOrValue::Value(0.80),
+                min: RangeOrValue::Value(0.55),
             },
         ],
     }
@@ -1021,6 +967,54 @@ mod tests {
     #[ctor::ctor]
     fn init() {
         thoosa_shared::test_utils::init_test_logging();
+    }
+
+    #[test]
+    fn test_run_all_motif_grid_materializes_supported_eeg_windows() -> anyhow::Result<()> {
+        use thoosa_common::transforms::filters::InputFilter;
+        use thoosa_motifs::stages::find_motifs_run_config::{Aggr, FindMotifsRunConfig, FinderKind, SlicesFilter};
+        use thoosa_run_config_args::GridRunConfigSource;
+
+        // Exercise generated enum/grid expansion, including the alternative smoothing branches.
+        let configs: Vec<FindMotifsRunConfig> = super::run_all_find_motifs_config_grid_0().grid_run_configs()?.to_run_configs()?;
+        assert_eq!(configs.len(), 16);
+        let mut strides = std::collections::HashSet::new();
+        for config in configs {
+            let FinderKind::CrossLoader(cross) = &config.finder_kind else { panic!("expected cross-loader discovery") };
+            let SlicesFilter::Accumulate(stats) = &cross.slices_filter else { panic!("expected accumulated distances") };
+            let Aggr::Quantile(q) = stats.aggr else { panic!("expected quantile cutoff") };
+            assert!(q.q > 0.0 && q.q < 1.0, "the cutoff must not collapse to the maximum observed distance");
+            let filters = config.freq_filter.as_ref().expect("EEG preprocessing");
+            let stride = filters.iter().filter_map(|filter| match filter { InputFilter::SavGolFilter(params) => Some(params.stride), _ => None }).product::<u32>();
+            strides.insert(stride);
+            let duration = config.window as f64 * stride as f64 / 200.0;
+            assert!((0.4..=8.0).contains(&duration), "unexpected EEG motif duration: {duration}");
+            assert!(config.input_len_adjuster()(2000) >= config.window, "a central ten-second EEG segment must contain a full motif");
+        }
+        assert_eq!(strides, [2, 10].into_iter().collect());
+        Ok(())
+    }
+
+    #[test]
+    fn test_run_all_selection_preserves_rhythms_and_rejects_flat_or_ramp_motifs() -> anyhow::Result<()> {
+        use thoosa_motifs::stages::find_motifs_run_config::SelectMotifsRunConfig;
+        use thoosa_motifs::stages::slices_stats::metric_scalar_for_motif;
+        use thoosa_run_config_args::GridRunConfigSource;
+
+        let configs: Vec<SelectMotifsRunConfig> = super::run_all_select_motifs_config_grid_0::<SelectMotifsRunConfigFields>().grid_run_configs()?.to_run_configs()?;
+        let t = Tensor::f_arange(160, (tch::Kind::Float, Device::Cpu))?;
+        let rhythmic = t.f_mul_scalar(std::f64::consts::TAU / 20.0)?.f_sin()?.f_unsqueeze(0)?.f_repeat([10, 1])?;
+        let flat = Tensor::f_zeros([10, 160], (tch::Kind::Float, Device::Cpu))?;
+        let ramp = t.f_unsqueeze(0)?.f_repeat([10, 1])?;
+        for config in configs {
+            for (name, motif, expected) in [("rhythmic", &rhythmic, true), ("flat", &flat, false), ("ramp", &ramp, false)] {
+                let scores = config.motif_criteria.iter().map(|criterion| metric_scalar_for_motif(&name, motif, &criterion.metric)).collect::<Result<Vec<_>, _>>()?;
+                assert!(scores.iter().all(|score| score.is_finite()), "non-finite scores for {name}: {scores:?}");
+                let selected = scores.iter().zip(&config.motif_criteria).all(|(score, criterion)| *score >= criterion.min);
+                assert_eq!(selected, expected, "unexpected selection for {name}: {scores:?}");
+            }
+        }
+        Ok(())
     }
 
     #[derive(Clone, Debug)]

@@ -50,7 +50,7 @@ let quantile: RangeOrValue<f64> = RangeOrValue::Range {
 };
 ```
 
-Choose a nonzero increment that moves toward the end, and enough decimal precision for real-valued steps to make progress. The grid conversion uses [`NamedRange`](../crates/thoosa_shared/src/val.rs), which validates these conditions. The HBAC motif-search helper uses the integer window grid shown above.
+Choose a nonzero increment that moves toward the end, and enough decimal precision for real-valued steps to make progress. The grid conversion uses [`NamedRange`](../crates/thoosa_shared/src/val.rs), which validates these conditions. The HBAC motif-search helper uses a smaller grid of 40, 80, 120, and 160 filtered samples.
 
 ### Hyperparameter search spaces
 
@@ -89,4 +89,4 @@ let filter_window: RangeOrValue<u32> = RangeOrValue::dynamic(|fields| {
 });
 ```
 
-The HBAC grid helper uses the same mechanism with the generated `FindMotifsRunConfigFields::Window` field identifier: its filter-window range depends on the selected motif window. Dynamic closures are code-only and cannot be serialized.
+The alternative HBAC test profile uses the same mechanism with the generated `FindMotifsRunConfigFields::Window` field identifier: its filter-window range depends on the selected motif window. Dynamic closures are code-only and cannot be serialized.
