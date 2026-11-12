@@ -1479,7 +1479,7 @@ mod tests {
         let mask = tch_result(Tensor::f_ones([channels, slices, slices], (Kind::Bool, Device::Cpu)))?;
         let dists = tch_result(tch_result(Tensor::f_arange(channels * slices * slices, (Kind::Float, Device::Cpu)))?.f_view([channels, slices, slices]))?;
         let output = CrossUnfoldClcOutput::new(DistsMask::new(mask, Some(dists), DistsMaskType::AsIs)?, SlicesIter::new(2, vec![(10, slices as usize)]), SlicesIter::new(2, vec![(10, slices as usize)]), "channel_batches".into());
-        assert!(matches!(tracker.consume(output, mock_run_ctx::default(0)), ConsumeResult::Ok(())));
+        assert!(matches!(tracker.consume(output, mock_run_ctx::default(1)), ConsumeResult::Ok(())));
         for channel in 0..channels {
             let expected: Vec<_> = (0..slices)
                 .flat_map(|i| {

@@ -1759,7 +1759,7 @@ mod tests {
 
         let motif_loader = MotifLoader::new(store, Arc::new(mock_tensor_loader::build().with_out_id().with_run_cached([(resource_a, lin_t(1000).view((1, -1))), (resource_b, lin_t(1000).view((1, -1)))]).finish()), &ws).await?;
 
-        let ctx = Arc::new(RwLock::new(mock_run_ctx::default(0)));
+        let ctx = Arc::new(RwLock::new(mock_run_ctx::default(1)));
 
         // TODO: replace the test-only u32 -> MotifLoaderInput conversion with explicit constructors.
         let input_id = Arc::new(10u32.into());
@@ -1818,7 +1818,7 @@ mod tests {
             &ws,
         ));
 
-        let ctx = Arc::new(RwLock::new(mock_run_ctx::default(0)));
+        let ctx = Arc::new(RwLock::new(mock_run_ctx::default(1)));
 
         let input = Arc::new(SlicesLoaderInput { motif_id: DataId::from(&motif_id), limit: 10 });
 
@@ -1839,7 +1839,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_empty_random_slices_returns_error() -> Result<(), ThoError> {
-        GlobalCtx::init_devices(1)?;
+        GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
         let ws = Arc::new(RwLock::new(crate::motifs_ws::mock_motifs_ws_simp(None, 1, 100, 10000)));
         let run_config_id = 1;
@@ -1860,7 +1860,7 @@ mod tests {
             .with_get_motif_meta([(motif_id, Ok((0, run_config_id)))])
             .build();
         let loader = Arc::new(RandomSlicesLoader::new(store, Arc::new(mock_tensor_loader::build().finish()), &ws));
-        let mut ctx = mock_run_ctx::default(0);
+        let mut ctx = mock_run_ctx::default(1);
         let input = Arc::new(SlicesLoaderInput::new(DataId(motif_id), 3));
         // A failed cached load must remain a normal error when inspected again;
         // a panic poisons Shared and later panics inside CUDA reset's cache purge.

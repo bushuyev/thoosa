@@ -590,11 +590,11 @@ mod tests {
                 vec![SelectBucketsRunConfig::new(Some(select_buckets_run_config_id), 2.0)],
                 vec![find_motifs_run_config_id],
                 Arc::clone(&input),
-                mock_run_ctx::default(0),
+                mock_run_ctx::default(1),
             )
             .await?,
         );
-        let result = stage.run(input, mock_run_ctx::default(0)).await?;
+        let result = stage.run(input, mock_run_ctx::default(1)).await?;
         let result = Arc::into_inner(result).expect("stage output should not be shared");
 
         assert_eq!(result.selected_motif_ids_scores(), &[(high_motif_id, 3.6)]);

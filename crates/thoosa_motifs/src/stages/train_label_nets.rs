@@ -1354,11 +1354,11 @@ mod tests {
             }),
         );
 
-        let mut batch = resource_batch.train_batch_stream(mock_run_ctx::default(0));
+        let mut batch = resource_batch.train_batch_stream(mock_run_ctx::default(1));
         let (_batch_x, _lengths, _batch_y) = batch.next().await.expect("no batch").expect("batch failed");
         assert!(batch.next().await.is_none()); //should be only one
 
-        let mut batch = resource_batch.valid_batch_stream(mock_run_ctx::default(0));
+        let mut batch = resource_batch.valid_batch_stream(mock_run_ctx::default(1));
         let (_batch_x, _lengths, _batch_y) = batch.next().await.expect("no batch").expect("batch failed");
         assert!(batch.next().await.is_none()); //should be only one
 
@@ -1415,11 +1415,11 @@ mod tests {
             }),
         );
 
-        let mut batch = resource_batch.train_batch_stream(mock_run_ctx::default(0));
+        let mut batch = resource_batch.train_batch_stream(mock_run_ctx::default(1));
         let (_batch_x, _lengths, _batch_y) = batch.next().await.expect("no batch").expect("batch failed");
         assert!(batch.next().await.is_none()); //should be only one
 
-        let mut batch = resource_batch.valid_batch_stream(mock_run_ctx::default(0));
+        let mut batch = resource_batch.valid_batch_stream(mock_run_ctx::default(1));
         let (_batch_x, _lengths, _batch_y) = batch.next().await.expect("no batch").expect("batch failed");
         assert!(batch.next().await.is_none()); //should be only one
 

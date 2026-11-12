@@ -623,7 +623,7 @@ mod tests {
             .await?,
         );
 
-        let _out = stage.run(Arc::new(ResourcesConfigInput::new(Simple::new(resources_group)).check(&store).await?), mock_run_ctx::default(0)).await?;
+        let _out = stage.run(Arc::new(ResourcesConfigInput::new(Simple::new(resources_group)).check(&store).await?), mock_run_ctx::default(1)).await?;
 
         Ok(())
     }

@@ -1743,7 +1743,7 @@ mod tests {
         let received_outputs = Arc::new(Mutex::new(Vec::<TestBatchOutput>::new()));
         let receiver_observed = Arc::clone(&received_outputs);
 
-        let mut ctx = mock_run_ctx::default(0);
+        let mut ctx = mock_run_ctx::default(1);
 
         let mocked_store = MockMotifsStoreBuilder::new().with_list_resources_by_file_stems(vec!["resource_a".to_string(), "resource_b".to_string()], Ok(resources.clone())).build();
 

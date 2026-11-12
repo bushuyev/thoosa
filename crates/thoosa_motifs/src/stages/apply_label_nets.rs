@@ -1169,7 +1169,7 @@ mod tests {
     }
 
     async fn run_apply_label_case(labels: &[TestLabelNetSpec], motifs: &[TestMotifNetSpec], motif_width: u32, step: u32, channels: u32) -> Result<(Vec<i64>, Vec<f32>), ThoError> {
-        GlobalCtx::init_devices(1)?;
+        GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
         let find_motifs_run_config_id = 300;
         let device = Device::Cpu;
@@ -1275,11 +1275,11 @@ mod tests {
         let mut params = FinalNetParams::new(labels.len() as u32, 1, 1, 1);
         params.set_label_feature_schema(labels.iter().map(|label| label.train_run_config_id).collect())?;
         let params: FinalNetParams = serde_json5::from_str(&serde_json5::to_string(&params)?)?;
-        let apply_label_nets = Arc::new(ApplyLabelNets::<mock_run_ctx::MockRunCtx, ApplyMotifNets<mock_run_ctx::MockRunCtx>>::from_final_net_params(&ws, &store, &params, mock_run_ctx::default(0), step).await?);
+        let apply_label_nets = Arc::new(ApplyLabelNets::<mock_run_ctx::MockRunCtx, ApplyMotifNets<mock_run_ctx::MockRunCtx>>::from_final_net_params(&ws, &store, &params, mock_run_ctx::default(1), step).await?);
         assert_eq!(labels.len(), apply_label_nets.num_nets());
 
         // Reuse the real pipeline across concurrent and later resources to catch stale stack metadata.
-        let mut run_ctx = mock_run_ctx::default(0);
+        let mut run_ctx = mock_run_ctx::default(1);
         let stack = Arc::clone(&apply_label_nets.stack_applied_label_nets);
         let make_input = |resource: u32| -> Result<_, ThoError> {
             Ok(Arc::new(DevicesWrap::wrap(ThoTensor::<ChannelsData, SynKey>::new(

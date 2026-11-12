@@ -1456,7 +1456,7 @@ mod tests {
                 .finish(),
         );
         let stage = Arc::new(MotifStats::new(Arc::clone(&store), loader, Arc::clone(&ws), motif_loader));
-        let ctx = Arc::new(RwLock::new(mock_run_ctx::default(0)));
+        let ctx = Arc::new(RwLock::new(mock_run_ctx::default(1)));
         let metric = Metrics::default();
         let input = Arc::new(MotifStatsInput::from_merged_motif_inputs(vec![motif_input_0, motif_input_1], vec![metric.clone()])?);
 

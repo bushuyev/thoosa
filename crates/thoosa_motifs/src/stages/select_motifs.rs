@@ -603,7 +603,7 @@ pub mod tests {
 
         let extend_motifs_stage: Arc<ExtendMotifsStage<_, _, MockRunCtx>> = Arc::new(ExtendMotifsStage::new(&ws, &store, loader, motif_loader, vec![ExtendMotifsRunConfig::new(Some(select_motifs_run_config_id))], vec![find_motifs_run_config_id], 1000, None).await?);
 
-        let _result = extend_motifs_stage.run(Arc::new(ExtendMotifsInput::new(ResourcesConfigInput::new(Simple::new(NotInGroup(resources_group.into()))))), mock_run_ctx::default(0)).await?;
+        let _result = extend_motifs_stage.run(Arc::new(ExtendMotifsInput::new(ResourcesConfigInput::new(Simple::new(NotInGroup(resources_group.into()))))), mock_run_ctx::default(1)).await?;
 
         Ok(())
     }
@@ -662,7 +662,7 @@ pub mod tests {
 
         let extend_motifs_stage: Arc<ExtendMotifsStage<_, _, MockRunCtx>> = Arc::new(ExtendMotifsStage::new(&ws, &store, loader, motif_loader, vec![ExtendMotifsRunConfig::new(Some(select_motifs_run_config_id))], vec![find_motifs_run_config_id], 1000, None).await?);
 
-        let _result = extend_motifs_stage.run(Arc::new(ExtendMotifsInput::new(ResourcesConfigInput::new(Simple::new(NotInGroup(resources_group.into()))))), mock_run_ctx::default(0)).await?;
+        let _result = extend_motifs_stage.run(Arc::new(ExtendMotifsInput::new(ResourcesConfigInput::new(Simple::new(NotInGroup(resources_group.into()))))), mock_run_ctx::default(1)).await?;
 
         Ok(())
     }
@@ -842,7 +842,7 @@ pub mod tests {
             },
         ];
 
-        let filtered = stage.filter_motifs_by_criteria(&select_motifs_run_config, mock_run_ctx::default(0)).await?;
+        let filtered = stage.filter_motifs_by_criteria(&select_motifs_run_config, mock_run_ctx::default(1)).await?;
 
         assert_eq!(filtered.len(), 3, "filtered={filtered:?}");
 
@@ -899,7 +899,7 @@ pub mod tests {
             min: Metrics::DEFAULT_CRITERION_MIN,
         }];
 
-        let filtered = stage.filter_motifs_by_criteria(&select_motifs_run_config, mock_run_ctx::default(0)).await?;
+        let filtered = stage.filter_motifs_by_criteria(&select_motifs_run_config, mock_run_ctx::default(1)).await?;
         debug!("filtered={filtered:?}");
 
         assert_eq!(filtered.len(), 2, "filtered={filtered:?}");
@@ -959,7 +959,7 @@ pub mod tests {
             },
         ];
 
-        let filtered = stage.filter_motifs_by_criteria(&select_motifs_run_config, mock_run_ctx::default(0)).await?;
+        let filtered = stage.filter_motifs_by_criteria(&select_motifs_run_config, mock_run_ctx::default(1)).await?;
 
         assert_eq!(filtered.iter().map(|motif| motif.motif_id).collect::<Vec<_>>(), vec![2], "filtered={filtered:?}");
 
@@ -1027,7 +1027,7 @@ pub mod tests {
 
         let stage: Arc<SelectMotifsStage<_, _, MockRunCtx>> = Arc::new(SelectMotifsStage::new(&ws, &store, loader, motif_loader, vec![select_motifs_run_config], vec![find_motifs_run_config_id], None).await?);
 
-        let result: Arc<SelectMotifsSavableResult> = stage.run(select_input_with_constraint_metrics(resources_group), mock_run_ctx::default(0)).await?;
+        let result: Arc<SelectMotifsSavableResult> = stage.run(select_input_with_constraint_metrics(resources_group), mock_run_ctx::default(1)).await?;
         let savable: SelectMotifsSavableResult = Arc::into_inner(result).expect("test_select_motifs_run_reuses_criterion_scores_for_constraint_metrics: output still shared");
         let metrics = savable.constraint_metrics().cloned().expect("missing constraint metrics");
 
@@ -1109,7 +1109,7 @@ pub mod tests {
 
         let select_motifs_stage: Arc<SelectMotifsStage<_, _, MockRunCtx>> = Arc::new(SelectMotifsStage::new(&ws, &store, loader, motif_loader, vec![select_config], vec![find_motifs_run_config_id], None).await?);
 
-        let result: Arc<SelectMotifsSavableResult> = select_motifs_stage.run(standalone_select_input(resources_group), mock_run_ctx::default(0)).await?;
+        let result: Arc<SelectMotifsSavableResult> = select_motifs_stage.run(standalone_select_input(resources_group), mock_run_ctx::default(1)).await?;
 
         let result_debug = format!("{result:?}");
         assert!(result_debug.contains("(11,"));
@@ -1176,7 +1176,7 @@ pub mod tests {
 
         let select_motifs_stage: Arc<SelectMotifsStage<_, _, MockRunCtx>> = Arc::new(SelectMotifsStage::new(&ws, &store, loader, motif_loader, vec![select_config], vec![find_motifs_run_config_id], None).await?);
 
-        let result: Arc<SelectMotifsSavableResult> = select_motifs_stage.run(standalone_select_input(resources_group), mock_run_ctx::default(0)).await?;
+        let result: Arc<SelectMotifsSavableResult> = select_motifs_stage.run(standalone_select_input(resources_group), mock_run_ctx::default(1)).await?;
 
         let result_debug = format!("{result:?}");
 

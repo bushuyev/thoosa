@@ -435,7 +435,7 @@ mod tests {
         );
         let motif_stats = Arc::new(MotifStats::new(Arc::clone(&store), Arc::new(mock_tensor_loader::build().finish()), Arc::clone(&ws), motif_loader));
         let stage = Arc::new(MergeSelectedMotifs::new(&store, &ws, motif_stats));
-        let ctx = Arc::new(RwLock::new(mock_run_ctx::default(0)));
+        let ctx = Arc::new(RwLock::new(mock_run_ctx::default(1)));
 
         let output = stage
             .run(Arc::new(MergeSelectedMotifsInput::new(vec![select_run_config_id_0, select_run_config_id_1])), thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(ctx)).branch(false))

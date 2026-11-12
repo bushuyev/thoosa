@@ -110,10 +110,10 @@ async fn check_pipeline(fail_consumer: bool) -> Result<(), ThoError> {
         CrossUnfoldClcOutputMergeMode::GpuMerge,
         0,
     );
-    let outer = loader.run_cached(resources[0].clone(), mock_run_ctx::default(0)).await?;
+    let outer = loader.run_cached(resources[0].clone(), mock_run_ctx::default(1)).await?;
     // The first consumer cannot finish until the next comparison has run. This
     // detects serial execution without timing assertions, and failure must drain.
-    let (result, ()) = tokio::join!(cross_loader.run_inner_batches(&resources, ResourceBatch::try_new(vec![outer], vec![resources[0].clone()])?, 0, 0, 2, receiver, mock_run_ctx::default(0)), async {
+    let (result, ()) = tokio::join!(cross_loader.run_inner_batches(&resources, ResourceBatch::try_new(vec![outer], vec![resources[0].clone()])?, 0, 0, 2, receiver, mock_run_ctx::default(1)), async {
         tokio::time::timeout(Duration::from_secs(10), async {
             started.notified().await;
             calculated_next.notified().await;
