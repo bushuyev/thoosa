@@ -944,7 +944,7 @@ impl SelectRef<CrossInputSelector> for CrossInputSelectorWrap {
     /// The adjuster leaves the outer selector unchanged (normally `Full`), allowing
     /// reuse of `prepared_outer` across inner chunks. A changed outer selection
     /// instead materializes raw inputs so preparation matches the selected resources.
-    fn select_ref<'o>(&'o self, to_tho_device_idx: usize, selector: CrossInputSelector) -> impl Future<Output = Result<<Self as BorrowRef>::Out<'o>, ThoError>> + Send
+    fn select_ref<'o>(&'o self, to_tho_device_idx: usize, selector: CrossInputSelector) -> impl Future<Output=Result<<Self as BorrowRef>::Out<'o>, ThoError>> + Send
     where
         CrossInputSelector: 'o,
         Self: 'o,
@@ -952,21 +952,13 @@ impl SelectRef<CrossInputSelector> for CrossInputSelectorWrap {
         async move {
             // Inner resource/slice retries reuse the same outer preparation.
             // Retain the raw path for selectors that actually change the outer batch.
-            let prepared = if matches!(selector.batch_0_selector, RangeOrSlice::Full) {
-                match &self.prepared_outer {
-                    Some(prepared) => Some(BorrowRef::borrow_ref(prepared, to_tho_device_idx).await?),
-                    None => None,
-                }
-            } else {
-                None
-            };
             let inner = t!(selector.batch_1_selector.borrow_to(&self.batch_1, to_tho_device_idx)).await?;
-            match prepared {
-                Some(prepared) => {
-                    prepared.as_ref().validate_lengths(self.batch_0.lengths())?;
-                    CrossInput::from_prepared(self.id.clone(), prepared, self.batch_0.resources().to_vec(), inner)
-                }
-                None => Ok(CrossInput::new(self.id.clone(), t!(selector.batch_0_selector.borrow_to(&self.batch_0, to_tho_device_idx)).await?, inner)),
+            if matches!(selector.batch_0_selector, RangeOrSlice::Full) && let Some(prepared) = &self.prepared_outer {
+                let prepared = BorrowRef::borrow_ref(prepared, to_tho_device_idx).await?;
+                prepared.as_ref().validate_lengths(self.batch_0.lengths())?;
+                CrossInput::from_prepared(self.id.clone(), prepared, self.batch_0.resources().to_vec(), inner)
+            } else {
+                Ok(CrossInput::new(self.id.clone(), t!(selector.batch_0_selector.borrow_to(&self.batch_0, to_tho_device_idx)).await?, inner))
             }
         }
     }

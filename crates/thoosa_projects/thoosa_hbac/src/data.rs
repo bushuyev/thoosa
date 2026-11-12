@@ -67,13 +67,8 @@ impl Splitter for ByPatientIdSplitter {
     }
 }
 
-pub fn parquet_to_tensor(base_path: &str, resource_id: &str, device: Device) -> anyhow::Result<Tensor> {
-    let path = format!("{}/train_eegs/{}.parquet", base_path, resource_id);
 
-    parquet_to_tensor_by_path(path, device)
-}
-
-pub fn labeled_resourses(base: impl AsRef<Path>, file: impl AsRef<Path>) -> anyhow::Result<HashMap<String, Vec<(String, f32)>>> {
+pub fn labeled_resources(base: impl AsRef<Path>, file: impl AsRef<Path>) -> anyhow::Result<HashMap<String, Vec<(String, f32)>>> {
     let path = base.as_ref().join(file);
     let eeg_path = path.clone().parent().unwrap().to_path_buf();
     let df = LazyCsvReader::new(PlRefPath::new(path.display().to_string())).finish()?.with_streaming(true);
@@ -468,7 +463,7 @@ impl EEGs {
 #[cfg(test)]
 mod tests {
     #![allow(unused_imports, dead_code, unused_variables)]
-    use super::{ByPatientIdSplitter, EEG, parquet_to_tensor};
+    use super::{ByPatientIdSplitter, EEG};
     use crate::data::EEGs;
     use anyhow::Context as _;
     use log::LevelFilter::Trace;

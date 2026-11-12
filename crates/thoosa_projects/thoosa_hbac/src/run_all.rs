@@ -729,27 +729,28 @@ fn run_all_find_motifs_config_grid_0(min_k: u32, max_k: u32, steps: u32) -> Find
         step: RangeOrValue::Value(10),
         // window: RangeOrValue::Value(200),
         window: RangeOrValue::Range {
-            range: Range { start: 100, end: 1000 },
+            range: Range { start: 100, end: 1010 },
             step: Some((100, 0)),
         },
         freq_filter: Some(vec![
-            AverageFilter(AverageFilterParamsRangeOrValue {
-                window: RangeOrValue::dynamic(median_window),
-                step: RangeOrValue::Value(10),
-            }),
-            // BandPassFilter(BandPassFilterParamsRangeOrValue {
-            //     low_hz: RangeOrValue::Range { range: Range { start: 0., end: 100. }, step: Some((10., 1)) },
-            //     band_hz: RangeOrValue::Value(2.),
-            //     // kernel_size: RangeOrValue::Value(10),
-            //     // kernel_size: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: Some((50, 0)) },
-            //     kernel_size: RangeOrValue::dynamic(median_window),
-            //     stride: RangeOrValue::Value(10),
-            //     padding: PaddingRangeOrValue::Zero(ZeroPaddingRangeOrValue::default()),
-            // })
+            // AverageFilter(AverageFilterParamsRangeOrValue {
+            //     window: RangeOrValue::dynamic(median_window),
+            //     step: RangeOrValue::Value(10),
+            // }),
+            BandPassFilter(BandPassFilterParamsRangeOrValue {
+                low_hz: RangeOrValue::Range { range: Range { start: 0., end: 100. }, step: Some((10., 1)) },
+                band_hz: RangeOrValue::Value(2.),
+                // kernel_size: RangeOrValue::Value(10),
+                // kernel_size: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: Some((50, 0)) },
+                kernel_size: RangeOrValue::dynamic(median_window),
+                stride: RangeOrValue::Value(10),
+                padding: PaddingRangeOrValue::Zero(ZeroPaddingRangeOrValue::default()),
+            })
             // SavGolFilter(SavGolFilterParamsRangeOrValue {
             //     window_len: RangeOrValue::dynamic(median_window),//RangeOrValue::Range { range: Range { start: 100, end: 200 }, step: None },
             //     poly_order: RangeOrValue::Range { range: Range { start: 1, end: 10 }, step: Some((2, 0)) },
-            //     stride: RangeOrValue::Value(10),
+            //     // stride: RangeOrValue::Value(10),
+            //     stride: RangeOrValue::dynamic(median_window),
             //     padding: PaddingRangeOrValue::Zero(ZeroPaddingRangeOrValue::default()),
             // }),
         ]),
@@ -759,7 +760,7 @@ fn run_all_find_motifs_config_grid_0(min_k: u32, max_k: u32, steps: u32) -> Find
             similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
             slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue {
                 aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue {
-                    q: RangeOrValue::Value(0.5),
+                    q: RangeOrValue::Value(5.0),
                     // q: RangeOrValue::Range { range: 0.0..0.1, step: Some((0.05, 2)) },
                 }),
             }),

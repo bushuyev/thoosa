@@ -118,7 +118,7 @@ impl StageCommand for HbacCommands {
                     &ws,
                     store.as_ref(),
                     &LABELS,
-                    || data::labeled_resourses(&import_resources_args.source_path, "train.csv"),
+                    || data::labeled_resources(&import_resources_args.source_path, "train.csv"),
                     |key| { thoosa_motifs::data::parquet_to_tensor_by_path(PathBuf::from(&import_resources_args.source_path).join("train_eegs").join(format!("{}.parquet", key)), Cpu,) },
                     freq_filter,
                     true,
