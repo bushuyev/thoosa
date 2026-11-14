@@ -837,11 +837,21 @@ pub fn lin_label_node(params: &LabelNetParams) -> anyhow::Result<Node> {
         .end_seq()
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, Default)]
+enum FinalNetArchitecture {
+    // Missing metadata identifies saved models built before the GELU/skip-path change.
+    #[default]
+    Relu,
+    GeluResidual,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct FinalNetParams {
     // Array position is the downstream feature index, independent of model discovery order.
     #[serde(default)]
     label_feature_schema: Option<Vec<RunConfigId>>,
+    #[serde(default)]
+    architecture: FinalNetArchitecture,
     in_features: u32,
     mid_features: u32,
     out_features: u32,
@@ -860,6 +870,7 @@ impl FinalNetParams {
     pub fn new(in_features: u32, mid_features: u32, out_features: u32, num_layers: u32) -> Self {
         Self {
             label_feature_schema: None,
+            architecture: FinalNetArchitecture::GeluResidual,
             in_features,
             mid_features,
             out_features,
@@ -896,23 +907,40 @@ pub fn final_net(params: &FinalNetParams) -> anyhow::Result<Node> {
     debug!("final_node: params={:?}", params);
 
     let mut builder = SeqBuilder::new(params.in_features, None)?;
-    let mut net = builder
-        //TODO enabled for tho_debug
-        // .closure(
-        //     Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
-        //         trace!("final_net: input=\n{t}");
-        //         Ok(t.shallow_clone())
-        //     })),
-        //     None,
-        // )?
-        .linear_s(params.mid_features * params.in_features, "final_net_first_layer".to_string())?
-        .func(|t| Ok(Tensor::f_relu(t)?))?;
-
-    for i in 0..params.num_layers {
-        net = net.linear_s(params.mid_features * params.in_features, format!("final_net_{i}th_layer"))?.func(|t| Ok(Tensor::f_relu(t)?))?;
+    for i in 0..=params.num_layers {
+        let path = if i == 0 { "final_net_first_layer".to_string() } else { format!("final_net_{}th_layer", i - 1) };
+        builder.linear_s(params.mid_features * params.in_features, path)?;
+        match params.architecture {
+            // Keep both the operations and their sequence indices unchanged for old weight files.
+            FinalNetArchitecture::Relu => { builder.func(|t| Ok(t.f_relu()?))?; }
+            FinalNetArchitecture::GeluResidual => {
+                // Smooth activation retains negative evidence; modest hidden dropout regularizes
+                // the small label-score dataset and is disabled by the existing evaluation path.
+                builder.func(|t| Ok(t.f_gelu("none")?))?.dropout(0.1)?;
+            }
+        }
     }
 
-    net.linear_s(params.out_features, "final_net_last_layer")?.end_seq()
+    match params.architecture {
+        FinalNetArchitecture::Relu => builder.linear_s(params.out_features, "final_net_last_layer")?.end_seq(),
+        FinalNetArchitecture::GeluResidual => {
+            // Start with linear calibration of the raw label logits, then learn nonlinear corrections.
+            // Zero initialization applies only to the correction head, so hidden features can learn
+            // once that head moves away from zero. No softmax belongs here: the loss consumes logits.
+            let correction = builder.linear_s_with_conf("final_net_last_layer", params.out_features, LinearConfig {
+                ws_init: init::Init::Const(0.0),
+                bs_init: Some(init::Init::Const(0.0)),
+                bias: true,
+            })?.end_seq()?;
+            let linear = SeqBuilder::new(params.in_features, None)?.linear_s(params.out_features, "final_net_skip")?.end_seq()?;
+            Ok(Node::Par {
+                elts: vec![linear, correction],
+                // These aliases stay inside the synchronous forward pass and both branches only read them.
+                split: Arc::new(|t| Ok(vec![t.f_alias()?, t.f_alias()?])),
+                join: Arc::new(|outputs| Ok(outputs[0].f_add(&outputs[1])?)),
+            })
+        }
+    }
 }
 
 pub fn slices_in_all_resources<ResourceId>(slices: Vec<(ResourceId, Vec<Tensor>)>) -> Vec<Tensor> {
@@ -1786,6 +1814,82 @@ mod train_tests {
             i += 1;
         }
         arr
+    }
+
+    #[test]
+    fn test_final_net_legacy_params_preserve_relu_weights_and_predictions() -> anyhow::Result<()> {
+        // Old files have no architecture field. Their tensor names and negative-input behavior
+        // must survive loading, rather than silently applying GELU to previously trained weights.
+        let params: FinalNetParams = serde_json5::from_str("{in_features:2, mid_features:1, out_features:1, num_layers:0}")?;
+        let vs = VarStore::new(Cpu);
+        let net: Box<dyn ThoModule<AnyDims, AnyDims>> = super::final_net(&params)?.build_tch_module(&vs.root())?;
+        let mut variables = vs.variables();
+        tch::no_grad(|| -> anyhow::Result<()> {
+            variables.get_mut("seq_0.final_net_first_layer.weight").context("legacy first layer")?.f_copy_(&Tensor::f_eye(2, FLOAT_CPU)?)?;
+            let _ = variables.get_mut("seq_0.final_net_first_layer.bias").context("legacy first bias")?.f_zero_()?;
+            let _ = variables.get_mut("seq_2.final_net_last_layer.weight").context("legacy output layer")?.f_fill_(1.0)?;
+            let _ = variables.get_mut("seq_2.final_net_last_layer.bias").context("legacy output bias")?.f_zero_()?;
+            Ok(())
+        })?;
+        let input: ThoTensor<AnyDims, DebugId> = Tensor::f_from_slice(&[-2.0f32, 3.0])?.f_view([1, 2])?.into();
+        let output = net.tho_forward(&input, None, false)?;
+        assert_eq!(variables.len(), 4);
+        assert_eq!(output.local()?.f_double_value(&[0, 0])?, 3.0);
+        Ok(())
+    }
+
+    #[test]
+    fn test_final_net_residual_training_and_checkpoint_round_trip() -> anyhow::Result<()> {
+        let params = FinalNetParams::new(3, 4, 2, 1);
+        let vs = VarStore::new(Cpu);
+        let net: Box<dyn ThoModule<AnyDims, AnyDims>> = super::final_net(&params)?.build_tch_module(&vs.root())?;
+        let input: ThoTensor<AnyDims, DebugId> = Tensor::f_from_slice(&[-2.0f32, 1.0, 3.0])?.f_view([1, 3])?.f_repeat([32, 1])?.into();
+        let variables = vs.variables();
+        let initial = net.tho_forward(&input, None, false)?;
+        let linear = input.local()?.f_linear(variables.get("split_0.seq_0.final_net_skip.weight").context("skip weight")?, variables.get("split_0.seq_0.final_net_skip.bias"))?;
+        assert!(initial.local()?.f_allclose(&linear, 1e-6, 1e-6, false)?, "the zero correction head must initially preserve linear calibration");
+
+        // Activate the correction branch deterministically so dropout and its gradients are exercised.
+        tch::no_grad(|| -> anyhow::Result<()> {
+            for (_, mut variable) in variables {
+                let _ = variable.f_fill_(0.1)?;
+            }
+            Ok(())
+        })?;
+        let evaluation = net.tho_forward(&input, None, false)?;
+        let repeated = net.tho_forward(&input, None, false)?;
+        assert!(evaluation.local()?.f_allclose(&*repeated.local()?, 0.0, 0.0, false)?, "dropout must be disabled for evaluation");
+        let single_input: ThoTensor<AnyDims, DebugId> = input.local()?.f_narrow(0, 0, 1)?.into();
+        let single = net.tho_forward(&single_input, None, false)?;
+        assert!(single.local()?.f_allclose(&evaluation.local()?.f_narrow(0, 0, 1)?, 1e-6, 1e-6, false)?, "single-record inference must match batched evaluation");
+
+        let training = net.tho_forward(&input, None, true)?;
+        assert!(!training.local()?.f_allclose(&*evaluation.local()?, 1e-6, 1e-6, false)?, "training must exercise hidden dropout");
+        training.local()?.f_square()?.f_mean(Float)?.f_backward()?;
+        for (name, variable) in vs.variables() {
+            let grad = variable.grad();
+            assert!(grad.defined(), "missing gradient for {name}");
+            assert_eq!(grad.f_isfinite()?.f_all()?.f_int64_value(&[])?, 1, "non-finite gradient for {name}");
+            assert!(grad.f_abs()?.f_sum(Float)?.f_double_value(&[])? > 0.0, "both paths must learn, but {name} has zero gradient");
+        }
+
+        // The same parameter record reconstructs training/IPC modules and persisted inference models.
+        let serialized = serde_json5::to_string(&params)?;
+        let loaded_params: FinalNetParams = serde_json5::from_str(&serialized)?;
+        let mut bytes = Vec::new();
+        vs.save_to_stream(&mut bytes)?;
+        let mut restored_vs = VarStore::new(Cpu);
+        let restored: Box<dyn ThoModule<AnyDims, AnyDims>> = super::final_net(&loaded_params)?.build_tch_module(&restored_vs.root())?;
+        restored_vs.load_from_stream(std::io::Cursor::new(bytes))?;
+        let restored_output = restored.tho_forward(&input, None, false)?;
+        assert!(evaluation.local()?.f_allclose(&*restored_output.local()?, 0.0, 0.0, false)?, "checkpoint reload must preserve predictions");
+
+        let variable_count = restored_vs.variables().len();
+        let rebuilt: Box<dyn ThoModule<AnyDims, AnyDims>> = super::final_net(&loaded_params)?.build_tch_module(&restored_vs.root())?;
+        let rebuilt_output = rebuilt.tho_forward(&input, None, false)?;
+        assert_eq!(restored_vs.variables().len(), variable_count, "rebuilding must reuse existing parameters");
+        assert!(evaluation.local()?.f_allclose(&*rebuilt_output.local()?, 0.0, 0.0, false)?, "rebuilding must not zero a trained correction head");
+        Ok(())
     }
 
     fn dummy_final_net_input<const LABELS_SIZE: usize, D: Dims>(batch_size: usize) -> (ThoTensor<D, DebugId>, Tensor) {

@@ -664,7 +664,8 @@ fn run_all_extend_motifs_config_grid_0<P: FieldName + 'static>() -> ExtendMotifs
 fn run_all_find_motifs_config_grid_0() -> FindMotifsRunConfigRangeOrValue<FindMotifsRunConfigFields> {
     FindMotifsRunConfigRangeOrValue {
         id: None,
-        step: RangeOrValue::Value(5),
+        // Four times fewer window starts than step 5, while retaining overlap even for width 40.
+        step: RangeOrValue::Value(20),
         // Windows are measured AFTER filtering: at 200 Hz these cover 0.4..1.6 seconds
         // with stride 2, or 2..8 seconds with stride 10. Keep both transient and rhythmic features.
         window: RangeOrValue::Range { range: 40..161, step: Some((40, 0)) },
@@ -980,6 +981,7 @@ mod tests {
         assert_eq!(configs.len(), 16);
         let mut strides = std::collections::HashSet::new();
         for config in configs {
+            assert!(config.step >= 4 * 5 && config.step <= config.window / 2, "discovery must reduce scan density at least fourfold while retaining overlapping windows");
             let FinderKind::CrossLoader(cross) = &config.finder_kind else { panic!("expected cross-loader discovery") };
             let SlicesFilter::Accumulate(stats) = &cross.slices_filter else { panic!("expected accumulated distances") };
             let Aggr::Quantile(q) = stats.aggr else { panic!("expected quantile cutoff") };
