@@ -163,8 +163,25 @@ struct RemoteAllocation {
     release: Option<crate::ipc::cuda_process::TensorReleaseHandle>,
     enabled: std::sync::atomic::AtomicBool,
 }
+impl RemoteAllocation {
+    fn registry() -> &'static Mutex<HashMap<(u64, CudaWorkerId, u64), std::sync::Weak<Self>>> {
+        static KEYS: OnceLock<Mutex<HashMap<(u64, CudaWorkerId, u64), std::sync::Weak<RemoteAllocation>>>> = OnceLock::new();
+        KEYS.get_or_init(Default::default)
+    }
+}
 impl Drop for RemoteAllocation {
     fn drop(&mut self) {
+        {
+            let mut keys = Self::registry().lock();
+            let identity = (self.release.as_ref().map_or(0, |owner| owner.owner_id), self.worker, self.key);
+            // Remove only this allocation instead of scanning every live tensor on insertion.
+            // A failed Weak::upgrade can install a replacement before this destructor locks
+            // the registry, so a delayed drop must not erase the replacement's ownership.
+            if keys.get(&identity).is_some_and(|owner| std::ptr::eq(owner.as_ptr(), self)) {
+                keys.remove(&identity);
+            }
+        }
+        // Release outside the registry lock; no_drop suppresses IPC release, not metadata cleanup.
         if self.enabled.load(std::sync::atomic::Ordering::Relaxed) {
             if let Some(release) = &self.release {
                 release.release(self.key, self.worker);
@@ -175,15 +192,12 @@ impl Drop for RemoteAllocation {
 
 impl KeyHolder {
     fn ownership(key: u64, worker: CudaWorkerId, release: Option<crate::ipc::cuda_process::TensorReleaseHandle>) -> Arc<RemoteAllocation> {
-        static KEYS: OnceLock<Mutex<HashMap<(u64, CudaWorkerId, u64), std::sync::Weak<RemoteAllocation>>>> = OnceLock::new();
-        let mut keys = KEYS.get_or_init(Default::default).lock();
+        let mut keys = RemoteAllocation::registry().lock();
 
         let identity = (release.as_ref().map_or(0, |owner| owner.owner_id), worker, key);
         if let Some(owner) = keys.get(&identity).and_then(std::sync::Weak::upgrade) {
             return owner;
         }
-        // Remove dead metadata as new references arrive; the registry owns no tensor.
-        keys.retain(|_, owner| owner.strong_count() != 0);
         let owner = Arc::new(RemoteAllocation {
             key,
             worker,
@@ -821,6 +835,55 @@ mod generation_tests {
         assert!(Arc::ptr_eq(&first.count, &key(same).count));
         assert!(!Arc::ptr_eq(&first.count, &key(replacement).count));
         assert!(!Arc::ptr_eq(&first.count, &key(other).count));
+    }
+
+    #[test]
+    fn test_remote_allocation_registry_removes_only_last_owner() {
+        let worker = CudaWorkerId { device_idx: 1, generation: CudaDeviceGeneration(u64::MAX) };
+        let identity = (0, worker, u64::MAX);
+        let owner = KeyHolder::ownership(identity.2, worker, None);
+        let alias = KeyHolder::ownership(identity.2, worker, None);
+        let unrelated = KeyHolder::ownership(identity.2 - 1, worker, None);
+        assert!(Arc::ptr_eq(&owner, &alias));
+        drop(owner);
+        assert!(RemoteAllocation::registry().lock().contains_key(&identity), "a surviving alias must keep the registry entry");
+
+        // Cleanup follows the last Arc even on another thread and when IPC release is disabled.
+        std::thread::spawn(move || drop(alias)).join().expect("allocation drop thread panicked");
+        assert!(!RemoteAllocation::registry().lock().contains_key(&identity), "dead metadata must disappear without another allocation");
+        assert!(Arc::ptr_eq(&unrelated, &KeyHolder::ownership(identity.2 - 1, worker, None)), "cleanup must preserve unrelated ownership");
+        drop(unrelated);
+        assert!(!RemoteAllocation::registry().lock().contains_key(&(0, worker, identity.2 - 1)));
+    }
+
+    #[test]
+    fn test_remote_allocation_cleanup_preserves_replacement() {
+        let worker = CudaWorkerId { device_idx: 2, generation: CudaDeviceGeneration(u64::MAX) };
+        let identity = (0, worker, u64::MAX);
+        let owner = KeyHolder::ownership(identity.2, worker, None);
+        let weak = Arc::downgrade(&owner);
+        let mut keys = RemoteAllocation::registry().lock();
+        let dropping = std::thread::spawn(move || drop(owner));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while weak.strong_count() != 0 {
+            assert!(std::time::Instant::now() < deadline, "last owner did not reach its destructor");
+            std::thread::yield_now();
+        }
+
+        // The last owner is now blocked on this lock and Weak::upgrade fails. Install
+        // the successor entry as ownership() would if it won the lock before the drop.
+        let replacement = Arc::new(RemoteAllocation {
+            key: identity.2,
+            worker,
+            release: None,
+            enabled: std::sync::atomic::AtomicBool::new(false),
+        });
+        keys.insert(identity, Arc::downgrade(&replacement));
+        drop(keys);
+        dropping.join().expect("allocation drop thread panicked");
+        assert!(Arc::ptr_eq(&replacement, &KeyHolder::ownership(identity.2, worker, None)), "a delayed destructor must preserve the replacement entry");
+        drop(replacement);
+        assert!(!RemoteAllocation::registry().lock().contains_key(&identity));
     }
 }
 
