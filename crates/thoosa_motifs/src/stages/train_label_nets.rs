@@ -878,14 +878,12 @@ where
                     }
                 });
 
-                let futures = futures.map(|future| async move { Ok::<_, ThoError>(t!(future).await) });
+                // Let the collector classify failures while it drains every submitted task.
 
                 debug!("ResourcesBatch::build_batch_stream: descr={descr} futures.len={}", futures.len());
 
                 let (x_1_wrapped, x_0_wrapped) = t!(collect_futures_with_progress(futures, batch_len, FuturesOrdering::Ordered, thoosa_shared::CollectionErrorPolicy::Propagate, "ResourcesBatch::build_batch_stream",))
                     .await?
-                    .into_iter()
-                    .collect::<Result<Vec<_>, ThoError>>()?
                     .into_iter()
                     .fold((vec![], vec![]), |mut a, v| {
                         a.0.push(v.0);
