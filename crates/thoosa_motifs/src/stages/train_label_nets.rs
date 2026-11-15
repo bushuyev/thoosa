@@ -885,11 +885,8 @@ where
                 let (x_1_wrapped, x_0_wrapped) = t!(collect_futures_with_progress(futures, batch_len, FuturesOrdering::Ordered, thoosa_shared::CollectionErrorPolicy::Propagate, "ResourcesBatch::build_batch_stream",))
                     .await?
                     .into_iter()
-                    .fold((vec![], vec![]), |mut a, v| {
-                        a.0.push(v.0);
-                        a.1.push(v.1);
-                        a
-                    });
+                    // Preserve pair order without constructing an intermediate collection.
+                    .unzip::<_, _, Vec<_>, Vec<_>>();
                 //
                 debug!("ResourcesBatch::build_batch_stream: descr={descr} x_1_wrapped={x_1_wrapped:?} x_0_wrapped={x_0_wrapped:?}");
 

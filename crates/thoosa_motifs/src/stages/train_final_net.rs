@@ -564,13 +564,8 @@ where
                 let (label_probabilities, labels) = t!(collect_futures_with_progress(futures, batch_len, FuturesOrdering::Ordered, thoosa_shared::CollectionErrorPolicy::Propagate, "LogitsResourcesBatch::build_batch_stream",))
                     .await?
                     .into_iter()
-                    .collect::<Vec<_>>()
-                    .into_iter()
-                    .fold((vec![], vec![]), |mut a, v| {
-                        a.0.push(v.0);
-                        a.1.push(v.1);
-                        a
-                    });
+                    // Preserve pair order without constructing an intermediate collection.
+                    .unzip::<_, _, Vec<_>, Vec<_>>();
 
                 debug!("LogitsResourcesBatch::build_batch_stream: label_probabilities={label_probabilities:?} labels={labels:?}");
 
