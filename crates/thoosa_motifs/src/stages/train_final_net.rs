@@ -23,7 +23,6 @@ use thoosa_common::stages::stages_seq::PairStage;
 use thoosa_common::stages::train_net::{TrainNet, TrainNetInput, TrainStepFactory};
 use thoosa_common::tch_error::tch_result;
 
-use tch::nn::AdamW;
 use tch::{Kind, Tensor};
 use thoosa_common::dims::{Batch, ThoBatch};
 use thoosa_common::instance_cache::InstanceCache;
@@ -660,31 +659,34 @@ impl std::borrow::Borrow<TrainStepInput<LabelProbability, LabelsProbabilities>> 
     }
 }
 
+// Both backends use this constructor so model and optimizer configuration cannot drift.
+async fn new_final_training_step<C: RunCtx + 'static>(device: ThoDevice, params: FinalNetParams, training_config: CommonTrainingRunConfig, vs_path: PathBuf) -> Result<SyncTrainFinalStep<C>, ThoError> {
+    let (step, _) = TrainStep::new_local(
+        device,
+        move |training_config: CommonTrainingRunConfig, device| async move {
+            let config = ModConfig::new(
+                training_config.tho_optimizer(),
+                move |var_store| final_net(&params)?.build_tch_module::<Batch<LabelProbability>, Batch<LabelsProbabilities>>(&var_store.root()),
+                training_config.lr,
+            );
+            Ok((ThoTrainModule::new_on_device(config, device)?, ()))
+        },
+        Arc::new(Box::new(|batch| batch) as TrainStepXFn<LabelProbability>),
+        train_final_loss,
+        training_config,
+        vs_path,
+    )
+    .await?;
+    Ok(step)
+}
+
 fn train_final_step_endpoint_init<'a>(_stage_id: Option<String>, init: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, _all_cuda_tensors: &'a AllTensors, _tho_device: &'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
         let Ok(init) = (init as Box<dyn std::any::Any>).downcast::<TrainFinalStepIpcInit>() else {
             return Err(ThoError::new("TrainFinalStep endpoint received invalid initializer"));
         };
         let init = *init;
-        let params = init.params.clone();
-        let params_for_module = params.clone();
-        let training_config = init.training_config.clone();
-        let (train_step, _): (SyncTrainFinalStep<WokerRunCtx>, ()) = TrainStep::new_local(
-            init.tho_device_idx.into(),
-            move |_run_config, device| async move {
-                let config = ModConfig::new(
-                    AdamW::default().amsgrad(true).into(),
-                    move |var_store| final_net(&params_for_module)?.build_tch_module::<Batch<LabelProbability>, Batch<LabelsProbabilities>>(&var_store.root()),
-                    training_config.lr,
-                );
-                Ok((ThoTrainModule::new_on_device(config, device)?, ()))
-            },
-            Arc::new(Box::new(|batch| batch) as TrainStepXFn<LabelProbability>),
-            train_final_loss,
-            init.training_config,
-            init.vs_path,
-        )
-        .await?;
+        let train_step: SyncTrainFinalStep<WokerRunCtx> = new_final_training_step(init.tho_device_idx.into(), init.params, init.training_config, init.vs_path).await?;
         // Shared stateful dispatch keeps final-net weights inside the CUDA worker.
         Ok(Box::new(WorkerWrapperWithState::<JsonIpcCodec, _, _, _>::new_with_checkpoint_input::<TrainFinalStepInput>(Arc::new(train_step), PhantomData)) as Box<dyn SyncStageIpcWrapper>)
     }
@@ -719,29 +721,14 @@ where
             tho_device_idx: device,
             vs_path: vs_path.clone(),
         };
-        let params_for_module = node_params.clone();
+        let local_params = node_params.clone();
         let input_cloner = Arc::new(|input: &thoosa_common::stages::train_step::TrainStepInput<LabelProbability, LabelsProbabilities>| -> Result<Box<dyn WorkerInput>, ThoError> { Ok(Box::new(TrainFinalStepInput(input.clone_refs_for_worker()?))) });
         let stage = execution
             .install_stateful(
                 TRAIN_FINAL_STEP_ENDPOINT,
                 thoosa_common::ipc::endpoints::StageRecovery::OwnerManaged,
                 || async move {
-                    let (train_step, _) = TrainStep::new_local(
-                        device.into(),
-                        move |run_config, device| async move {
-                            let config = ModConfig::new(
-                                run_config.common_training_args.tho_optimizer(),
-                                move |var_store| final_net(&params_for_module)?.build_tch_module::<Batch<LabelProbability>, Batch<LabelsProbabilities>>(&var_store.root()),
-                                run_config.common_training_args.lr,
-                            );
-                            Ok((ThoTrainModule::new_on_device(config, device)?, ()))
-                        },
-                        Arc::new(Box::new(|batch| batch) as TrainStepXFn<LabelProbability>),
-                        train_final_loss,
-                        run_config,
-                        vs_path,
-                    )
-                    .await?;
+                    let train_step = new_final_training_step(device.into(), local_params, run_config.common_training_args, vs_path).await?;
                     Ok(Arc::new(train_step))
                 },
                 || async move { Ok((Box::new(init) as Box<dyn WorkerInput>, ())) },
@@ -1080,5 +1067,25 @@ impl SavableResult for TrainFinalNetsRunConfigResult {
         t!(store.save_trained_net(run_config_id, path, self.loss, None)).await?;
 
         Ok(run_config_id)
+    }
+}
+
+#[cfg(test)]
+mod constructor_tests {
+    use super::*;
+    use thoosa_common::ipc::state_transfer::StateTransfer;
+
+    #[tokio::test]
+    async fn test_training_constructor_preserves_optimizer_options() -> anyhow::Result<()> {
+        // Inspect the actual optimizer metadata: the old IPC constructor silently used AMSGrad defaults.
+        let config = serde_json5::from_str::<thoosa_common::nets::common_nets::CommonTrainingRunConfig>("{epochs:1,batch_size:2,lr:0.003,patience:0,min_delta:0,optimizer:{AdamW:{beta1:0.7,beta2:0.8,wd:0.15,amsgrad:false}}}")?;
+        let step = new_final_training_step::<thoosa_common::runner::run_ctx::RunCtxImpl>(0usize.into(), FinalNetParams::new(2, 4, 2, 2), config, PathBuf::from("unused.safetensors")).await?;
+        let metadata = serde_json::to_value(step.get_state_info(0).await?.scalars)?;
+        let options = &metadata["optimizer"]["AdamW"]["defaults"];
+        assert_eq!(options["amsgrad"], false);
+        assert_eq!(options["lr"], 0.003);
+        assert_eq!(options["weight_decay"], 0.15);
+        assert!((options["beta1"].as_f64().unwrap() - 0.7).abs() < 1e-6);
+        Ok(())
     }
 }

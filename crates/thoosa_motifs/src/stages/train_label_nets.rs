@@ -955,31 +955,34 @@ impl std::borrow::Borrow<TrainStepInput<MotifProbability, LabelProbability>> for
     }
 }
 
+// Both backends use this constructor so model and optimizer configuration cannot drift.
+async fn new_label_training_step<C: RunCtx + 'static>(device: ThoDevice, params: LabelNetParams, training_config: CommonTrainingRunConfig, vs_path: PathBuf) -> Result<SyncTrainLabelStep<C>, ThoError> {
+    let (step, _) = TrainStep::new_local(
+        device,
+        move |training_config: CommonTrainingRunConfig, device| async move {
+            let config = ModConfig::new(
+                training_config.tho_optimizer(),
+                move |var_store| params.label_net()?.build_tch_module::<Batch<MotifProbability>, Batch<LabelProbability>>(&var_store.root()),
+                training_config.lr,
+            );
+            Ok((ThoTrainModule::new_on_device(config, device)?, ()))
+        },
+        Arc::new(Box::new(|batch| batch) as TrainStepXFn<MotifProbability>),
+        train_label_loss,
+        training_config,
+        vs_path,
+    )
+    .await?;
+    Ok(step)
+}
+
 fn train_label_step_endpoint_init<'a>(_stage_id: Option<String>, init: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, _all_cuda_tensors: &'a AllTensors, _tho_device: &'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
         let Ok(init) = (init as Box<dyn std::any::Any>).downcast::<TrainLabelStepIpcInit>() else {
             return Err(ThoError::new("TrainLabelStep endpoint received invalid initializer"));
         };
         let init = *init;
-        let params = init.params.clone();
-        let params_for_module = params.clone();
-        let training_config = init.training_config.clone();
-        let (train_step, _): (SyncTrainLabelStep<WokerRunCtx>, ()) = TrainStep::new_local(
-            init.tho_device_idx.into(),
-            move |_run_config, device| async move {
-                let config = ModConfig::new(
-                    training_config.tho_optimizer(),
-                    move |var_store| params_for_module.label_net()?.build_tch_module::<Batch<MotifProbability>, Batch<LabelProbability>>(&var_store.root()),
-                    training_config.lr,
-                );
-                Ok((ThoTrainModule::new_on_device(config, device)?, ()))
-            },
-            Arc::new(Box::new(|batch| batch) as TrainStepXFn<MotifProbability>),
-            train_label_loss,
-            init.training_config,
-            init.vs_path,
-        )
-        .await?;
+        let train_step: SyncTrainLabelStep<WokerRunCtx> = new_label_training_step(init.tho_device_idx.into(), init.params, init.training_config, init.vs_path).await?;
         // Shared stateful dispatch keeps the module, optimizer, and VarStore in the worker.
         Ok(Box::new(WorkerWrapperWithState::<JsonIpcCodec, _, _, _>::new_with_checkpoint_input::<TrainLabelStepInput>(Arc::new(train_step), PhantomData)) as Box<dyn SyncStageIpcWrapper>)
     }
@@ -1020,24 +1023,7 @@ where
                 node_params,
             ))
         } else {
-            let params_for_module = node_params.clone();
-
-            let (train_step, _) = TrainStep::new_local(
-                ctx.tho_device_idx().into(),
-                move |run_config, device| async move {
-                    let config = ModConfig::new(
-                        run_config.common_training_args.tho_optimizer(),
-                        move |var_store| params_for_module.label_net()?.build_tch_module::<Batch<MotifProbability>, Batch<LabelProbability>>(&var_store.root()),
-                        run_config.common_training_args.lr,
-                    );
-                    Ok((ThoTrainModule::new_on_device(config, device)?, ()))
-                },
-                Arc::new(Box::new(|batch| batch) as TrainStepXFn<MotifProbability>),
-                train_label_loss,
-                run_config,
-                vs_path,
-            )
-            .await?;
+            let train_step = new_label_training_step(ctx.tho_device_idx().into(), node_params.clone(), run_config.common_training_args, vs_path).await?;
             Ok((DynSyncStageWithStateEnum::Local(Arc::new(train_step)), node_params))
         }
     }

@@ -16,7 +16,6 @@ use std::sync::Arc;
 use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use tch::Kind::Float;
-use tch::nn::AdamW;
 use tch::{Reduction, Tensor};
 use thoosa_common::ipc::cuda_worker::{AllTensors, InitFn, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::serialization::json::JsonIpcCodec;
@@ -134,6 +133,29 @@ impl std::borrow::Borrow<TrainStepInput<Slice, MotifProbability>> for TrainMotif
     }
 }
 
+// Share optimizer/model construction while each backend prepares its own motif seed.
+async fn new_motif_training_step<C: RunCtx + 'static>(device: ThoDevice, params: MotifNetParams, cosine_motif: Option<Arc<ThoTensor<MotifSlices, SynKey>>>, run_config: TrainMotifNetRunConfig, vs_path: PathBuf) -> Result<SyncTrainMotifStep<C>, ThoError> {
+    // The seed is consumed during construction, so the retained factory cannot pin GPU memory.
+    let cosine_for_module = std::sync::Mutex::new(cosine_motif);
+    let (step, _) = TrainStep::new_local(
+        device,
+        move |run_config: TrainMotifNetRunConfig, device| async move {
+            let config = ModConfig::new(
+                run_config.common_training_args.tho_optimizer(),
+                move |var_store| params.motif_net(cosine_for_module.lock().unwrap().take())?.build_tch_module::<Batch<Slice>, Batch<MotifProbability>>(&var_store.root()),
+                run_config.common_training_args.lr,
+            );
+            Ok((ThoTrainModule::new_on_device(config, device)?, ()))
+        },
+        Arc::new(Box::new(train_motif_x_f) as TrainStepXFn<Slice>),
+        train_motif_loss,
+        run_config,
+        vs_path,
+    )
+    .await?;
+    Ok(step)
+}
+
 fn train_motif_step_endpoint_init<'a>(_stage_id: Option<String>, init: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, all_cuda_tensors: &'a AllTensors, _tho_device: &'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
         let Ok(init) = (init as Box<dyn std::any::Any>).downcast::<TrainMotifStepIpcInit>() else {
@@ -153,28 +175,7 @@ fn train_motif_step_endpoint_init<'a>(_stage_id: Option<String>, init: Box<dyn W
             }
             _ => None,
         };
-        let params_for_module = init.params.clone();
-        // The seed is needed only for the initial construction. Retaining it
-        // in the factory would pin GPU memory after TrainStep is offloaded.
-        let cosine_for_module = std::sync::Mutex::new(cosine_motif);
-        let learning_rate = init.run_config.common_training_args.lr;
-        let x_f: Arc<TrainStepXFn<Slice>> = Arc::new(Box::new(train_motif_x_f));
-        let (train_step, _): (SyncTrainMotifStep<WokerRunCtx>, ()) = TrainStep::new_local(
-            init.tho_device_idx.into(),
-            move |_run_config, device| async move {
-                let config = ModConfig::new(
-                    AdamW::default().amsgrad(true).into(),
-                    move |var_store| params_for_module.motif_net(cosine_for_module.lock().unwrap().take())?.build_tch_module::<Batch<Slice>, Batch<MotifProbability>>(&var_store.root()),
-                    learning_rate,
-                );
-                Ok((ThoTrainModule::new_on_device(config, device)?, ()))
-            },
-            x_f,
-            train_motif_loss,
-            init.run_config,
-            init.vs_path,
-        )
-        .await?;
+        let train_step: SyncTrainMotifStep<WokerRunCtx> = new_motif_training_step(init.tho_device_idx.into(), init.params, cosine_motif, init.run_config, init.vs_path).await?;
         // Shared stateful dispatch leaves trainable motif-net state in the worker.
         Ok(Box::new(WorkerWrapperWithState::<JsonIpcCodec, _, _, _>::new_with_checkpoint_input::<TrainMotifStepInput>(Arc::new(train_step), PhantomData)) as Box<dyn SyncStageIpcWrapper>)
     }
@@ -242,7 +243,6 @@ where
                 node_params,
             ))
         } else {
-            //TODO extract and use train_motif_step_endpoint_init
             let cosine_motif = match &run_config.net {
                 MotifNetTypeArgs::CosineNet(_) => {
                     let motif_ref = t!(motif.borrow_ref(ctx.tho_device_idx())).await?;
@@ -263,28 +263,7 @@ where
                 }
                 _ => None,
             };
-            let params_for_module = node_params.clone();
-            // The seed is needed only for the initial construction. Retaining it
-            // in the factory would pin GPU memory after TrainStep is offloaded.
-            let cosine_for_module = std::sync::Mutex::new(cosine_motif);
-
-            let x_f: Arc<TrainStepXFn<Slice>> = Arc::new(Box::new(train_motif_x_f));
-            let (train_step, _) = TrainStep::new_local(
-                ctx.tho_device_idx().into(),
-                move |run_config, device| async move {
-                    let config = ModConfig::new(
-                        run_config.common_training_args.tho_optimizer(),
-                        move |var_store| params_for_module.motif_net(cosine_for_module.lock().unwrap().take())?.build_tch_module::<Batch<Slice>, Batch<MotifProbability>>(&var_store.root()),
-                        run_config.common_training_args.lr,
-                    );
-                    Ok((ThoTrainModule::new_on_device(config, device)?, ()))
-                },
-                x_f,
-                train_motif_loss,
-                run_config,
-                vs_path,
-            )
-            .await?;
+            let train_step = new_motif_training_step(ctx.tho_device_idx().into(), node_params.clone(), cosine_motif, run_config, vs_path).await?;
             Ok((DynSyncStageWithStateEnum::Local(Arc::new(train_step)), node_params))
         }
     }
@@ -1883,5 +1862,25 @@ impl SavableResult for TrainMotifNetResult {
         t!(store.save_trained_net(train_motif_net_run_config_id, path, self.loss, None)).await?;
 
         Ok(train_motif_net_run_config_id)
+    }
+}
+
+#[cfg(test)]
+mod constructor_tests {
+    use super::*;
+    use thoosa_common::ipc::state_transfer::StateTransfer;
+
+    #[tokio::test]
+    async fn test_training_constructor_preserves_optimizer_options() -> anyhow::Result<()> {
+        // Inspect the actual optimizer metadata: the old IPC constructor silently used AMSGrad defaults.
+        let config = serde_json5::from_str::<thoosa_common::nets::common_nets::CommonTrainingRunConfig>("{epochs:1,batch_size:2,lr:0.003,patience:0,min_delta:0,optimizer:{AdamW:{beta1:0.7,beta2:0.8,wd:0.15,amsgrad:false}}}")?;
+        let step = new_motif_training_step::<RunCtxImpl>(0usize.into(), MotifNetParams::new_lin(4, 2, 1), None, TrainMotifNetRunConfig::new(None, config, MotifNetTypeArgs::default()), PathBuf::from("unused.safetensors")).await?;
+        let metadata = serde_json::to_value(step.get_state_info(0).await?.scalars)?;
+        let options = &metadata["optimizer"]["AdamW"]["defaults"];
+        assert_eq!(options["amsgrad"], false);
+        assert_eq!(options["lr"], 0.003);
+        assert_eq!(options["weight_decay"], 0.15);
+        assert!((options["beta1"].as_f64().unwrap() - 0.7).abs() < 1e-6);
+        Ok(())
     }
 }
