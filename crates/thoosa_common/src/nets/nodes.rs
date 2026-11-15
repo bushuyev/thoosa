@@ -993,10 +993,10 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for ThoFuncModule {
     }
 }
 
-// Shared closures must enforce the same thread-safety contract on their captures.
+// Arc owns the closure directly while enforcing thread-safe captures.
 pub struct ThoClosureModule {
     //TODO Tensor->ThoTensor
-    func: Arc<Box<dyn Fn(&Tensor, Option<&BatchLengths>) -> anyhow::Result<Tensor> + Send + Sync>>,
+    func: Arc<dyn Fn(&Tensor, Option<&BatchLengths>) -> anyhow::Result<Tensor> + Send + Sync>,
 }
 
 impl ThoClosureModule {
@@ -1006,13 +1006,13 @@ impl ThoClosureModule {
     /// use thoosa_common::nets::nodes::ThoClosureModule;
     /// let state = Rc::new(Cell::new(0));
     /// let retained = state.clone();
-    /// let module = ThoClosureModule::new(Arc::new(Box::new(move |tensor, _| {
+    /// let module = ThoClosureModule::new(Arc::new(move |tensor, _| {
     ///     state.set(state.get() + 1);
     ///     Ok(tensor.f_alias()?)
-    /// })));
+    /// }));
     /// retained.set(7);
     /// ```
-    pub fn new(func: Arc<Box<dyn Fn(&Tensor, Option<&BatchLengths>) -> anyhow::Result<Tensor> + Send + Sync>>) -> Self {
+    pub fn new(func: Arc<dyn Fn(&Tensor, Option<&BatchLengths>) -> anyhow::Result<Tensor> + Send + Sync>) -> Self {
         Self { func }
     }
 }
@@ -1571,9 +1571,9 @@ mod tch_tests {
         SeqBuilder::new(num_features, None)?
             .batch_norm(BatchNormConfig::default(), None)?
             .closure(
-                Arc::new(Box::new(|t: &Tensor, _lengths: Option<&BatchLengths>| {
+                Arc::new(|t: &Tensor, _lengths: Option<&BatchLengths>| {
                     Ok(t.view((t.size()[0], 1, t.size()[1]))) //channel for convolution ("Given groups=1, weight of size [1, 1, 100], expected input[1, 10, 1000] to have 1 channels, but got 10 channels instead)
-                })),
+                }),
                 None,
             )?
             .conv_1d("conv", num_features / 10, 1, 1, ConvConfig::default(), None)?

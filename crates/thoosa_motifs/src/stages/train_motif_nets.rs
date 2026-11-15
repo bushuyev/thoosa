@@ -1619,7 +1619,7 @@ mod tests {
         fn test_train_net(params: &TestNetParams) -> Result<Node, ThoError> {
             let mut builder = SeqBuilder::new(params.in_features, None)?;
             let mut net = builder
-                .closure(Arc::new(Box::new(|t: &Tensor, _lengths: Option<&BatchLengths>| Ok(t.f_alias()?))), None)?
+                .closure(Arc::new(|t: &Tensor, _lengths: Option<&BatchLengths>| Ok(t.f_alias()?)), None)?
                 .linear_s(2 * params.in_features, "final_net_first_layer".to_string())?
                 .func(|t| Ok(Tensor::f_relu(t)?))?;
             for i in 0..params.layers {

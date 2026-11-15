@@ -935,7 +935,7 @@ mod thread_safety_tests {
         let active = Arc::new(AtomicUsize::new(0));
         let completed = Arc::new(AtomicUsize::new(0));
         let count = Arc::clone(&completed);
-        let module = ThoClosureModule::new(Arc::new(Box::new(move |t, _| {
+        let module = ThoClosureModule::new(Arc::new(move |t, _| {
             // Each caller has a different input, so only the model lock can serialize these calls.
             assert_eq!(active.fetch_add(1, Ordering::SeqCst), 0);
             std::thread::sleep(std::time::Duration::from_millis(1));
@@ -943,7 +943,7 @@ mod thread_safety_tests {
             active.fetch_sub(1, Ordering::SeqCst);
             count.fetch_add(1, Ordering::SeqCst);
             Ok(result?)
-        })));
+        }));
         let model = ThoModuleWithStore::<AnyDims, AnyDims>::new(SynKey::new([]), Box::new(module));
         std::thread::scope(|scope| -> Result<(), ThoError> {
             let handles = (0..4)

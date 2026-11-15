@@ -1290,25 +1290,25 @@ pub fn dummy_motif_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static, I: 
 
     let node = SeqBuilder::new(num_features, None)?
         .closure(
-            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
+            Arc::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
                 let r = t.unsqueeze(1); //dummy channel
 
                 trace!("dummy_motif_net: t=\n{t}");
 
                 Ok(r)
-            })),
+            }),
             None,
         )?
         .split(
             vec![
                 SeqBuilder::new(num_features, None)?.conv_1d("conv", l as u32, 1, 1, cfg, Some(Arc::clone(&tho_tensor)))?.end_seq()?,
                 SeqBuilder::new(num_features, None)?
-                    .closure(Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| Ok(t.f_pow_tensor_scalar(2)?))), None)?
+                    .closure(Arc::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| Ok(t.f_pow_tensor_scalar(2)?)), None)?
                     .conv_1d("energy", l as u32, 1, 1, cfg, Some(Arc::clone(&ones)))?
                     .closure(
-                        Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
+                        Arc::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
                             Ok(t.f_clamp_min(1e-12)?) //.sqrt()
-                        })),
+                        }),
                         None,
                     )?
                     .end_seq()?,
@@ -1321,11 +1321,11 @@ pub fn dummy_motif_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static, I: 
             }),
         )?
         .closure(
-            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
+            Arc::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
                 trace!("dummy_motif_net: out=\n{t}");
 
                 Ok(t.shallow_clone())
-            })),
+            }),
             None,
         )?
         .end_seq()?;
@@ -1353,14 +1353,14 @@ pub fn sum_motif_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static, I: In
 
     let node = SeqBuilder::new(num_features, None)?
         .closure(
-            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
+            Arc::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
                 let r = t.unsqueeze(1); //dummy channel
                 let r = r.f_sum_dim_intlist(1, false, None)?;
 
                 debug!("sum_motif_net: t=\n{t} \n r=\n{r}");
 
                 Ok(r)
-            })),
+            }),
             None,
         )?
         .end_seq()?;

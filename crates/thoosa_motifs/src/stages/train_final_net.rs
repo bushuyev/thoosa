@@ -789,14 +789,14 @@ mod tests {
             Box::new(move || {
                 let k = k;
                 let builder = Arc::new(move |_path: &nn::Path| {
-                    let module = ThoClosureModule::new(Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
+                    let module = ThoClosureModule::new(Arc::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
                         let mut sum = t.f_sum_dim_intlist(&[1, 2][..], false, None)?;
                         // let mut sum = sum.f_unsqueeze(1)?;
                         let out = sum.f_mul_scalar_(k)?;
 
                         debug!("const_label_net: t=\n{t} out={out:?}");
                         Ok(out)
-                    })));
+                    }));
                     Ok(Box::new(module) as Box<dyn ThoModule<ChannelsMotifsData, Batch<LabelProbability>>>)
                 });
                 let vs = VarStore::new(device);

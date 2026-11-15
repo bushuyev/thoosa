@@ -23,13 +23,13 @@ fn workspace(reject_duplicate_forward: bool) -> Arc<RwLock<Box<dyn MotifsWorkspa
                 let calls = Arc::new(AtomicUsize::new(0));
                 let factory = Arc::new(move |_path: &nn::Path| {
                     let calls = Arc::clone(&calls);
-                    let module = ThoClosureModule::new(Arc::new(Box::new(move |input: &Tensor, _: Option<&BatchLengths>| {
+                    let module = ThoClosureModule::new(Arc::new(move |input: &Tensor, _: Option<&BatchLengths>| {
                         let count = calls.fetch_add(1, Relaxed);
                         if reject_duplicate_forward && count != 0 {
                             return Err(anyhow::anyhow!("duplicate motif forward"));
                         }
                         Ok(input.f_mean_dim(1, true, Float)?.f_add_scalar(bias)?)
-                    })));
+                    }));
                     Ok(Box::new(module) as Box<dyn ThoModule<Batch<Slice>, MotifProbability>>)
                 });
                 let vs = VarStore::new(Cpu);

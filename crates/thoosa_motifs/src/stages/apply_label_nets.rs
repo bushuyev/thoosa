@@ -1035,14 +1035,14 @@ mod tests {
             Box::new(move || {
                 let k = k;
                 let builder = Arc::new(move |_path: &nn::Path| {
-                    let module = ThoClosureModule::new(Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
+                    let module = ThoClosureModule::new(Arc::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
                         let _batch = t.size()[0];
                         // let out = Tensor::f_ones(&[batch, 1], (Kind::Float, t.device()))?
                         let out = t.f_mean_dim(1, true, Float)?.f_mul_scalar_(k)?;
 
                         debug!("const_motif_net: k={k} t=\n{t} \nout={out}");
                         Ok(out)
-                    })));
+                    }));
                     Ok(Box::new(module) as Box<dyn ThoModule<Batch<Slice>, MotifProbability>>)
                 });
                 let vs = VarStore::new(device);
@@ -1060,7 +1060,7 @@ mod tests {
                 let key_weights = weights.clone();
                 let builder = Arc::new(move |_path: &nn::Path| {
                     let weights = weights.clone();
-                    let module = ThoClosureModule::new(Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| Ok(weighted_label_t(&weights, t)?))));
+                    let module = ThoClosureModule::new(Arc::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| Ok(weighted_label_t(&weights, t)?)));
                     Ok(Box::new(module) as Box<dyn ThoModule<ChannelsMotifsData, Batch<LabelProbability>>>)
                 });
                 let vs = VarStore::new(device);
