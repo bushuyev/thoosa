@@ -1320,8 +1320,9 @@ mod tests {
         BucketRunConfig, BucketRunConfigRangeOrValue, BucketingConfig, BucketingConfigRangeOrValue, BucketingInput, BucketingStage, LogMelPatchConfig, LogMelPatchConfigRangeOrValue, PatchTempStore, SelectBucketsInputSelector, bucket_selector_sample_range, bucket_slice_count,
         bucket_step_samples_for_config, filter_mel_patch_groups,
     };
-    use crate::cli::plot_resource;
-    use crate::cli::{import_resources, plot_motif};
+    use crate::plotting::plot_resource;
+    use crate::resource_import::import_resources;
+use crate::plotting::plot_motif;
     use crate::dims::MotifSlices;
     use crate::distance::{EucDistConfig, SimilarityMetric, clc_d2_similarity};
     use crate::fragments::Resolution;

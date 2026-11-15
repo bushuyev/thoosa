@@ -280,6 +280,6 @@ async fn test_prepared_discovery_outer_local() -> Result<(), ThoError> {
 fn test_prepared_discovery_outer_ipc() -> Result<(), ThoError> {
     run_ipc_test(module_path!(), check_prepared_outer(), async |socket| {
         let ws = Arc::new(parking_lot::RwLock::new(crate::motifs_ws::mock_motifs_ws_simp(None, 1, 100, 1000)));
-        CudaWorker::run_worker(socket, &ws, crate::cli::cuda_worker_endpoint_inits(), ThoDevice::from(1usize)).await
+        CudaWorker::run_worker(socket, &ws, crate::worker_endpoints::cuda_worker_endpoint_inits(), ThoDevice::from(1usize)).await
     })
 }

@@ -3,6 +3,10 @@
 extern crate core;
 
 pub mod cli;
+pub mod workflow;
+pub mod plotting;
+pub mod resource_import;
+pub mod worker_endpoints;
 pub mod common_stats;
 pub mod criteria;
 pub mod data;

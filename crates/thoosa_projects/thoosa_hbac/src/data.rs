@@ -494,7 +494,7 @@ mod tests {
     use thoosa_common::utils::{assert_close, from, hist_1_dim, lin_t, plot_series, skewness_kurtosis_1_dim, to_vec_f32};
     use thoosa_common::ws::{FsWorkspace, mock_ws_simp};
     use thoosa_common::ws::{Workspace, WsConfigs};
-    use thoosa_motifs::cli::import_resources;
+    use thoosa_motifs::resource_import::import_resources;
     use thoosa_motifs::data::parquet_to_tensor_by_path;
     use thoosa_motifs::distance::MaskMaker::LeQuantile;
     use thoosa_motifs::distance::clc_d2_similarity_and_mask;

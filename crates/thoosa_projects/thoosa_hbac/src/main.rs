@@ -31,7 +31,10 @@ use thoosa_common::stages::freq_filter::{SYNC_FREQ_FILTER_ENDPOINT, SyncFreqFilt
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::utils::kick_register_cuda_hooks;
 use thoosa_common::ws::{FsWorkspace, Workspace, WsConfigs};
-use thoosa_motifs::cli::{CommonCommands, ImportResourcesArgs, MotifCommands, RunAllArgs, cuda_worker_endpoint_inits, import_resources, init_loader, run_grid};
+use thoosa_motifs::cli::{CommonCommands, ImportResourcesArgs, MotifCommands, RunAllArgs, init_loader};
+use thoosa_motifs::worker_endpoints::cuda_worker_endpoint_inits;
+use thoosa_motifs::resource_import::import_resources;
+use thoosa_motifs::workflow::run_grid;
 use thoosa_motifs::find::FindMotifsArgs;
 use thoosa_motifs::motifs_store::MotifsStore;
 use thoosa_motifs::stages::apply_label_nets::{APPLY_LABEL_NET_ENDPOINT, STACK_APPLIED_LABEL_NETS_ENDPOINT, apply_label_net_endpoint_init, stack_applied_label_nets_init};
