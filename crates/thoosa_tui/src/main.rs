@@ -15,7 +15,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
+use ratatui::widgets::{Bar, BarChart, BarGroup, Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
 use std::collections::{HashMap, HashSet};
 use std::io;
 use std::io::IsTerminal;
@@ -26,10 +26,11 @@ use thoosa_motifs::motifs_store::MotifsStore;
 use thoosa_shared::collect_futures_eta::{COLLECT_ETA_PROGRESS_SOCKET_ID, CollectEtaProgressInvocation, CollectEtaProgressState};
 use thoosa_shared::device_stats::ThoDeviceStats;
 use thoosa_shared::futures_limits::{COPY_D2H, COPY_H2D, ENTRY, FutureLimitProgressEntry};
+use thoosa_shared::progress_socket::{CacheStatistic, ProgressRequest, ProgressResponse};
 use thoosa_shared::tracked_await::t;
 use thoosa_shared::val::Val;
 use thoosa_store::{RunConfigEntry, RunConfigFilter, RunMotifEntry, SqlStore};
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -308,6 +309,17 @@ struct App {
     progress_state: CollectEtaProgressState,
     progress_status: String,
     progress_last_update: Option<Instant>,
+    cache_statistics: CacheStatisticsState,
+    cache_statistics_offset: usize,
+}
+
+#[derive(Debug, Default)]
+enum CacheStatisticsState {
+    #[default]
+    NotRequested,
+    Loading,
+    Ready(Vec<CacheStatistic>),
+    Failed(String),
 }
 
 struct PendingMotifPlotOpen {
@@ -412,6 +424,8 @@ impl App {
             progress_state: CollectEtaProgressState::default(),
             progress_status: "Waiting for progress socket.".to_string(),
             progress_last_update: None,
+            cache_statistics: CacheStatisticsState::NotRequested,
+            cache_statistics_offset: 0,
         }
     }
 
@@ -1299,6 +1313,36 @@ impl App {
             ProgressClientEvent::Status(status) => {
                 self.progress_status = status;
             }
+            ProgressClientEvent::CacheStatistics(result) => {
+                self.cache_statistics = match result {
+                    Ok(statistics) => CacheStatisticsState::Ready(statistics),
+                    Err(error) => CacheStatisticsState::Failed(error),
+                };
+                self.cache_statistics_offset = 0;
+            }
+        }
+    }
+
+    fn handle_progress_key(&mut self, key: KeyEvent, requests: &mpsc::Sender<ProgressRequest>) {
+        match key.code {
+            KeyCode::Char('s' | 'S') if is_unmodified_or_shift(&key) => {
+                // Coalesce repeated presses until this client's outstanding request completes.
+                if !matches!(self.cache_statistics, CacheStatisticsState::Loading) {
+                    self.cache_statistics = match requests.try_send(ProgressRequest::ShowCacheStatistics) {
+                        Ok(()) => CacheStatisticsState::Loading,
+                        Err(_) => CacheStatisticsState::Failed("Progress connection is unavailable. Press S to retry.".to_string()),
+                    };
+                }
+            }
+            KeyCode::Left | KeyCode::Char('h') if key.modifiers.is_empty() => {
+                self.cache_statistics_offset = self.cache_statistics_offset.saturating_sub(1);
+            }
+            KeyCode::Right | KeyCode::Char('l') if key.modifiers.is_empty() => {
+                if let CacheStatisticsState::Ready(statistics) = &self.cache_statistics {
+                    self.cache_statistics_offset = self.cache_statistics_offset.saturating_add(1).min(statistics.len().saturating_sub(1));
+                }
+            }
+            _ => {}
         }
     }
 
@@ -1976,6 +2020,7 @@ impl Drop for TerminalGuard {
 enum ProgressClientEvent {
     Snapshot(CollectEtaProgressState),
     Status(String),
+    CacheStatistics(Result<Vec<CacheStatistic>, String>),
 }
 
 #[tokio::main]
@@ -2003,7 +2048,8 @@ async fn run_ui(app: &mut App) -> anyhow::Result<()> {
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;
     let (progress_tx, mut progress_rx) = mpsc::unbounded_channel::<ProgressClientEvent>();
-    let progress_task = spawn_progress_client(COLLECT_ETA_PROGRESS_SOCKET_ID.to_string(), progress_tx);
+    let (progress_requests, request_rx) = mpsc::channel(1);
+    let progress_task = spawn_progress_client(COLLECT_ETA_PROGRESS_SOCKET_ID.to_string(), progress_tx, request_rx);
 
     loop {
         drain_progress_events(app, &mut progress_rx);
@@ -2166,7 +2212,7 @@ async fn run_ui(app: &mut App) -> anyhow::Result<()> {
                         }
                         _ => {}
                     },
-                    SelectedArea::ProgressView => {}
+                    SelectedArea::ProgressView => app.handle_progress_key(key, &progress_requests),
                     SelectedArea::TypeFilterPopup => match key.code {
                         KeyCode::Esc => {
                             app.selected_area = app.default_run_configs_area();
@@ -2565,11 +2611,73 @@ fn render_progress_view(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let block = Block::default().title("progress").borders(Borders::ALL);
     let inner = block.inner(area);
     frame.render_widget(block, area);
-    let columns = Layout::default().direction(Direction::Horizontal).constraints([Constraint::Percentage(68), Constraint::Percentage(32)]).split(inner);
-    let progress = Paragraph::new(app.progress_lines().join("\n")).wrap(Wrap { trim: false });
-    let limits = Paragraph::new(app.buffer_limit_lines().join("\n")).block(Block::default().title("future limits").borders(Borders::LEFT)).wrap(Wrap { trim: false });
+    let progress_lines = app.progress_lines();
+    let limit_lines = app.buffer_limit_lines();
+    // Keep existing runtime rows visible on ordinary terminals while reserving room for the chart.
+    let top_height = progress_lines.len().max(limit_lines.len() + 1).min(inner.height.saturating_sub(6) as usize) as u16;
+    let rows = Layout::default().direction(Direction::Vertical).constraints([Constraint::Length(top_height), Constraint::Min(6)]).split(inner);
+    let columns = Layout::default().direction(Direction::Horizontal).constraints([Constraint::Percentage(68), Constraint::Percentage(32)]).split(rows[0]);
+    let progress = Paragraph::new(progress_lines.join("\n")).wrap(Wrap { trim: false });
+    let limits = Paragraph::new(limit_lines.join("\n")).block(Block::default().title("future limits").borders(Borders::LEFT)).wrap(Wrap { trim: false });
     frame.render_widget(progress, columns[0]);
     frame.render_widget(limits, columns[1]);
+    render_cache_statistics(frame, app, rows[1]);
+}
+
+fn render_cache_statistics(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    let block = Block::default().title("cache statistics").borders(Borders::TOP);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let statistics = match &app.cache_statistics {
+        CacheStatisticsState::NotRequested => {
+            frame.render_widget(Paragraph::new("Press S to show cache statistics."), inner);
+            return;
+        }
+        CacheStatisticsState::Loading => {
+            frame.render_widget(Paragraph::new("Loading cache statistics..."), inner);
+            return;
+        }
+        CacheStatisticsState::Failed(error) => {
+            frame.render_widget(Paragraph::new(format!("{error}\nPress S to retry.")).wrap(Wrap { trim: false }), inner);
+            return;
+        }
+        CacheStatisticsState::Ready(statistics) if statistics.is_empty() => {
+            frame.render_widget(Paragraph::new("No registered caches."), inner);
+            return;
+        }
+        CacheStatisticsState::Ready(statistics) => statistics,
+    };
+    if inner.width < 13 || inner.height < 3 {
+        return;
+    }
+
+    let rows = Layout::default().direction(Direction::Vertical).constraints([Constraint::Length(1), Constraint::Min(1)]).split(inner);
+    let columns = Layout::default().direction(Direction::Horizontal).constraints([Constraint::Length(11), Constraint::Min(1)]).split(rows[1]);
+    let bar_width = statistics.iter().map(|statistic| Line::from(statistic.type_name.as_str()).width()).max().unwrap_or(8).max(8).min(columns[1].width as usize) as u16;
+    let visible_count = ((columns[1].width as usize + 1) / (bar_width as usize + 1)).max(1);
+    let start = app.cache_statistics_offset.min(statistics.len().saturating_sub(1));
+    let end = start.saturating_add(visible_count).min(statistics.len());
+    frame.render_widget(Paragraph::new(format!("Memory (KiB) | caches {}-{}/{} | S refresh | h/l scroll", start + 1, end, statistics.len())), rows[0]);
+
+    // Scale exact byte counts without rounding small caches down to zero before scaling.
+    let maximum = statistics.iter().map(|statistic| statistic.bytes).max().unwrap_or(0).max(1024);
+    let height = columns[0].height.saturating_sub(1);
+    let axis = (0..columns[0].height).map(|row| {
+        if row == height {
+            Line::from("          └")
+        } else if row == 0 || row == height / 2 || row + 1 == height {
+            let fraction = (height.saturating_sub(row + 1)) as f64 / height.saturating_sub(1).max(1) as f64;
+            Line::from(format!("{:>9.1} ┤", maximum as f64 / 1024.0 * fraction))
+        } else {
+            Line::from("          │")
+        }
+    }).collect::<Vec<_>>();
+    frame.render_widget(Paragraph::new(axis), columns[0]);
+    let bars = statistics[start..end].iter().map(|statistic| {
+        Bar::default().label(Line::from(statistic.type_name.as_str())).value(statistic.bytes).text_value(format!("{:.1}", statistic.bytes as f64 / 1024.0))
+    }).collect::<Vec<_>>();
+    let chart = BarChart::default().data(BarGroup::default().bars(&bars)).bar_width(bar_width).bar_gap(1).max(maximum).bar_style(Style::default().fg(Color::Cyan)).value_style(Style::default().fg(Color::Black).bg(Color::Cyan));
+    frame.render_widget(chart, columns[1]);
 }
 
 fn render_status_line(frame: &mut Frame<'_>, app: &App, area: Rect) {
@@ -2678,7 +2786,7 @@ fn status_hint_text(app: &App) -> String {
             app.sort_order_label()
         ),
         SelectedArea::RightMotifs => "motifs | j/k move | Ctrl-d/u page | gg/G | Enter plot | m values | / search | n/p next-prev | Tab/Left back | Space view | q quit".to_string(),
-        SelectedArea::ProgressView => "progress | Space view | q quit".to_string(),
+        SelectedArea::ProgressView => "progress | S Show cache statistics | h/l scroll caches | Space view | q quit".to_string(),
         SelectedArea::TypeFilterPopup => "type-filter | j/k move | Ctrl-d/u page | gg/G | Enter apply | Esc close | T clear".to_string(),
         SelectedArea::SearchPopup => "filter | j/k move | type to edit | Backspace delete | Enter type/open | Enter on Ok applies | Ctrl-r reset | Esc close".to_string(),
         SelectedArea::SearchTypePopup => "filter type | j/k move | Ctrl-d/u page | gg/G | Enter choose | Esc close".to_string(),
@@ -3127,28 +3235,37 @@ fn drain_progress_events(app: &mut App, rx: &mut mpsc::UnboundedReceiver<Progres
     }
 }
 
-fn spawn_progress_client(socket_id: String, tx: mpsc::UnboundedSender<ProgressClientEvent>) -> JoinHandle<()> {
+fn spawn_progress_client(socket_id: String, tx: mpsc::UnboundedSender<ProgressClientEvent>, requests: mpsc::Receiver<ProgressRequest>) -> JoinHandle<()> {
     tokio::spawn(
         async move {
-            t!(run_progress_client(socket_id, tx)).await;
+            t!(run_progress_client(socket_id, tx, requests)).await;
         }
         .instrument(tracing::info_span!("tui::progress_client", kind = "spawn", file = file!(), line = line!(), task = "receive progress socket events",)),
     )
 }
 
-async fn run_progress_client(socket_id: String, tx: mpsc::UnboundedSender<ProgressClientEvent>) {
+async fn run_progress_client(socket_id: String, tx: mpsc::UnboundedSender<ProgressClientEvent>, mut requests: mpsc::Receiver<ProgressRequest>) {
     let mut last_status = None;
     loop {
         if !send_progress_status(&tx, &mut last_status, "Connecting to progress socket.".to_string()) {
             break;
         }
 
-        match t!(connect_progress_stream(&socket_id)).await {
+        let connection = tokio::select! {
+            connection = connect_progress_stream(&socket_id) => connection,
+            request = requests.recv() => {
+                if request.is_none() || tx.send(ProgressClientEvent::CacheStatistics(Err("Progress socket is disconnected.".to_string()))).is_err() {
+                    break;
+                }
+                continue;
+            }
+        };
+        match connection {
             Ok(stream) => {
                 if !send_progress_status(&tx, &mut last_status, "Connected to progress socket.".to_string()) {
                     break;
                 }
-                if let Err(err) = t!(read_progress_stream(stream, &tx, &mut last_status)).await {
+                if let Err(err) = t!(read_progress_stream(stream, &tx, &mut last_status, &mut requests)).await {
                     if !send_progress_status(&tx, &mut last_status, format!("Progress socket error: {err}")) {
                         break;
                     }
@@ -3163,20 +3280,58 @@ async fn run_progress_client(socket_id: String, tx: mpsc::UnboundedSender<Progre
             }
         }
 
-        t!(tokio::time::sleep(Duration::from_secs(1))).await;
+        if requests.is_closed() {
+            break;
+        }
+        tokio::select! {
+            _ = tokio::time::sleep(Duration::from_secs(1)) => {}
+            request = requests.recv() => {
+                if request.is_none() || tx.send(ProgressClientEvent::CacheStatistics(Err("Progress socket is disconnected.".to_string()))).is_err() {
+                    break;
+                }
+            }
+        }
     }
 }
 
-async fn read_progress_stream(stream: Stream, tx: &mpsc::UnboundedSender<ProgressClientEvent>, last_status: &mut Option<String>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let mut lines = BufReader::new(stream).lines();
-    while let Some(line) = t!(lines.next_line()).await? {
-        let snapshot: CollectEtaProgressState = serde_json::from_str(&line)?;
-        if tx.send(ProgressClientEvent::Snapshot(snapshot)).is_err() {
-            return Ok(());
+async fn read_progress_stream(stream: Stream, tx: &mpsc::UnboundedSender<ProgressClientEvent>, last_status: &mut Option<String>, requests: &mut mpsc::Receiver<ProgressRequest>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let (reader, mut writer) = stream.split();
+    let mut lines = BufReader::new(reader).lines();
+    let mut awaiting_action = false;
+    let result = async {
+        loop {
+            tokio::select! {
+                line = lines.next_line() => {
+                    let Some(line) = line? else { break; };
+                    let event = match serde_json::from_str::<ProgressResponse>(&line)? {
+                        ProgressResponse::Snapshot(snapshot) => ProgressClientEvent::Snapshot(snapshot),
+                        ProgressResponse::CacheStatistics { cache_statistics } => {
+                            awaiting_action = false;
+                            ProgressClientEvent::CacheStatistics(cache_statistics)
+                        }
+                    };
+                    if tx.send(event).is_err() {
+                        break;
+                    }
+                    *last_status = Some("Connected to progress socket.".to_string());
+                }
+                request = requests.recv() => {
+                    let Some(request) = request else { break; };
+                    let mut bytes = serde_json::to_vec(&request)?;
+                    bytes.push(b'\n');
+                    // A failed write must resolve the UI's loading state just like a lost reply.
+                    awaiting_action = true;
+                    writer.write_all(&bytes).await?;
+                    writer.flush().await?;
+                }
+            }
         }
-        *last_status = Some("Connected to progress socket.".to_string());
+        Ok(())
+    }.await;
+    if awaiting_action {
+        let _ = tx.send(ProgressClientEvent::CacheStatistics(Err("Progress socket disconnected before cache statistics arrived.".to_string())));
     }
-    Ok(())
+    result
 }
 
 fn send_progress_status(tx: &mpsc::UnboundedSender<ProgressClientEvent>, last_status: &mut Option<String>, status: String) -> bool {
@@ -4004,6 +4159,58 @@ mod tests {
         assert_eq!(app.buffer_limit_lines(), vec!["ENTRY: 4", "COPY_D2H: 8"]);
     }
 
+    #[test]
+    fn test_progress_cache_action_coalesces_and_can_refresh_after_reply() {
+        let store = Arc::new(MockMotifsStore::new()) as Arc<dyn MotifsStore>;
+        let mut app = App::new(store, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
+        let (requests, mut receiver) = mpsc::channel(1);
+        app.handle_progress_key(KeyEvent::new(KeyCode::Char('S'), KeyModifiers::SHIFT), &requests);
+        assert!(matches!(app.cache_statistics, CacheStatisticsState::Loading));
+        assert_eq!(receiver.try_recv().unwrap(), ProgressRequest::ShowCacheStatistics);
+        app.handle_progress_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE), &requests);
+        assert!(receiver.try_recv().is_err());
+        app.apply_progress_event(ProgressClientEvent::CacheStatistics(Err("sample failed".into())));
+        assert!(matches!(app.cache_statistics, CacheStatisticsState::Failed(_)));
+        app.handle_progress_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE), &requests);
+        assert_eq!(receiver.try_recv().unwrap(), ProgressRequest::ShowCacheStatistics);
+        app.apply_progress_event(ProgressClientEvent::CacheStatistics(Ok(vec![CacheStatistic { type_name: "Cache".into(), bytes: 1024 }])));
+        app.apply_progress_event(ProgressClientEvent::Snapshot(CollectEtaProgressState::default()));
+        assert!(matches!(app.cache_statistics, CacheStatisticsState::Ready(_)), "runtime updates must not erase an action's result");
+    }
+
+    #[test]
+    fn test_progress_cache_chart_layout_values_and_scrolling() -> anyhow::Result<()> {
+        let store = Arc::new(MockMotifsStore::new()) as Arc<dyn MotifsStore>;
+        let mut app = App::new(store, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
+        app.cache_statistics = CacheStatisticsState::Ready(vec![CacheStatistic { type_name: "FirstCache".into(), bytes: 1024 }, CacheStatistic { type_name: "SecondCache".into(), bytes: 4096 }]);
+        app.progress_state.device_stats = Some(ThoDeviceStats::default());
+        let mut terminal = Terminal::new(ratatui::backend::TestBackend::new(100, 36))?;
+        terminal.draw(|frame| render_progress_view(frame, &app, frame.area()))?;
+        let rows = terminal.backend().buffer().content.chunks(100).map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>()).collect::<Vec<_>>();
+        assert!(rows[1].contains("socket:") && rows[1].contains("future limits"));
+        let cache_row = rows.iter().position(|row| row.contains("cache statistics")).expect("cache panel title");
+        assert!(cache_row > 1 && rows[cache_row].contains("──"));
+        assert!(rows.iter().skip(cache_row).any(|row| row.contains("Memory (KiB)")));
+        assert!(rows.iter().skip(cache_row).any(|row| row.contains("4.0")));
+        assert!(rows.iter().skip(cache_row).any(|row| row.contains("FirstCache") && row.contains("SecondCache")));
+        let mut ordinary = Terminal::new(ratatui::backend::TestBackend::new(80, 24))?;
+        ordinary.draw(|frame| render_progress_view(frame, &app, frame.area()))?;
+        assert!(ordinary.backend().buffer().content.chunks(80).any(|row| row.iter().map(|cell| cell.symbol()).collect::<String>().contains("gpu rounding overhead")));
+        let (requests, _receiver) = mpsc::channel(1);
+        app.handle_progress_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE), &requests);
+        assert_eq!(app.cache_statistics_offset, 1);
+        app.handle_progress_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE), &requests);
+        assert_eq!(app.cache_statistics_offset, 1);
+        app.handle_progress_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE), &requests);
+        assert_eq!(app.cache_statistics_offset, 0);
+        // Empty/zero caches and a resized terminal must still render without a zero scale or invalid rectangle.
+        app.cache_statistics = CacheStatisticsState::Ready(vec![CacheStatistic { type_name: "EmptyCache".into(), bytes: 0 }]);
+        terminal.draw(|frame| render_progress_view(frame, &app, frame.area()))?;
+        let mut narrow = Terminal::new(ratatui::backend::TestBackend::new(8, 4))?;
+        narrow.draw(|frame| render_progress_view(frame, &app, frame.area()))?;
+        Ok(())
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_progress_client_receives_snapshot() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         static NEXT_TEST_SOCKET_ID: AtomicU64 = AtomicU64::new(1);
@@ -4011,9 +4218,11 @@ mod tests {
         let socket_id = format!("thoosa-progress-tui-test-{}-{}", process::id(), NEXT_TEST_SOCKET_ID.fetch_add(1, Ordering::Relaxed));
         let listener = create_test_listener(&socket_id)?;
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let client_task = spawn_progress_client(socket_id.clone(), tx);
+        let (requests, request_rx) = mpsc::channel(1);
+        let client_task = spawn_progress_client(socket_id.clone(), tx, request_rx);
         let server_task = tokio::spawn(async move {
             let stream = listener.accept().await?;
+            let (reader, mut writer) = stream.split();
             let snapshot = CollectEtaProgressState {
                 invocations: vec![CollectEtaProgressInvocation {
                     descr: "apply_label_nets".to_string(),
@@ -4037,10 +4246,18 @@ mod tests {
                     weight: 1,
                 }],
             };
-            let mut writer = &stream;
             let mut bytes = serde_json::to_vec(&snapshot)?;
             bytes.push(b'\n');
             writer.write_all(&bytes).await?;
+            writer.flush().await?;
+            let request = BufReader::new(reader).lines().next_line().await?.expect("cache statistics action");
+            assert_eq!(serde_json::from_str::<ProgressRequest>(&request)?, ProgressRequest::ShowCacheStatistics);
+            // Progress remains readable while the action is in flight.
+            writer.write_all(&bytes).await?;
+            let response = ProgressResponse::CacheStatistics { cache_statistics: Ok(vec![CacheStatistic { type_name: "RoundTripCache".into(), bytes: 4096 }]) };
+            let mut response = serde_json::to_vec(&response)?;
+            response.push(b'\n');
+            writer.write_all(&response).await?;
             writer.flush().await?;
             Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
         });
@@ -4056,6 +4273,16 @@ mod tests {
             }
         }
 
+        requests.send(ProgressRequest::ShowCacheStatistics).await?;
+        let statistics = tokio::time::timeout(Duration::from_secs(2), async {
+            while let Some(event) = rx.recv().await {
+                if let ProgressClientEvent::CacheStatistics(statistics) = event {
+                    return statistics;
+                }
+            }
+            Err("client stopped before the action reply".to_string())
+        }).await?;
+        assert_eq!(statistics, Ok(vec![CacheStatistic { type_name: "RoundTripCache".into(), bytes: 4096 }]));
         client_task.abort();
         let _ = client_task.await;
         server_task.await??;

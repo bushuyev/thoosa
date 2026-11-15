@@ -62,6 +62,7 @@ pub mod ipc_types;
 pub mod macros;
 pub mod math;
 pub mod perf_logging;
+pub mod progress_socket;
 pub mod rayon_pool;
 pub mod run_configs;
 pub mod test_utils;

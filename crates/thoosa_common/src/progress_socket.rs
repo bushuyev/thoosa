@@ -8,9 +8,10 @@ use std::io;
 use std::time::Duration;
 use thoosa_shared::collect_futures_eta::{COLLECT_ETA_PROGRESS_SOCKET_ID, CollectEtaProgressState, collect_eta_set_device_stats, collect_eta_subscribe_progress};
 use thoosa_shared::device_stats::ThoDeviceStats;
+use thoosa_shared::progress_socket::{ProgressRequest, ProgressResponse};
 use thoosa_shared::tracked_await::t;
 use thoosa_shims::device_stats::get_device_stats;
-use tokio::io::{AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::watch;
 use tokio::task::{JoinHandle, JoinSet};
 use torch_sys::cuda::atc_cuda_device_count;
@@ -215,27 +216,59 @@ fn should_try_fallback(err: &io::Error) -> bool {
 }
 
 async fn serve_one_client(stream: Stream, mut rx: watch::Receiver<CollectEtaProgressState>) -> SocketResult<()> {
-    let mut writer = &stream;
+    let (reader, mut writer) = stream.split();
+    let mut requests = BufReader::new(reader).lines();
+    // One in-flight action per connection bounds work while snapshots continue to flow.
+    let mut actions = JoinSet::new();
     let first = rx.borrow_and_update().clone();
-    t!(send_snapshot(&mut writer, &first)).await?;
+    t!(send_progress_message(&mut writer, &first)).await?;
 
     loop {
-        if t!(rx.changed()).await.is_err() {
-            break;
+        tokio::select! {
+            changed = rx.changed() => {
+                if changed.is_err() {
+                    break;
+                }
+                let snapshot = rx.borrow_and_update().clone();
+                t!(send_progress_message(&mut writer, &snapshot)).await?;
+            }
+            request = requests.next_line() => {
+                let Some(request) = request? else { break; };
+                // Still read while busy to notice disconnects; repeated refreshes coalesce into the active sample.
+                if !actions.is_empty() {
+                    continue;
+                }
+                match serde_json::from_str::<ProgressRequest>(&request)? {
+                    ProgressRequest::ShowCacheStatistics => {
+                        actions.spawn(async {
+                            // The server starts before runtime installation, so resolve it only when requested.
+                            let result = if GlobalCtx::is_installed() {
+                                GlobalCtx::global().runtime().residency().cache_statistics().await
+                            } else {
+                                Err(thoosa_shared::ThoError::new("runtime is not initialized"))
+                            };
+                            ProgressResponse::CacheStatistics { cache_statistics: result.map_err(|error| format!("{error:#}")) }
+                        });
+                    }
+                }
+            }
+            response = actions.join_next(), if !actions.is_empty() => {
+                if let Some(response) = response {
+                    t!(send_progress_message(&mut writer, &response?)).await?;
+                }
+            }
         }
-
-        let snapshot = rx.borrow_and_update().clone();
-        t!(send_snapshot(&mut writer, &snapshot)).await?;
     }
 
     Ok(())
 }
 
-async fn send_snapshot<W>(writer: &mut W, snapshot: &CollectEtaProgressState) -> SocketResult<()>
+async fn send_progress_message<W, M>(writer: &mut W, message: &M) -> SocketResult<()>
 where
     W: AsyncWrite + Unpin,
+    M: serde::Serialize,
 {
-    let mut bytes = serde_json::to_vec(snapshot)?;
+    let mut bytes = serde_json::to_vec(message)?;
     bytes.push(b'\n');
     t!(writer.write_all(&bytes)).await?;
     t!(writer.flush()).await?;
@@ -268,13 +301,16 @@ mod tests {
         use crate::ipc::cuda_worker::CudaWorker;
         use crate::ipc::tests::run_ipc_test;
         use crate::runner::global_ctx::GlobalCtx;
+        use crate::runner::common::cachable::{CachedFuture, DevicesWrap};
         use crate::tch_error::tch_result;
         use crate::tho_tensor::ThoTensor;
         use crate::ws::mock_ws_simp;
         use parking_lot::RwLock;
+        use futures_util::FutureExt;
         use std::collections::HashMap;
         use std::sync::Arc;
         use thoosa_shared::ThoError;
+        use thoosa_shared::progress_socket::{CacheStatistic, ProgressRequest, ProgressResponse};
 
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)?));
         run_ipc_test(
@@ -284,12 +320,19 @@ mod tests {
                 let actor = GlobalCtx::global().execution(1).ipc_actor()?;
                 let input = ThoTensor::new((), tch_result(tch::Tensor::f_ones([1024 * 1024], (tch::Kind::Float, tch::Device::Cpu)))?)?;
                 let tensor = actor.copy(input, 1usize.into()).await?;
+                let cached = Arc::new(DevicesWrap::wrap(tensor));
+                let ready = futures_util::future::ready(Ok(Arc::clone(&cached))).boxed().shared();
+                ready.clone().await?;
+                let cache = Arc::new(dashmap::DashMap::<u32, CachedFuture<_>>::new());
+                cache.insert(1, ready.into());
+                let registration = GlobalCtx::global().register_cache(("ProgressStats".to_string(), cache));
                 // Retain a worker allocation: reading the parent's allocator would miss these bytes.
                 let minimum_allocated = before.allocated + 4 * 1024 * 1024;
                 let mut server = CollectEtaProgressSocketServer::start_with_socket_id(&next_test_socket_id(), thoosa_shared::collect_futures_eta::collect_eta_subscribe_progress())?;
                 server.stats_task = Some(server.spawn_device_stats_task());
                 let stream = Stream::connect(server.name()).await?;
-                let mut lines = BufReader::new(stream).lines();
+                let (reader, mut writer) = stream.split();
+                let mut lines = BufReader::new(reader).lines();
                 timeout(Duration::from_secs(5), async {
                     while let Some(line) = lines.next_line().await? {
                         let snapshot: CollectEtaProgressState = serde_json::from_str(&line)?;
@@ -303,12 +346,44 @@ mod tests {
                     }
                     Err(ThoError::new("progress socket closed before publishing worker stats"))
                 }).await??;
+                // Exercise the action on the same socket, measuring the cached worker reference in the parent.
+                super::send_progress_message(&mut writer, &ProgressRequest::ShowCacheStatistics).await.map_err(|error| ThoError::new(error.to_string()))?;
+                timeout(Duration::from_secs(5), async {
+                    while let Some(line) = lines.next_line().await? {
+                        if let ProgressResponse::CacheStatistics { cache_statistics } = serde_json::from_str(&line)? {
+                            let statistics = cache_statistics.map_err(ThoError::new)?;
+                            assert_eq!(statistics, vec![CacheStatistic { type_name: "ProgressStats".to_string(), bytes: 4 * 1024 * 1024 }]);
+                            return Ok::<_, ThoError>(());
+                        }
+                    }
+                    Err(ThoError::new("progress socket closed before publishing cache statistics"))
+                }).await??;
                 server.shutdown().await;
-                drop(tensor);
+                GlobalCtx::global().remove_cache(registration.key());
+                drop(cached);
                 Ok(())
             },
             async |socket| CudaWorker::run_worker(socket, &ws, HashMap::new(), 1usize.into()).await,
         )
+    }
+
+    #[tokio::test]
+    async fn test_cache_statistics_action_failure_keeps_snapshot_stream_alive() -> SocketResult<()> {
+        use thoosa_shared::progress_socket::{ProgressRequest, ProgressResponse};
+
+        let (snapshot_tx, snapshot_rx) = watch::channel(CollectEtaProgressState::default());
+        let server = CollectEtaProgressSocketServer::start_with_socket_id(&next_test_socket_id(), snapshot_rx)?;
+        let (reader, mut writer) = Stream::connect(server.name()).await?.split();
+        let mut lines = BufReader::new(reader).lines();
+        assert!(timeout(Duration::from_secs(2), lines.next_line()).await??.is_some());
+        super::send_progress_message(&mut writer, &ProgressRequest::ShowCacheStatistics).await?;
+        let line = timeout(Duration::from_secs(2), lines.next_line()).await??.expect("action reply");
+        assert!(matches!(serde_json::from_str::<ProgressResponse>(&line)?, ProgressResponse::CacheStatistics { cache_statistics: Err(_) }));
+        snapshot_tx.send(CollectEtaProgressState { started_at_unix_ms: 123, ..Default::default() })?;
+        let line = timeout(Duration::from_secs(2), lines.next_line()).await??.expect("snapshot after action failure");
+        assert_eq!(serde_json::from_str::<CollectEtaProgressState>(&line)?.started_at_unix_ms, 123);
+        server.shutdown().await;
+        Ok(())
     }
 
     #[tokio::test]

@@ -19,6 +19,7 @@ use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Arc, OnceLock};
 use thoosa_shared::collect_futures_eta::{CollectEtaInvocationGuard, collect_eta_record_completion};
+use thoosa_shared::progress_socket::CacheStatistic;
 use thoosa_shared::tracked_await::t;
 use thoosa_shared::traits::{Named, Stage, WithId};
 use thoosa_shared::{CudaActivityGate, ThoError, async_perf_log, async_read_owned_lock, async_write_owned_lock, perf_log, sync_write_lock};
@@ -375,6 +376,25 @@ impl ResidencyService {
         let maps = self.caches_snapshot("GlobalCtx::debug_caches: timed out waiting for caches read lock");
         t!(self.debug_caches_snapshot(device_idx, descr, &maps)).await;
     }
+
+    pub async fn cache_statistics(&self) -> Result<Vec<CacheStatistic>, ThoError> {
+        // Snapshot registry ownership before awaiting cache gates; registration and removal stay available.
+        let caches = self.caches_snapshot("cache statistics: timed out waiting for caches read lock");
+        let mut statistics = Vec::with_capacity(caches.len());
+        for (_, entry) in caches {
+            let _cache_guard = t!(Self::lock_cache_shared(&entry, "cache statistics: timed out waiting for cache gate read lock")).await;
+            let mut bytes = 0u64;
+            // These are the same purger measurements as debug_caches, summed across GPUs per cache.
+            for device_idx in 1..self.is_all_on_cpu.len() {
+                bytes = bytes.saturating_add(entry.purger.debug_gpu(device_idx).await?);
+            }
+            statistics.push(CacheStatistic { type_name: entry.name.to_string(), bytes });
+        }
+        // Registry iteration order is arbitrary; keep the chart stable between requests without merging distinct caches.
+        statistics.sort_by(|a, b| a.type_name.cmp(&b.type_name).then(a.bytes.cmp(&b.bytes)));
+        Ok(statistics)
+    }
+
     pub async fn dump_all_to_cpu<'a>(&'a self, tho_device_idx: usize, descr: &str) -> Result<(), ThoError> {
         assert_ne!(tho_device_idx, 0);
 
@@ -1185,6 +1205,58 @@ mod tests {
             });
             mock
         }
+    }
+
+    mod mock_statistics_purger {
+        use super::*;
+
+        mockall::mock! {
+            #[derive(Debug)]
+            pub StatisticsPurger {}
+            #[async_trait::async_trait]
+            impl CachePurger for StatisticsPurger {
+                async fn debug_gpu(&self, device_idx: usize) -> Result<u64, ThoError>;
+            }
+        }
+
+        pub struct MockStatisticsPurgerBuilder;
+
+        impl MockStatisticsPurgerBuilder {
+            pub fn build(results: Vec<(usize, Result<u64, ThoError>)>) -> MockStatisticsPurger {
+                let mut mock = MockStatisticsPurger::new();
+                for (device_idx, result) in results {
+                    mock.expect_debug_gpu().with(mockall::predicate::eq(device_idx)).times(1).return_once(move |_| result);
+                }
+                mock
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_cache_statistics_sum_gpu_bytes_and_include_empty_caches() -> Result<(), ThoError> {
+        use mock_statistics_purger::MockStatisticsPurgerBuilder;
+        use thoosa_shared::progress_socket::CacheStatistic;
+
+        // The collector only needs the registry and per-device purgers, in either execution mode.
+        for is_ipc in [false, true] {
+            let service = super::ResidencyService::new(3, is_ipc, None);
+            service.register_cache(("z".into(), Arc::new(MockStatisticsPurgerBuilder::build(vec![(1, Ok(1024)), (2, Ok(2048))]))));
+            service.register_cache(("a".into(), Arc::new(MockStatisticsPurgerBuilder::build(vec![(1, Ok(0)), (2, Ok(0))]))));
+            assert_eq!(service.cache_statistics().await?, vec![CacheStatistic { type_name: "a".into(), bytes: 0 }, CacheStatistic { type_name: "z".into(), bytes: 3072 }]);
+            service.cleanup().shutdown().await?;
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_cache_statistics_propagate_purger_errors() -> Result<(), ThoError> {
+        use mock_statistics_purger::MockStatisticsPurgerBuilder;
+
+        let service = super::ResidencyService::new(2, false, None);
+        service.register_cache(("failed cache".into(), Arc::new(MockStatisticsPurgerBuilder::build(vec![(1, Err(ThoError::MissingEndpoint("cache stats".into())))]))));
+        assert!(service.cache_statistics().await.unwrap_err().is_missing_endpoint());
+        service.cleanup().shutdown().await?;
+        Ok(())
     }
 
     #[tokio::test]
