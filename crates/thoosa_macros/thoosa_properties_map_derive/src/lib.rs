@@ -30,102 +30,18 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                         let field_name = format!("{}", field_ident);
                         let field_name_path = format!("{}.", field_ident);
 
-                        if let Some(inner_ty) = get_option_inner_ty(&field.ty) {
-                            //is Option
-
-                            if let Some(vec_inner_ty) = get_vec_inner_ty(&inner_ty) {
-                                let field_idx_fmt = format!("{}{{}}", field_name_path);
-                                let field_prefix_fmt = format!("{}{{}}.", field_name_path);
-                                let _vec_inner_ty_str = vec_inner_ty.to_token_stream().to_string();
-
-                                // Indexed entries alone cannot distinguish an absent vector from a present empty one.
-                                let length_key = format!("{}__len", field_name_path);
-                                chains_in_to_properties.push(quote! {
-                                    .chain(self.#field_ident.as_ref().map(|values| (thoosa_shared::conc_str(&prefix, #length_key), thoosa_shared::val::Val::Str(values.len().to_string()))).into_iter())
-                                });
-
-                                if has_attr(field, "config_scalar") || is_primitive(&vec_inner_ty) {
-                                    chains_in_to_properties.push(quote! {
-                                        .chain(
-                                            {
-                                                let entries: Vec<(String, thoosa_shared::val::Val)> = self.#field_ident
-                                                    .as_ref()
-                                                    .map(|values| {
-                                                        values
-                                                            .iter()
-                                                            .enumerate()
-                                                            .map(|(i, v)| (thoosa_shared::conc_str(&prefix, &format!(#field_idx_fmt, i)), v.clone().into()))
-                                                            .collect()
-                                                    })
-                                                    .unwrap_or_default();
-                                                entries.into_iter()
-                                            }
-                                        )
-                                    });
-
-                                    fields_in_from_properties.push(quote! {
-                                        #field_ident: {
-                                            thoosa_properties_map::validate_indices(properties, &thoosa_shared::conc_str(&prefix, #field_name_path))?;
-                                            let mut values = Vec::new();
-                                            let mut idx: usize = 0;
-                                            loop {
-                                                let key = thoosa_shared::conc_str(&prefix, &format!(#field_idx_fmt, idx));
-                                                if let Some(v) = properties.get(&key) {
-                                                    values.push(thoosa_shared::anyhow::Context::with_context(v.try_into(), || format!("invalid property {key}"))?);
-                                                    idx += 1;
-                                                } else {
-                                                    break;
-                                                }
-                                            }
-                                            if let Some(length) = properties.get(&thoosa_shared::conc_str(&prefix, #length_key)) {
-                                                let length = usize::try_from(length)?;
-                                                thoosa_shared::anyhow::ensure!(length == values.len(), "invalid vector length for {}{}", prefix, #field_name);
-                                                Some(values)
-                                            } else if values.is_empty() { None } else { Some(values) }
-                                        },
-                                    });
-                                } else {
-                                    chains_in_to_properties.push(quote! {
-                                        .chain(
-                                            {
-                                                let entries: Vec<(String, thoosa_shared::val::Val)> = self.#field_ident
-                                                    .as_ref()
-                                                    .map(|values| {
-                                                        values
-                                                            .iter()
-                                                            .enumerate()
-                                                            .flat_map(|(i, v)| v.to_properties_iter(Some(thoosa_shared::conc_str(&prefix, &format!(#field_prefix_fmt, i)))))
-                                                            .collect()
-                                                    })
-                                                    .unwrap_or_default();
-                                                entries.into_iter()
-                                            }
-                                        )
-                                    });
-
-                                    fields_in_from_properties.push(quote! {
-                                        #field_ident: {
-                                            thoosa_properties_map::validate_indices(properties, &thoosa_shared::conc_str(&prefix, #field_name_path))?;
-                                            let mut values = Vec::new();
-                                            let mut idx: usize = 0;
-                                            loop {
-                                                let child_prefix = thoosa_shared::conc_str(&prefix, &format!(#field_prefix_fmt, idx));
-                                                if properties.keys().any(|key| key.starts_with(child_prefix.as_str())) {
-                                                    values.push(#vec_inner_ty::from_properties_map(Some(child_prefix), properties)?);
-                                                    idx += 1;
-                                                } else {
-                                                    break;
-                                                }
-                                            }
-                                            if let Some(length) = properties.get(&thoosa_shared::conc_str(&prefix, #length_key)) {
-                                                let length = usize::try_from(length)?;
-                                                thoosa_shared::anyhow::ensure!(length == values.len(), "invalid vector length for {}{}", prefix, #field_name);
-                                                Some(values)
-                                            } else if values.is_empty() { None } else { Some(values) }
-                                        },
-                                    });
-                                }
-                            } else if has_attr(field, "config_scalar") || is_primitive(&inner_ty) {
+                        // Classify the field once; optional vectors share the same indexed codec.
+                        let inner_ty = get_option_inner_ty(&field.ty);
+                        let optional = inner_ty.is_some();
+                        let field_ty = inner_ty.as_ref().unwrap_or(&field.ty);
+                        let scalar = has_attr(field, "config_scalar") || is_primitive(field_ty);
+                        if let Some(vec_inner_ty) = get_vec_inner_ty(field_ty) {
+                            let scalar_items = has_attr(field, "config_scalar") || is_primitive(&vec_inner_ty);
+                            let (chain, decoded) = vector_properties(field_ident, &field_name, &vec_inner_ty, optional, scalar_items);
+                            chains_in_to_properties.push(chain);
+                            fields_in_from_properties.push(decoded);
+                        } else if optional {
+                            if scalar {
                                 fields_in_to_properties.push(quote! {
                                     (thoosa_shared::conc_str(&prefix, #field_name), self.#field_ident.map(|v| v.into())),
 
@@ -138,7 +54,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
 
                                 });
                             } else {
-                                let field_type = inner_ty.clone();
+                                let field_type = field_ty.clone();
                                 let _field_path = format!("{}::{}", field_type.to_token_stream(), field_name_path);
 
                                 chains_in_to_properties.push(quote! {
@@ -158,94 +74,28 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
 
                                 });
                             }
+                        } else if scalar {
+                            fields_in_to_properties.push(quote! {
+                                (thoosa_shared::conc_str(&prefix, #field_name), Some(self.#field_ident.into())),
+
+                            });
+
+                            fields_in_from_properties.push(quote! {
+                                #field_ident: properties.get(&thoosa_shared::conc_str(&prefix, #field_name))
+                                    .map(|v| thoosa_shared::anyhow::Context::with_context(v.try_into(), || format!("invalid property {}", thoosa_shared::conc_str(&prefix, #field_name)))).transpose()?
+                                    .ok_or_else(||thoosa_shared::anyhow::anyhow!(format!("no {} in properties", thoosa_shared::conc_str(&prefix, #field_name))))?,
+
+                            });
                         } else {
-                            if let Some(vec_inner_ty) = get_vec_inner_ty(&field.ty) {
-                                let field_idx_fmt = format!("{}{{}}", field_name_path);
-                                let field_prefix_fmt = format!("{}{{}}.", field_name_path);
-                                let _vec_inner_ty_str = vec_inner_ty.to_token_stream().to_string();
+                            let field_type = field.ty.clone();
+                            let _field_path = format!("{}::{}", field_type.to_token_stream(), field_name_path);
+                            chains_in_to_properties.push(quote! {
+                                .chain(self.#field_ident.to_properties_iter(Some(thoosa_shared::conc_str(&prefix, #field_name_path))))
+                            });
 
-                                if has_attr(field, "config_scalar") || is_primitive(&vec_inner_ty) {
-                                    chains_in_to_properties.push(quote! {
-                                        .chain({
-                                            let entries: Vec<(String, thoosa_shared::val::Val)> = self.#field_ident
-                                                .iter()
-                                                .enumerate()
-                                                .map(|(i, v)| (thoosa_shared::conc_str(&prefix, &format!(#field_idx_fmt, i)), v.clone().into()))
-                                                .collect();
-                                            entries.into_iter()
-                                        })
-                                    });
-
-                                    fields_in_from_properties.push(quote! {
-                                        #field_ident: {
-                                            thoosa_properties_map::validate_indices(properties, &thoosa_shared::conc_str(&prefix, #field_name_path))?;
-                                            let mut values = Vec::new();
-                                            let mut idx: usize = 0;
-                                            loop {
-                                                let key = thoosa_shared::conc_str(&prefix, &format!(#field_idx_fmt, idx));
-                                                if let Some(v) = properties.get(&key) {
-                                                    values.push(thoosa_shared::anyhow::Context::with_context(v.try_into(), || format!("invalid property {key}"))?);
-                                                    idx += 1;
-                                                } else {
-                                                    break;
-                                                }
-                                            }
-                                            values
-                                        },
-                                    });
-                                } else {
-                                    chains_in_to_properties.push(quote! {
-                                        .chain({
-                                            let entries: Vec<(String, thoosa_shared::val::Val)> = self.#field_ident
-                                                .iter()
-                                                .enumerate()
-                                                .flat_map(|(i, v)| v.to_properties_iter(Some(thoosa_shared::conc_str(&prefix, &format!(#field_prefix_fmt, i)))))
-                                                .collect();
-                                            entries.into_iter()
-                                        })
-                                    });
-
-                                    fields_in_from_properties.push(quote! {
-                                        #field_ident: {
-                                            thoosa_properties_map::validate_indices(properties, &thoosa_shared::conc_str(&prefix, #field_name_path))?;
-                                            let mut values = Vec::new();
-                                            let mut idx: usize = 0;
-                                            loop {
-                                                let child_prefix = thoosa_shared::conc_str(&prefix, &format!(#field_prefix_fmt, idx));
-                                                if properties.keys().any(|key| key.starts_with(child_prefix.as_str())) {
-                                                    values.push(#vec_inner_ty::from_properties_map(Some(child_prefix), properties)?);
-                                                    idx += 1;
-                                                } else {
-                                                    break;
-                                                }
-                                            }
-                                            values
-                                        },
-                                    });
-                                }
-                            } else if has_attr(field, "config_scalar") || is_primitive(&field.ty) {
-                                fields_in_to_properties.push(quote! {
-                                    (thoosa_shared::conc_str(&prefix, #field_name), Some(self.#field_ident.into())),
-
-                                });
-
-                                fields_in_from_properties.push(quote! {
-                                    #field_ident: properties.get(&thoosa_shared::conc_str(&prefix, #field_name))
-                                        .map(|v| thoosa_shared::anyhow::Context::with_context(v.try_into(), || format!("invalid property {}", thoosa_shared::conc_str(&prefix, #field_name)))).transpose()?
-                                        .ok_or_else(||thoosa_shared::anyhow::anyhow!(format!("no {} in properties", thoosa_shared::conc_str(&prefix, #field_name))))?,
-
-                                });
-                            } else {
-                                let field_type = field.ty.clone();
-                                let _field_path = format!("{}::{}", field_type.to_token_stream(), field_name_path);
-                                chains_in_to_properties.push(quote! {
-                                    .chain(self.#field_ident.to_properties_iter(Some(thoosa_shared::conc_str(&prefix, #field_name_path))))
-                                });
-
-                                fields_in_from_properties.push(quote! {
-                                    #field_ident: #field_type::from_properties_map(Some(thoosa_shared::conc_str(&prefix, #field_name_path)), &properties)?,
-                                });
-                            }
+                            fields_in_from_properties.push(quote! {
+                                #field_ident: #field_type::from_properties_map(Some(thoosa_shared::conc_str(&prefix, #field_name_path)), &properties)?,
+                            });
                         }
                     }
 
@@ -383,4 +233,59 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
         }
         _ => quote! {}.into(),
     }
+}
+
+// One indexed-vector emitter preserves field paths and the optional empty-vector marker.
+fn vector_properties(field_ident: &syn::Ident, field_name: &str, item_ty: &syn::Type, optional: bool, scalar: bool) -> (proc_macro2::TokenStream, proc_macro2::TokenStream) {
+    let field_path = format!("{field_name}.");
+    let index_fmt = format!("{field_path}{{}}");
+    let prefix_fmt = format!("{field_path}{{}}.");
+    let length_key = format!("{field_path}__len");
+    let entries = if scalar {
+        quote! { values.iter().enumerate().map(|(i, v)| (thoosa_shared::conc_str(&prefix, &format!(#index_fmt, i)), v.clone().into())).collect::<Vec<_>>() }
+    } else {
+        quote! { values.iter().enumerate().flat_map(|(i, v)| v.to_properties_iter(Some(thoosa_shared::conc_str(&prefix, &format!(#prefix_fmt, i))))).collect::<Vec<_>>() }
+    };
+    let chain = if optional {
+        quote! {
+            .chain(self.#field_ident.as_ref().map(|values| (thoosa_shared::conc_str(&prefix, #length_key), thoosa_shared::val::Val::Str(values.len().to_string()))).into_iter())
+            .chain(self.#field_ident.as_ref().map(|values| { #entries }).unwrap_or_default().into_iter())
+        }
+    } else {
+        quote! { .chain({ let values = &self.#field_ident; #entries }.into_iter()) }
+    };
+    let read_item = if scalar {
+        quote! {
+            let key = thoosa_shared::conc_str(&prefix, &format!(#index_fmt, idx));
+            if let Some(v) = properties.get(&key) {
+                values.push(thoosa_shared::anyhow::Context::with_context(v.try_into(), || format!("invalid property {key}"))?);
+            } else { break; }
+        }
+    } else {
+        quote! {
+            let child_prefix = thoosa_shared::conc_str(&prefix, &format!(#prefix_fmt, idx));
+            if properties.keys().any(|key| key.starts_with(child_prefix.as_str())) {
+                values.push(#item_ty::from_properties_map(Some(child_prefix), properties)?);
+            } else { break; }
+        }
+    };
+    let result = if optional {
+        quote! {
+            if let Some(length) = properties.get(&thoosa_shared::conc_str(&prefix, #length_key)) {
+                let length = usize::try_from(length)?;
+                thoosa_shared::anyhow::ensure!(length == values.len(), "invalid vector length for {}{}", prefix, #field_name);
+                Some(values)
+            } else if values.is_empty() { None } else { Some(values) }
+        }
+    } else { quote! { values } };
+    let decoded = quote! {
+        #field_ident: {
+            thoosa_properties_map::validate_indices(properties, &thoosa_shared::conc_str(&prefix, #field_path))?;
+            let mut values = Vec::new();
+            let mut idx: usize = 0;
+            loop { #read_item idx += 1; }
+            #result
+        },
+    };
+    (chain, decoded)
 }
