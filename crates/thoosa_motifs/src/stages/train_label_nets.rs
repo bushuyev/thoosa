@@ -1005,25 +1005,25 @@ where
 {
     async fn new_step(&self, run_config: TrainLabelNetRunConfig, ctx: C, vs_path: PathBuf) -> Result<(DynSyncStageWithStateEnum<SyncTrainLabelStep<C>>, LabelNetParams), ThoError> {
         let node_params = train_label_step_params(&run_config, self.num_nets);
-        if GlobalCtx::global().is_ipc() {
-            let init = TrainLabelStepIpcInit {
-                params: node_params.clone(),
-                training_config: run_config.common_training_args.clone(),
-                tho_device_idx: ctx.tho_device_idx(),
-                vs_path,
-            };
-            let input_cloner = Arc::new(|input: &TrainStepInput<MotifProbability, LabelProbability>| -> Result<Box<dyn WorkerInput>, ThoError> { Ok(Box::new(TrainLabelStepInput(input.clone_refs_for_worker()?))) });
-            Ok((
-                DynSyncStageWithStateEnum::Proxy {
-                    stage: Arc::new(ProxyStage::proxy_with_input_cloner(TRAIN_LABEL_STEP_ENDPOINT, Some(SyncTrainLabelStep::<C>::next_id().to_string()), ctx.tho_device_idx(), Box::new(init), input_cloner).await?),
-                    init: (),
-                },
-                node_params,
-            ))
-        } else {
-            let train_step = new_label_training_step(ctx.tho_device_idx().into(), node_params.clone(), run_config.common_training_args, vs_path).await?;
-            Ok((DynSyncStageWithStateEnum::Local(Arc::new(train_step)), node_params))
-        }
+        let device = ctx.tho_device_idx();
+        let execution = GlobalCtx::global().execution(device);
+        let local_params = node_params.clone();
+        let remote_params = node_params.clone();
+        let remote_config = run_config.common_training_args.clone();
+        let remote_path = vs_path.clone();
+        let input_cloner = Arc::new(|input: &TrainStepInput<MotifProbability, LabelProbability>| -> Result<Box<dyn WorkerInput>, ThoError> { Ok(Box::new(TrainLabelStepInput(input.clone_refs_for_worker()?))) });
+        // Installation owns backend selection, IDs, and owner-managed recovery.
+        let stage = execution.install_stateful(
+            TRAIN_LABEL_STEP_ENDPOINT,
+            thoosa_common::ipc::endpoints::StageRecovery::OwnerManaged,
+            || async move { Ok(Arc::new(new_label_training_step(device.into(), local_params, run_config.common_training_args, vs_path).await?)) },
+            || async move {
+                let init = TrainLabelStepIpcInit { params: remote_params, training_config: remote_config, tho_device_idx: device, vs_path: remote_path };
+                Ok((Box::new(init) as Box<dyn WorkerInput>, ()))
+            },
+            Some(input_cloner),
+        ).await?;
+        Ok((stage, node_params))
     }
 }
 

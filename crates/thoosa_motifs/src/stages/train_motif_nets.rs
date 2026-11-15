@@ -221,51 +221,51 @@ where
         //motif is loaded here so that it can be refreshed after reset
         let motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>> = t!(Arc::clone(&self.motif_loader).run_cached(Arc::clone(&self.motif_loader_input), ctx.branch(false),)).await?;
 
-        if GlobalCtx::global().is_ipc() {
-            let motif = t!(motif.borrow_ref(ctx.tho_device_idx())).await?;
-            let motif = motif.as_ref().data();
-            let motif = motif.clone_ref()?;
-
-            let init = TrainMotifStepIpcInit {
-                params: node_params.clone(),
-                motif,
-                run_config,
-                stft_config,
-                tho_device_idx: ctx.tho_device_idx(),
-                vs_path,
-            };
-            let input_cloner = Arc::new(|input: &TrainStepInput<Slice, MotifProbability>| -> Result<Box<dyn WorkerInput>, ThoError> { Ok(Box::new(TrainMotifStepInput(input.clone_refs_for_worker()?))) });
-            Ok((
-                DynSyncStageWithStateEnum::Proxy {
-                    stage: Arc::new(ProxyStage::proxy_with_input_cloner(TRAIN_MOTIF_STEP_ENDPOINT, Some(SyncTrainMotifStep::<C>::next_id().to_string()), ctx.tho_device_idx(), Box::new(init), input_cloner).await?),
-                    init: (),
-                },
-                node_params,
-            ))
-        } else {
-            let cosine_motif = match &run_config.net {
-                MotifNetTypeArgs::CosineNet(_) => {
-                    let motif_ref = t!(motif.borrow_ref(ctx.tho_device_idx())).await?;
-                    Some(Arc::new(copy_motif(motif_ref.as_ref().data())?))
-                }
-                MotifNetTypeArgs::Cosine2DNet(args) => {
-                    let stft = Arc::new(RandomSlicesStft::new_for_dims(args.stft_config.clone())?);
-                    let motif_input = {
-                        let motif_ref = t!(motif.borrow_ref(ctx.tho_device_idx())).await?;
-                        copy_motif(motif_ref.as_ref().data())
-                    }?;
-                    let motif_specs = t!(run_stft_as_motif_slices(&stft, motif_input, ctx.branch(false), "train_motif_nets_motif_stft")).await?;
-                    let motif_id = motif_specs.id().clone();
-                    let cosine_motif = motif_specs.local()?;
-                    let mut copied = tch_result(cosine_motif.f_zeros_like())?;
-                    tch_result(copied.f_copy_(&cosine_motif))?;
-                    Some(Arc::new(ThoTensor::new(motif_id, copied)?))
-                }
-                _ => None,
-            };
-            let train_step = new_motif_training_step(ctx.tho_device_idx().into(), node_params.clone(), cosine_motif, run_config, vs_path).await?;
-            Ok((DynSyncStageWithStateEnum::Local(Arc::new(train_step)), node_params))
-        }
+        let device = ctx.tho_device_idx();
+        let execution = GlobalCtx::global().execution(device);
+        let local_params = node_params.clone();
+        let remote_params = node_params.clone();
+        let remote_config = run_config.clone();
+        let remote_path = vs_path.clone();
+        let local_motif = Arc::clone(&motif);
+        let input_cloner = Arc::new(|input: &TrainStepInput<Slice, MotifProbability>| -> Result<Box<dyn WorkerInput>, ThoError> { Ok(Box::new(TrainMotifStepInput(input.clone_refs_for_worker()?))) });
+        // Build transport references only for IPC; keep the managed motif alive through installation.
+        let stage = execution.install_stateful(
+            TRAIN_MOTIF_STEP_ENDPOINT,
+            thoosa_common::ipc::endpoints::StageRecovery::OwnerManaged,
+            || async move {
+                let cosine_motif = match &run_config.net {
+                    MotifNetTypeArgs::CosineNet(_) => {
+                        let motif_ref = t!(local_motif.borrow_ref(ctx.tho_device_idx())).await?;
+                        Some(Arc::new(copy_motif(motif_ref.as_ref().data())?))
+                    }
+                    MotifNetTypeArgs::Cosine2DNet(args) => {
+                        let stft = Arc::new(RandomSlicesStft::new_for_dims(args.stft_config.clone())?);
+                        let motif_input = {
+                            let motif_ref = t!(local_motif.borrow_ref(ctx.tho_device_idx())).await?;
+                            copy_motif(motif_ref.as_ref().data())
+                        }?;
+                        let motif_specs = t!(run_stft_as_motif_slices(&stft, motif_input, ctx.branch(false), "train_motif_nets_motif_stft")).await?;
+                        let motif_id = motif_specs.id().clone();
+                        let cosine_motif = motif_specs.local()?;
+                        let mut copied = tch_result(cosine_motif.f_zeros_like())?;
+                        tch_result(copied.f_copy_(&cosine_motif))?;
+                        Some(Arc::new(ThoTensor::new(motif_id, copied)?))
+                    }
+                    _ => None,
+                };
+                let train_step = new_motif_training_step(device.into(), local_params, cosine_motif, run_config, vs_path).await?;
+                Ok(Arc::new(train_step))
+            },
+            || async move {
+                let motif_ref = t!(motif.borrow_ref(device)).await?;
+                let motif = motif_ref.as_ref().data().clone_ref()?;
+                let init = TrainMotifStepIpcInit { params: remote_params, motif, run_config: remote_config, stft_config, tho_device_idx: device, vs_path: remote_path };
+                Ok((Box::new(init) as Box<dyn WorkerInput>, ()))
+            },
+            Some(input_cloner),
+        ).await?;
+        Ok((stage, node_params))
     }
 }
 
