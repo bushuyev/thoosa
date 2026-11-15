@@ -26,6 +26,26 @@ const CHUNK_HEADER_SIZE: usize = 24;
 const MAX_CHUNK_BYTES: usize = 64 * 1024 * 1024;
 const MAX_COMPRESSED_BYTES: usize = MAX_CHUNK_BYTES + MAX_CHUNK_BYTES / 128 + 1024;
 
+// Keep append and read paths on the same slice-store format validation.
+fn read_header(file: &mut impl Read) -> io::Result<()> {
+    let mut magic = [0u8; FILE_MAGIC.len()];
+    file.read_exact(&mut magic)?;
+    if magic != FILE_MAGIC {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "unexpected slice store header"));
+    }
+
+    let mut version_bytes = [0u8; 4];
+    file.read_exact(&mut version_bytes)?;
+    let version = u32::from_le_bytes(version_bytes);
+    if version != FILE_VERSION {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, format!("unsupported slice store version: {version}")));
+    }
+
+    let mut reserved = [0u8; 4];
+    file.read_exact(&mut reserved)?;
+    Ok(())
+}
+
 // The file-backed tracker remains byte-compatible while living beside the motif APIs it persists.
 struct ChunkedWriter {
     file: File,
@@ -45,21 +65,7 @@ impl ChunkedWriter {
         } else {
             file.seek(SeekFrom::Start(0))?;
 
-            let mut magic = [0u8; FILE_MAGIC.len()];
-            file.read_exact(&mut magic)?;
-            if magic != FILE_MAGIC {
-                return Err(io::Error::new(io::ErrorKind::InvalidData, "unexpected slice store header"));
-            }
-
-            let mut version_bytes = [0u8; 4];
-            file.read_exact(&mut version_bytes)?;
-            let version = u32::from_le_bytes(version_bytes);
-            if version != FILE_VERSION {
-                return Err(io::Error::new(io::ErrorKind::InvalidData, format!("unsupported slice store version: {version}")));
-            }
-
-            let mut reserved = [0u8; 4];
-            file.read_exact(&mut reserved)?;
+            read_header(&mut file)?;
         }
 
         file.seek(SeekFrom::End(0))?;
@@ -220,21 +226,7 @@ impl<T: AnyBitPattern> ChunkedSlicesReader<T> {
     pub fn new(file_path: &Path) -> std::io::Result<Self> {
         let mut file = File::open(&file_path)?;
 
-        let mut magic = [0u8; FILE_MAGIC.len()];
-        file.read_exact(&mut magic)?;
-        if magic != FILE_MAGIC {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "unexpected slice store header"));
-        }
-
-        let mut version_bytes = [0u8; 4];
-        file.read_exact(&mut version_bytes)?;
-        let version = u32::from_le_bytes(version_bytes);
-        if version != FILE_VERSION {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, format!("unsupported slice store version: {version}")));
-        }
-
-        let mut reserved = [0u8; 4];
-        file.read_exact(&mut reserved)?;
+        read_header(&mut file)?;
 
         debug!("ChunkedSlicesReader::new: file_path={file_path:?}");
 
