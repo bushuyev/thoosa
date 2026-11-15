@@ -230,7 +230,7 @@ where
 
             let result = t!(train_net.run(Arc::new(TrainNetInput::new()), ctx.branch(false))).await?;
 
-            let final_result = TrainFinalNetsRunConfigResult::new(Some(&train_label_nets_run_config_ids), result.min_loss, result.var_store_path, result.node_params, result.run_config);
+            let final_result = TrainFinalNetsRunConfigResult::new(train_label_nets_run_config_ids, result.min_loss, result.var_store_path, result.node_params, result.run_config);
             info!("TrainFinalNet::run, done: min_loss={:?}", final_result.loss);
 
             Ok(Arc::new(TrainFinalNetOutput::new(final_result)))
@@ -990,7 +990,7 @@ mod tests {
         let checkpoint_path = test_dir.join("train_final_checkpoint.safetensors");
         tch_result(VarStore::new(Cpu).save(&checkpoint_path))?;
         let result = TrainFinalNetsRunConfigResult::new(
-            Some(&vec![label_run_config_id_0, label_run_config_id_1]),
+            vec![label_run_config_id_0, label_run_config_id_1],
             0.125,
             thoosa_shared::tmp_file::TmpFile::new(checkpoint_path),
             FinalNetParams::new(2, 100, 2, 3),
@@ -1034,9 +1034,10 @@ pub struct TrainFinalNetsRunConfigResult {
 }
 
 impl TrainFinalNetsRunConfigResult {
-    pub fn new(train_label_nets_run_config_ids: Option<&Vec<RunConfigId>>, loss: f32, var_store_path: TmpFile, final_node_params: FinalNetParams, train_final_nodes_values: TrainFinalNetRunConfig) -> Self {
+    // Final-net feature order always requires its input configuration IDs.
+    pub fn new(train_label_nets_run_config_ids: Vec<RunConfigId>, loss: f32, var_store_path: TmpFile, final_node_params: FinalNetParams, train_final_nodes_values: TrainFinalNetRunConfig) -> Self {
         Self {
-            train_label_nets_run_config_ids: train_label_nets_run_config_ids.expect("train_label_nodes_run_config_ids").clone(),
+            train_label_nets_run_config_ids,
             loss,
             var_store_path,
             final_node_params,
