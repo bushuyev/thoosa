@@ -4,10 +4,8 @@ use parking_lot::RwLock;
 use std::fmt::Debug;
 use std::fs::OpenOptions;
 use std::io::Write;
-use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
-use tch::Tensor;
 use thoosa_shared::perf_logging::{PERF, SyncMakeWriter, format_perf_map, init_tracing, install_panic_hook};
 use tokio::runtime::Handle;
 use tokio::sync::watch;
@@ -29,13 +27,13 @@ use crate::utils::list_devices;
 use crate::version::VERSION;
 use crate::ws::Workspace;
 
+/// Resource conversion belongs to loaders; CLI setup only needs store and workspace services.
 ///main process function: sets up logging, spawns IPC Worker if needed, strats CPU purger
-pub async fn run_common_cli<C, CS, R, W>(args: CommonArgs<C>, store: Arc<CS>, ws: Arc<RwLock<Box<W>>>, _resource_to_tensor: R, cdt_for_dir: String) -> anyhow::Result<()>
+pub async fn run_common_cli<C, CS, W>(args: CommonArgs<C>, store: Arc<CS>, ws: Arc<RwLock<Box<W>>>, cdt_for_dir: String) -> anyhow::Result<()>
 where
     C: Subcommand + StageCommand<Store = Arc<CS>, Workspace = W, Ctx = RunCtxImpl> + Clone + std::fmt::Debug + Debug,
     CS: ?Sized + Store,
     W: Workspace + ?Sized,
-    R: Fn(&dyn AsRef<Path>, &str) -> anyhow::Result<Tensor> + Sync + Send,
 {
     unsafe {
         at_grad_set_enabled(0);

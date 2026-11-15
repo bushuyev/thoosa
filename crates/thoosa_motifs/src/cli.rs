@@ -52,9 +52,9 @@ use crate::stages::select_motifs::{SelectMotifsInput, SelectMotifsStage};
 use crate::stages::seq_scan::SeqScanStage;
 use crate::stages::slices_stats::Metrics;
 use crate::stages::train_final_net::{SYNC_LOGITS_BATCH_ENDPOINT, new_train_final_net, sync_logits_batch_init, train_final_step_endpoint_inits};
-use crate::stages::train_label_nets::{SYNC_LABEL_BATCH_ENDPOINT, TrainLabelNetRunConfig, TrainLabelNetRunConfigRangeOrValue, TrainLabelNetsArgs, new_train_label_nets, sync_label_batch_endpoint_init, train_label_step_endpoint_inits};
+use crate::stages::train_label_nets::{SYNC_LABEL_BATCH_ENDPOINT, TrainLabelNetRunConfigRangeOrValue, TrainLabelNetsArgs, new_train_label_nets, sync_label_batch_endpoint_init, train_label_step_endpoint_inits};
 use crate::stages::train_motif_nets::{TrainMotifNetInput, TrainMotifNets, train_motif_step_endpoint_inits};
-use crate::train_nets::{TrainFinalNetArgs, TrainFinalNetRunConfig, TrainFinalNetRunConfigRangeOrValue, TrainMotifNetRunConfig, TrainMotifNetRunConfigRangeOrValue, TrainMotifsNetsArgs};
+use crate::train_nets::{TrainFinalNetArgs, TrainFinalNetRunConfigRangeOrValue, TrainMotifNetRunConfigRangeOrValue, TrainMotifsNetsArgs};
 use thoosa_common::args::StageCommand;
 use thoosa_common::data_with_extra::DataWithExtra;
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
@@ -234,7 +234,7 @@ impl StageCommand for MotifCommands {
 
                 let input_wrapper = TrainMotifNetInput::new(motifs_by, Arc::new(train_motif_nets_args.opt_config.clone()), train_motif_nets_args.motifs_limit);
 
-                let run_config_ids = t!(run_opt::<_, _, TrainMotifNetRunConfig, _, _>(
+                let run_config_ids = t!(run_opt(
                     train_motif_nets_run_config_range_or_value,
                     input_wrapper,
                     &ws,
@@ -259,7 +259,7 @@ impl StageCommand for MotifCommands {
                 let mut init_ctx = ctx.branch(true);
                 let labels_filter = train_label_nets_args.labels_filter();
 
-                let _run_config_ids = t!(run_opt::</*Labeled,*/ _, _, TrainLabelNetRunConfig, _, _>(
+                let _run_config_ids = t!(run_opt(
                     train_motif_nets_run_config_range_or_value,
                     input_wrapper,
                     &ws,
@@ -312,7 +312,7 @@ impl StageCommand for MotifCommands {
 
                 let opt_config = Arc::new(train_final_net_args.opt_config.clone());
                 let init_ctx = ctx.branch(true);
-                let _run_config_ids = t!(run_opt::<_, _, TrainFinalNetRunConfig, _, _>(
+                let _run_config_ids = t!(run_opt(
                     train_final_net_run_config_range_or_value,
                     input_wrapper,
                     &ws,
@@ -1368,11 +1368,11 @@ where
     Ok(run_config_ids)
 }
 
-pub async fn run_opt<RCRV, F, RC, ST, CtxF>(rcrv: RCRV, input: ST::In<'static>, ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, store: &Arc<dyn MotifsStore>, init_stage: F, ctx_f: CtxF) -> anyhow::Result<Vec<RunConfigId>>
+// The stage factory determines its configuration type; no separate RC parameter is needed.
+pub async fn run_opt<RCRV, F, ST, CtxF>(rcrv: RCRV, input: ST::In<'static>, ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, store: &Arc<dyn MotifsStore>, init_stage: F, ctx_f: CtxF) -> anyhow::Result<Vec<RunConfigId>>
 where
     F: AsyncFnOnce(thoosa_shared::run_configs::TrainingRunConfigs<<RCRV as OptRunConfigSource>::P>) -> anyhow::Result<Arc<ST>>,
     ST: Stage + AsyncStage + Send + Sync, // + thoosa_common::runner::common::runnable::WrappedRunInputStage,
-    RC: RunConfig + TryFrom<std::vec::IntoIter<NamedVal<<RCRV as OptRunConfigSource>::P>>, Error = anyhow::Error> + ToHashmap,
     RCRV: OptRunConfigSource,
     for<'c> <ST as Stage>::In<'c>: Send + Sync,
     for<'a> <ST as Stage>::Out: Send + Sync + SavableResult<Store = dyn MotifsStore, Workspace = dyn crate::motifs_ws::MotifsWorkspace, P<'a>: Default, R = Vec<RunConfigId>>,

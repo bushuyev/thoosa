@@ -178,7 +178,7 @@ pub(crate) async fn run_all(ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::Mo
             fixed_find_motifs_config,
             find_and_select_motifs_opt_config,
         } => {
-            let best_find_and_select_result_ids: Vec<RunConfigId> = t!(run_opt::</*Simple,*/ _, _, FindAndSelectMotifsRunConfig, _, _>(
+            let best_find_and_select_result_ids: Vec<RunConfigId> = t!(run_opt(
                 find_and_select_run_config_range_or_value,
                 find_and_select_input,
                 &ws,
@@ -239,7 +239,7 @@ pub(crate) async fn run_all(ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::Mo
     );
 
     //gpt Run a grid over motif-net training configs; output is a set of run ids for trained motif nets.
-    let train_motif_nets_run_config_ids = t!(run_opt::</*Labeled,*/ _, _, TrainMotifNetRunConfig, _, _>(
+    let train_motif_nets_run_config_ids = t!(run_opt(
         all_config.train_motif_nets_run_config_range_or_value,
         input_wrapper,
         &ws,
@@ -259,7 +259,7 @@ pub(crate) async fn run_all(ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::Mo
     let labels_filter = run_all_args.labels_filter();
 
     //run a grid over label-net training configs; consumes motif nets from previous stage.
-    let train_label_nets_run_config_ids = t!(run_opt::<_, _, TrainLabelNetRunConfig, _, _>(
+    let train_label_nets_run_config_ids = t!(run_opt(
         all_config.train_label_nets_run_config_range_or_value,
         train_labels_input,
         &ws,
@@ -312,7 +312,7 @@ pub(crate) async fn run_all(ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::Mo
     let loader_in_train_final = Arc::clone(&loader);
 
     //gpt Run a grid over final-net training configs; consumes label-net run ids and produces final models.
-    let _run_config_ids = t!(run_opt::<_, _, TrainFinalNetRunConfig, _, _>(
+    let _run_config_ids = t!(run_opt(
         all_config.train_final_net_run_config_range_or_value,
         train_final_input,
         &ws,

@@ -198,7 +198,6 @@ fn main() -> anyhow::Result<()> {
             args.common_args.clone(),
             Arc::clone(&store),
             Arc::clone(&ws),
-            |source_path, key| thoosa_motifs::data::parquet_to_tensor_by_path(source_path.as_ref().join("train_eegs").join(format!("{}.parquet", key)), Cpu),
             cdt.clone(),
         )
         .await?;
