@@ -43,11 +43,10 @@ use tch::Kind::Float;
 use thoosa_common::data_with_extra::DataWithExtra;
 use thoosa_common::instance_cache::InstanceCache;
 use thoosa_common::ipc::worker_msg::WorkerInput;
-use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
-use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
+use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, ConsumeData, DevicesWrap, ThoDataRef};
 use thoosa_common::runner::global_ctx::GlobalCtx;
-use thoosa_common::runner::oom_handler::{Adjusters, NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, OOMHandler, WithRunCtxContext, run_ctx_adjuster};
+use thoosa_common::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, OOMHandler, WithRunCtxContext};
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::utils::load_run_config;
 use thoosa_cpu_data_derive::CpuData;
@@ -733,12 +732,12 @@ where
 
         let sync_input = SyncMotifLoaderInputWrapper::new(input_id.clone(), motif_id_value, select_motifs_run_config_id_for_key, real_find_motifs_run_config_id, channel, window, loaded_resources, "motif loader wrapper");
 
-        let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(vec![Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(*MaxParallelStep::FAST))), Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("motif_loader")))], None);
+        let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::throttle_and_offload(MaxParallelStep::FAST, "motif_loader");
         let motif = t!(oom_handler.consume(
             &sync_motif_loader,
             sync_input,
             ctx.branch(true),
-            WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new())),
+            WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::default()),
         ))
         .await?;
 
@@ -881,16 +880,13 @@ where
             "random loader",
         );
 
-        let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(
-            vec![Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(*MaxParallelStep::FAST))), Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("random_slices_loader")))],
-            None,
-        );
+        let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::throttle_and_offload(MaxParallelStep::FAST, "random_slices_loader");
         debug!("RandomSlicesLoader::run: motif_id={motif_id}: sync_input={sync_input:?}");
         let motif = t!(oom_handler.consume(
             &sync_motif_loader,
             sync_input,
             ctx.branch(true),
-            WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new())),
+            WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::default()),
         ))
         .await?;
 

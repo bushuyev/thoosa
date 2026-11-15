@@ -56,8 +56,8 @@ use thoosa_common::nets::batches::BatchLengths;
 use thoosa_common::nets::builder::SeqBuilder;
 use thoosa_common::nets::common_nets::ThoModuleWithStore;
 use thoosa_common::nets::nodes::ThoModule;
-use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
-use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
+use thoosa_common::runner::adjusters::dump_to_cpu::DumpToCpu;
+use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
 use thoosa_common::runner::adjusters::splits::SplitsAdjusterContext;
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, SelectRef, ThoDataRef};
 #[double]
@@ -451,15 +451,12 @@ where
             motif_nets_applied: motif_nets_applied.into_iter().map(|(_, _, output)| output).collect(),
         });
 
-        let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(
-            vec![Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(*MaxParallelStep::FAST))), Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("stack_apply_motif_nets")))],
-            None,
-        );
+        let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::throttle_and_offload(MaxParallelStep::FAST, "stack_apply_motif_nets");
         let motif_nets_applied = t!(oom_handler.run(
             &self.stack_applied_motif_nets,
             Arc::clone(&stack_input),
             ctx.branch(true),
-            WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new(),),),
+            WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::default(),),
         ))
         .await?
         .into_inner();
@@ -938,7 +935,7 @@ where
             Contexts::<DynSyncStageWithStateEnum<SyncApplyMotifNet<C>, MotifNetMeta>, _, _, _>::new(
                 ApplyMotifNetSplitsContext::new(input.size().clone(), out_id, slices, (Float, Cpu), width, step)?,
                 NoopRunnableContext {},
-                MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new()),
+                MaxParallelAndDumpToCpuAdjustableContex::default(),
             ),
         )
         .await
@@ -1047,12 +1044,9 @@ where
             .get_or_try_insert_recreatable_with::<C, _, _, _, _>(device_idx, GlobalCtx::global().cuda_activity_gate(device_idx), GlobalCtx::global().is_ipc(), key, move || async move {
                 // Construction loads model state and has no cached tensor inputs to retain.
 
-                let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(
-                    vec![Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(*MaxParallelStep::FAST))), Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("apply_motif_net_init")))],
-                    None,
-                );
+                let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::throttle_and_offload(MaxParallelStep::FAST, "apply_motif_net_init");
                 let stage = oom_handler
-                    .new_stage(sync_init, run_context, WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new())), &ws)
+                    .new_stage(sync_init, run_context, WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::default()), &ws)
                     .await?;
 
                 // Every configured instance must remain purgeable; concatenated tensor IDs can collide as display strings.

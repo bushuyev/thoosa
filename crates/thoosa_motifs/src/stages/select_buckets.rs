@@ -16,10 +16,9 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use thoosa_common::data_with_extra::DataWithExtra;
 use thoosa_common::dims::ChannelsData;
-use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
-use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
+use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
-use thoosa_common::runner::oom_handler::{Adjusters, NoInputAdjuster, NoStageAdjuster, OOMHandler, WithRunCtxContext, run_ctx_adjuster};
+use thoosa_common::runner::oom_handler::{NoInputAdjuster, NoStageAdjuster, OOMHandler, WithRunCtxContext};
 use thoosa_common::runner::sync_stage::SyncStage;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::utils::load_run_config;
@@ -453,13 +452,13 @@ where
             async move {
                 // Selection reads configuration and stored scores, with no cached tensor inputs.
 
-                let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(vec![Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(*MaxParallelStep::FAST))), Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("select_buckets")))], None);
+                let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::throttle_and_offload(MaxParallelStep::FAST, "select_buckets");
 
                 t!(oom_handler.run(
                     &sync_stage,
                     Arc::new(SelectBucketsSyncInputWrapper::new(select_config)),
                     ctx.branch(false),
-                    WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new(),),),
+                    WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::default(),),
                 ))
                 .await
             }

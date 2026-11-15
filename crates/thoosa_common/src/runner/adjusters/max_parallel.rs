@@ -132,6 +132,13 @@ impl MaxParallelAndDumpToCpuAdjustableContex {
     }
 }
 
+// Each retry loop needs fresh throttling and offload progress.
+impl Default for MaxParallelAndDumpToCpuAdjustableContex {
+    fn default() -> Self {
+        Self::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new())
+    }
+}
+
 impl RunCtxContext for MaxParallelAndDumpToCpuAdjustableContex {}
 
 #[cfg(test)]

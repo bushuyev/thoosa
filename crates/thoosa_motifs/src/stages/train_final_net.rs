@@ -42,11 +42,10 @@ use thoosa_common::ipc::wraps::{WorkerWrapper, WorkerWrapperWithState};
 use thoosa_common::nets::common_nets::{CommonTrainingRunConfig, OptConfig};
 use thoosa_common::nets::tho_varstore::{ModConfig, ThoTrainModule};
 use thoosa_common::resources::{Logits, NetResources, SavableResult};
-use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
-use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
+use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, ThoDataRef};
 use thoosa_common::runner::global_ctx::GlobalCtx;
-use thoosa_common::runner::oom_handler::{Adjusters, NoInputAdjuster, NoStageAdjuster, OOMHandler, WithRunCtxContext, run_ctx_adjuster};
+use thoosa_common::runner::oom_handler::{NoInputAdjuster, NoStageAdjuster, OOMHandler, WithRunCtxContext};
 use thoosa_common::runner::sync_stage::SyncStage;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
@@ -571,8 +570,8 @@ where
 
                 let stage = SyncLogitsBatch::<C>::new(ctx_for_batch.tho_device_idx().into()).await?;
                 let input = Arc::new(SyncLogitsBatchInputWrapper::new(label_probabilities, labels, labels_len));
-                let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(vec![Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(*MaxParallelStep::FAST))), Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("sync_label_batch")))], None);
-                let output = t!(oom_handler.run(&stage, input, ctx_for_batch.branch(false), WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new(),),))).await?;
+                let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::throttle_and_offload(MaxParallelStep::FAST, "sync_label_batch");
+                let output = t!(oom_handler.run(&stage, input, ctx_for_batch.branch(false), WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::default(),))).await?;
 
                 debug!("LogitsResourcesBatch::build_batch_stream: SyncLogitsBatch::outputs={output:?}");
 

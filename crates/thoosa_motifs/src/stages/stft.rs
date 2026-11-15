@@ -7,10 +7,9 @@ use tch::Kind::Float;
 use tch::Tensor;
 use thoosa_common::dims::{Batch, Dims, LocalSelect};
 use thoosa_common::nets::common_nets::StftRunConfig;
-use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
-use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
+use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
 use thoosa_common::runner::common::cachable::DevicesWrap;
-use thoosa_common::runner::oom_handler::{Adjusters, NoInputAdjuster, NoStageAdjuster, OOMHandler, WithRunCtxContext, run_ctx_adjuster};
+use thoosa_common::runner::oom_handler::{NoInputAdjuster, NoStageAdjuster, OOMHandler, WithRunCtxContext};
 use thoosa_common::runner::sync_stage::SyncStage;
 use thoosa_common::tch_error::tch_result;
 use thoosa_common::tho_tensor::ThoTensor;
@@ -99,12 +98,12 @@ where
     async fn run(self: Arc<Self>, input: Self::In<'static>, mut ctx: Self::Ctx) -> Result<Self::Out, ThoError> {
         // The input can come from different loaders; follow its registered owners.
 
-        let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, SyncStftSelector> = OOMHandler::new(vec![Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(*MaxParallelStep::FAST))), Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("sync_stft")))], None);
+        let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, SyncStftSelector> = OOMHandler::throttle_and_offload(MaxParallelStep::FAST, "sync_stft");
         let output = t!(oom_handler.run(
             &self.sync_stft,
             Arc::clone(&input),
             ctx.branch(false),
-            WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new(),),),
+            WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::default(),),
         ))
         .await?;
         Ok(Arc::new(DevicesWrap::wrap(output)))

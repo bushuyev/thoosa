@@ -807,6 +807,19 @@ where
     }
 }
 
+// Keep the common retry order and context contract in one place; custom policies still use new.
+impl<'a, 'z, C, S> OOMHandler<'a, 'z, NoInputAdjuster, NoStageAdjuster, Box<dyn Adjuster<crate::runner::adjusters::max_parallel::MaxParallelAndDumpToCpuAdjustableContex, A = C>>, S>
+where
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
+{
+    pub fn throttle_and_offload(step: crate::runner::adjusters::max_parallel::MaxParallelStep, descr: &str) -> Self {
+        Self::new(vec![
+            Adjusters::RunContext(run_ctx_adjuster(crate::runner::adjusters::max_parallel::MaxParallelAdjuster::<C>::new(*step))),
+            Adjusters::RunContext(run_ctx_adjuster(crate::runner::adjusters::dump_to_cpu::DumpToCpu::<C>::new(descr))),
+        ], None)
+    }
+}
+
 impl<'a, 'z, IA, TA, CA, S> OOMHandler<'a, 'z, IA, TA, CA, S>
 where
     IA: Debug,

@@ -25,7 +25,7 @@ use thoosa_common::ipc::proxy::{DynSyncStageEnum, DynSyncStageWithStateEnum, Pro
 use thoosa_common::ipc::wraps::SyncStageIpcWrapper;
 use thoosa_common::ipc::wraps::{WorkerWrapper, WorkerWrapperWithState};
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, ThoDataRef};
-use thoosa_common::runner::oom_handler::{Adjusters, NoInputAdjuster, NoStageAdjuster, OOMHandler, WithRunCtxContext, run_ctx_adjuster};
+use thoosa_common::runner::oom_handler::{NoInputAdjuster, NoStageAdjuster, OOMHandler, WithRunCtxContext};
 use thoosa_common::runner::sync_stage::SyncStage;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::resource::{Resource, ResourcesConfig, build_resource_maps};
@@ -47,8 +47,7 @@ use thoosa_common::nets::batches::{AsyncDataBatch, BatchLengths};
 use thoosa_common::nets::common_nets::{CommonTrainingRunConfig, CommonTrainingRunConfigBuilder, CommonTrainingRunConfigFields, CommonTrainingRunConfigRangeOrValue, ConvNetArgs, ConvNetParams, LinLenNetParams, OptConfig, SelfAttentionNetArgs, SelfAttentionNetParams, WithCommonTrainingRunConfig};
 use thoosa_common::nets::tho_varstore::{ModConfig, ThoTrainModule};
 use thoosa_common::resources::{Labeled, NetResources, SavableResult};
-use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
-use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
+use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
 #[double]
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::stages::stages_seq::PairStage;
@@ -689,12 +688,12 @@ where
 
                                                 let input = Arc::new(SyncLabelBatchInputWrapper::new(x_1_wrapped, x_0_wrapped, num_nets as i64, label));
                                                 let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> =
-                                                    OOMHandler::new(vec![Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(*MaxParallelStep::FAST))), Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("sync_label_batch")))], None);
+                                                    OOMHandler::throttle_and_offload(MaxParallelStep::FAST, "sync_label_batch");
                                                 let output = t!(oom_handler.run(
                                                     &sync_label_batch,
                                                     input,
                                                     ctx.branch(false),
-                                                    WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new(),),),
+                                                    WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::default(),),
                                                 ))
                                                 .await?;
                                                 Ok(output.into_parts())

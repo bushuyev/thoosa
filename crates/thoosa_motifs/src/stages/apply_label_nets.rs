@@ -29,15 +29,14 @@ use thoosa_common::dims::Slice;
 use thoosa_common::nets::batches::BatchLengths;
 use thoosa_common::nets::common_nets::ThoModuleWithStore;
 use thoosa_common::nets::nodes::ThoModule;
-use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
-use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
+use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
 use thoosa_common::runner::common::cachable::{BorrowRef, ConsumeData, DevicesWrap, ThoDataRef};
 use thoosa_common::runner::global_ctx::GlobalCtx;
 #[cfg(test)]
 use thoosa_common::runner::oom_handler::NoContexts;
 #[cfg(test)]
 use thoosa_common::runner::oom_handler::NoRunCtxAdjuster;
-use thoosa_common::runner::oom_handler::{Adjusters, NoInputAdjuster, NoStageAdjuster, OOMHandler, SyncStageInit, WithRunCtxContext, run_ctx_adjuster};
+use thoosa_common::runner::oom_handler::{NoInputAdjuster, NoStageAdjuster, OOMHandler, SyncStageInit, WithRunCtxContext};
 use thoosa_common::runner::sync_stage::ConsumeResult;
 use thoosa_common::runner::sync_stage::StageWithState;
 use thoosa_common::runner::tmp_cache::TmpCached;
@@ -294,11 +293,8 @@ where
 
                 let input = Arc::new(ApplyLabelNetInputWrapper::new(Arc::clone(&motif_probs)));
 
-                let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(
-                    vec![Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(*MaxParallelStep::FAST))), Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("apply_label_net_init")))],
-                    None,
-                );
-                let result = t!(oom_handler.run(&apply_label_net, input, ctx.branch(false), WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new())),))
+                let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::throttle_and_offload(MaxParallelStep::FAST, "apply_label_net_init");
+                let result = t!(oom_handler.run(&apply_label_net, input, ctx.branch(false), WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::default()),))
                     .await?
                     .into_inner();
 
@@ -336,15 +332,12 @@ where
         let order = label_output_order.iter().cloned().enumerate().map(|(idx, id)| (id, idx)).collect();
         let stack_input = StackAppliedLabelNetsInputWrapper::new(self.out_id(&input_id), order, Arc::into_inner(tmp_cache).expect("ApplyLabelNets::run: tmp_cache still shared").into_inner());
 
-        let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(
-            vec![Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(*MaxParallelStep::FAST))), Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("stack_apply_label_nets")))],
-            None,
-        );
+        let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::throttle_and_offload(MaxParallelStep::FAST, "stack_apply_label_nets");
         let label_outputs = t!(oom_handler.consume(
             &self.stack_applied_label_nets,
             stack_input,
             ctx.branch(true),
-            WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new(),),),
+            WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::default(),),
         ))
         .await?
         .into_inner();
@@ -813,12 +806,9 @@ where
             .get_or_try_insert_recreatable_with::<C, _, _, _, _>(run_context.tho_device_idx(), GlobalCtx::global().cuda_activity_gate(run_context.tho_device_idx()), GlobalCtx::global().is_ipc(), sync_init.trained_net_id, move || async move {
                 // Construction has no input tensors that must remain on this device, so an OOM retry may dump every cached tensor.
 
-                let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(
-                    vec![Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(*MaxParallelStep::FAST))), Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("apply_label_net_init")))],
-                    None,
-                );
+                let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::throttle_and_offload(MaxParallelStep::FAST, "apply_label_net_init");
                 let stage = oom_handler
-                    .new_stage(sync_init, run_context, WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new())), &ws)
+                    .new_stage(sync_init, run_context, WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::default()), &ws)
                     .await?;
 
                 ////ApplyLabelNet is needed for final net training - no need to unregister
