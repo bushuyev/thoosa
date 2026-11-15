@@ -1,3 +1,4 @@
+use crate::runner::global_ctx::GlobalCtx;
 use interprocess::local_socket::{
     GenericFilePath, GenericNamespaced, ListenerOptions, Name, ToFsName, ToNsName,
     tokio::{Stream, prelude::*},
@@ -105,7 +106,12 @@ impl CollectEtaProgressSocketServer {
         tokio::spawn(
             async move {
                 loop {
-                    collect_eta_set_device_stats(read_device_stats_snapshot());
+                    // Shutdown must also interrupt a sample waiting for an IPC worker reply.
+                    let stats = tokio::select! {
+                        _ = shutdown_rx.changed() => break,
+                        stats = read_device_stats_snapshot() => stats,
+                    };
+                    collect_eta_set_device_stats(stats);
                     tokio::select! {
                         changed = shutdown_rx.changed() => {
                             if changed.is_err() || *shutdown_rx.borrow() {
@@ -148,7 +154,28 @@ impl Drop for CollectEtaProgressSocketServer {
     }
 }
 
-fn read_device_stats_snapshot() -> Option<ThoDeviceStats> {
+async fn read_device_stats_snapshot() -> Option<ThoDeviceStats> {
+    // The socket starts before GlobalCtx installation. Once IPC is ready, CUDA is
+    // hidden in the parent and allocator counters must come from its workers.
+    if GlobalCtx::is_installed() && GlobalCtx::global().is_ipc() {
+        let ctx = GlobalCtx::global();
+        if ctx.device_count() < 2 {
+            return None;
+        }
+        let mut total = ThoDeviceStats::default();
+        for device in 1..ctx.device_count() {
+            let stats = async { ctx.execution(device).ipc_actor()?.get_device_stats().await }.await;
+            match stats {
+                Ok(stats) => total = total.saturating_add(stats),
+                Err(err) => {
+                    debug!("failed to read worker device stats for device={device}: {err}");
+                    return None;
+                }
+            }
+        }
+        return Some(total);
+    }
+
     let device_count = unsafe { atc_cuda_device_count() };
     if device_count < 1 {
         return None;
@@ -233,6 +260,55 @@ mod tests {
     fn next_test_socket_id() -> String {
         let suffix = NEXT_TEST_SOCKET_ID.fetch_add(1, Ordering::Relaxed);
         format!("thoosa-progress-test-{}-{suffix}", process::id())
+    }
+
+    #[test]
+    fn test_device_stats_snapshot_ipc() -> Result<(), thoosa_shared::ThoError> {
+        use crate::cuda_copier::CudaActorHandle;
+        use crate::ipc::cuda_worker::CudaWorker;
+        use crate::ipc::tests::run_ipc_test;
+        use crate::runner::global_ctx::GlobalCtx;
+        use crate::tch_error::tch_result;
+        use crate::tho_tensor::ThoTensor;
+        use crate::ws::mock_ws_simp;
+        use parking_lot::RwLock;
+        use std::collections::HashMap;
+        use std::sync::Arc;
+        use thoosa_shared::ThoError;
+
+        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)?));
+        run_ipc_test(
+            module_path!(),
+            async {
+                let before = super::read_device_stats_snapshot().await.ok_or_else(|| ThoError::new("missing initial worker stats"))?;
+                let actor = GlobalCtx::global().execution(1).ipc_actor()?;
+                let input = ThoTensor::new((), tch_result(tch::Tensor::f_ones([1024 * 1024], (tch::Kind::Float, tch::Device::Cpu)))?)?;
+                let tensor = actor.copy(input, 1usize.into()).await?;
+                // Retain a worker allocation: reading the parent's allocator would miss these bytes.
+                let minimum_allocated = before.allocated + 4 * 1024 * 1024;
+                let mut server = CollectEtaProgressSocketServer::start_with_socket_id(&next_test_socket_id(), thoosa_shared::collect_futures_eta::collect_eta_subscribe_progress())?;
+                server.stats_task = Some(server.spawn_device_stats_task());
+                let stream = Stream::connect(server.name()).await?;
+                let mut lines = BufReader::new(stream).lines();
+                timeout(Duration::from_secs(5), async {
+                    while let Some(line) = lines.next_line().await? {
+                        let snapshot: CollectEtaProgressState = serde_json::from_str(&line)?;
+                        if let Some(stats) = snapshot.device_stats {
+                            if stats.allocated >= minimum_allocated {
+                                assert!(stats.active >= stats.allocated);
+                                assert!(stats.reserved >= stats.active);
+                                return Ok::<_, ThoError>(());
+                            }
+                        }
+                    }
+                    Err(ThoError::new("progress socket closed before publishing worker stats"))
+                }).await??;
+                server.shutdown().await;
+                drop(tensor);
+                Ok(())
+            },
+            async |socket| CudaWorker::run_worker(socket, &ws, HashMap::new(), 1usize.into()).await,
+        )
     }
 
     #[tokio::test]

@@ -4,6 +4,7 @@ use std::any::Any;
 use std::fmt::Debug;
 use thoosa_common::ipc::state_transfer::StageStateInfo;
 use thoosa_common::ipc::tensor_info::{IpcTensorKind, WorkerTensorInfoPayload};
+use thoosa_shared::device_stats::ThoDeviceStats;
 use thoosa_shared::ipc_types::{H2DTensorKey, TensorKey, WorkerOutput};
 use thoosa_shared::{CudaAction, SyncStageRunnerError, ThoError, tho_error};
 
@@ -48,6 +49,15 @@ impl DebugOutput {
 
 #[typetag::serde]
 impl WorkerOutput for DebugOutput {}
+
+// Allocator statistics are process-local, so IPC progress must read them in the worker.
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct DeviceStatsOutput {
+    pub stats: ThoDeviceStats,
+}
+
+#[typetag::serde]
+impl WorkerOutput for DeviceStatsOutput {}
 
 // A batch has one export lease and one reply, while retaining each tensor's
 // exact shape/type and its independently owned parent allocation.
@@ -133,6 +143,7 @@ pub enum Operation {
     Shutdown {
         dummy: String,
     }, //without dummy empty message deserialized as Shutdown?
+    GetDeviceStats,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

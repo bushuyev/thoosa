@@ -5,7 +5,7 @@ use crate::cuda_utils::tensor_mem_size;
 use crate::ipc::ipc_cuda_utils::send_fd;
 use crate::ipc::proxy::StageStateDump;
 use crate::ipc::serialization::{PostcardToFromBytes, ToFromBytes};
-use crate::ipc::worker_msg::{CudaWorkerId, CudaWorkerMsgIn, CudaWorkerMsgOut, OpResult, Operation, WorkerCopyDonePayload, WorkerInput};
+use crate::ipc::worker_msg::{CudaWorkerId, CudaWorkerMsgIn, CudaWorkerMsgOut, DeviceStatsOutput, OpResult, Operation, WorkerCopyDonePayload, WorkerInput};
 use crate::runner::global_ctx::GlobalCtx;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
@@ -30,6 +30,7 @@ use thoosa_common::ipc::tensor_info::WorkerTensorInfoPayload;
 use thoosa_common::tch_error::tch_result;
 use thoosa_shared::CudaActivityPauseTicket;
 use thoosa_shared::ThoError;
+use thoosa_shared::device_stats::ThoDeviceStats;
 use thoosa_shared::ipc_types::{H2DTensorKey, TensorKey};
 use thoosa_shims::arena::{shared_arena_capacity, shared_arena_offset_of};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -150,6 +151,11 @@ enum CudaIPCActorMessage {
         respond_to: oneshot::Sender<Result<CudaWorkerMsgOut, ThoError>>,
     },
     DebugWorker {
+        worker_id: CudaWorkerId,
+        activity: thoosa_shared::CudaActivityScope,
+        respond_to: oneshot::Sender<Result<CudaWorkerMsgOut, ThoError>>,
+    },
+    GetDeviceStats {
         worker_id: CudaWorkerId,
         activity: thoosa_shared::CudaActivityScope,
         respond_to: oneshot::Sender<Result<CudaWorkerMsgOut, ThoError>>,
@@ -465,6 +471,7 @@ impl CudaIPCActor {
             | CudaIPCActorMessage::EnsureStage { worker_id, activity, .. }
             | CudaIPCActorMessage::DiscardStageState { worker_id, activity, .. }
             | CudaIPCActorMessage::ResetStageState { worker_id, activity, .. }
+            | CudaIPCActorMessage::GetDeviceStats { worker_id, activity, .. }
             | CudaIPCActorMessage::DebugWorker { worker_id, activity, .. } => (Some(*worker_id), activity),
         };
         // Recheck after queueing: a request or tensor key from a retired
@@ -587,6 +594,7 @@ impl CudaIPCActor {
                 respond_to,
             } => (worker_id, Operation::ResetStageState { endpoint_name, stage_id, info }, activity, respond_to),
             CudaIPCActorMessage::DebugWorker { worker_id, activity, respond_to } => (worker_id, Operation::Debug, activity, respond_to),
+            CudaIPCActorMessage::GetDeviceStats { worker_id, activity, respond_to } => (worker_id, Operation::GetDeviceStats, activity, respond_to),
         };
         // All single-reply operations share request IDs, transport ownership and
         // activity lifetime, including when the caller cancels after enqueueing.
@@ -880,7 +888,7 @@ impl CudaIPCActor {
             CudaIPCActorMessage::EnsureStage { respond_to, .. } => {
                 let _ = respond_to.send(Err(error));
             }
-            CudaIPCActorMessage::InvokeStage { respond_to, .. } | CudaIPCActorMessage::InstallStage { respond_to, .. } | CudaIPCActorMessage::DiscardStageState { respond_to, .. } | CudaIPCActorMessage::ResetStageState { respond_to, .. } | CudaIPCActorMessage::DebugWorker { respond_to, .. } => {
+            CudaIPCActorMessage::InvokeStage { respond_to, .. } | CudaIPCActorMessage::InstallStage { respond_to, .. } | CudaIPCActorMessage::DiscardStageState { respond_to, .. } | CudaIPCActorMessage::ResetStageState { respond_to, .. } | CudaIPCActorMessage::DebugWorker { respond_to, .. } | CudaIPCActorMessage::GetDeviceStats { respond_to, .. } => {
                 let _ = respond_to.send(Err(error));
             }
             CudaIPCActorMessage::PurgeStage { respond_to, .. } => {
@@ -1594,6 +1602,29 @@ impl CudaIPCActorHandle {
         match r? {
             IpcCopyResult::StateInstalled => Ok(()),
             IpcCopyResult::Tensor(_) => Err(ThoError::new("state upload returned a data tensor")),
+        }
+    }
+
+    pub(crate) async fn get_device_stats(&self) -> Result<ThoDeviceStats, ThoError> {
+        let worker_id = self.worker_id()?;
+        let (respond_to, recv) = oneshot::channel();
+        // Sampling participates in admission so it cannot target a worker during retirement or replacement.
+        self.sender
+            .send(CudaIPCActorMessage::GetDeviceStats {
+                activity: self.activity_for(worker_id)?,
+                worker_id,
+                respond_to,
+            })
+            .await
+            .context("CUDA actor channel closed")?;
+        let reply = recv.await.context("CUDA actor response channel closed")??;
+        match reply.status {
+            OpResult::Ok(Some(output)) => {
+                let output: Box<dyn Any> = output;
+                output.downcast::<DeviceStatsOutput>().map(|output| output.stats).map_err(|_| ThoError::new("worker device stats request returned an unexpected output type"))
+            }
+            OpResult::Ok(None) => Err(ThoError::new("worker device stats request returned no output")),
+            OpResult::Failed(error) => Err(error.into()),
         }
     }
 

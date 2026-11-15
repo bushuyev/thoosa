@@ -7,7 +7,7 @@ use crate::ipc::cuda_process::{DeviceInfo, IPC_SOCK_ENV};
 use crate::ipc::ipc_cuda_utils::recv_fd;
 use crate::ipc::serialization::{PostcardToFromBytes, ToFromBytes};
 use crate::ipc::worker_msg::CudaWorkerId;
-use crate::ipc::worker_msg::{CudaWorkerMsgIn, CudaWorkerMsgOut, DebugOutput, OpResult, Operation, WorkerCopyDonePayload, WorkerInput};
+use crate::ipc::worker_msg::{CudaWorkerMsgIn, CudaWorkerMsgOut, DebugOutput, DeviceStatsOutput, OpResult, Operation, WorkerCopyDonePayload, WorkerInput};
 use crate::ipc::wraps::{ErasedWithState, SyncStageIpcWrapper};
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
@@ -38,6 +38,7 @@ use thoosa_shared::perf_logging::{PERF, format_perf_map, init_tracing};
 use thoosa_shared::traits::{Data, Named, RunCtx, WithId};
 use thoosa_shared::{CopyToDevice, ThoError, panic_to_err};
 use thoosa_shims::context::ThoCudaContext;
+use thoosa_shims::device_stats::get_device_stats;
 use thoosa_shims::stream::ThoCudaStream;
 use tokio::net::UnixStream;
 use tokio::sync::mpsc;
@@ -785,6 +786,11 @@ impl CudaWorker {
                     Ok(OpResult::Ok(None))
                 }
                 Operation::Shutdown { dummy: _ } => Err(ThoError::new(format!("worker shutdown request {request_id} escaped the reader loop"))),
+                Operation::GetDeviceStats => {
+                    // The assigned physical GPU is worker-local ordinal zero, regardless of its parent index.
+                    let stats = get_device_stats(context.tho_device.gpu_ordinal()? as i32)?;
+                    Ok(OpResult::Ok(Some(Box::new(DeviceStatsOutput { stats }))))
+                }
                 Operation::Debug => {
                     info!("run_worker: Operation::Debug context.tho_device={:?} all_cuda_tensors.len={}", context.tho_device, context.all_cuda_tensors.tensors.lock().len());
 
