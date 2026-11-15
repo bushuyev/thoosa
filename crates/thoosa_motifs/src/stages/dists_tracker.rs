@@ -791,6 +791,47 @@ fn gather_dists_for_indices(dists: &Tensor, indices: &Tensor, mask_size: &[i64])
     Ok(tch_result(dists_flat.f_gather(0, &lin, false))?)
 }
 
+// Pairwise and batch merges must use the same logical shape and bit-alignment rules.
+fn merged_last_shape(shapes: &[&[i64]]) -> Vec<i64> {
+    let first = shapes[0];
+    assert!(!first.is_empty(), "DistsMask merge: size mismatch");
+    let last = first.len() - 1;
+    let mut merged = first.to_vec();
+    merged[last] = 0;
+    for size in shapes {
+        assert!(size.len() == first.len() && size[..last] == first[..last], "DistsMask merge: size mismatch");
+        merged[last] += size[last];
+    }
+    merged
+}
+
+fn merge_packed_masks(parts: &[(&Tensor, &[i64])]) -> Result<(Tensor, Vec<i64>), ThoError> {
+    let shapes = parts.iter().map(|(_, size)| *size).collect::<Vec<_>>();
+    let merged = merged_last_shape(&shapes);
+    let last = merged.len() - 1;
+    let rows = merged[..last].iter().fold(1i64, |a, v| a.saturating_mul(*v));
+    let device = parts[0].0.device();
+    let aligned = shapes.iter().all(|size| size[last] % 8 == 0);
+    let width = if aligned { merged[last] / 8 } else { merged[last] };
+    let out = tch_result(Tensor::f_zeros([rows, width], (if aligned { Uint8 } else { Bool }, device)))?;
+    let mut offset = 0;
+    for (mask, size) in parts {
+        assert_eq!(mask.device(), device, "DistsMask merge: device mismatch");
+        let len = if aligned { size[last] / 8 } else { size[last] };
+        let view = if aligned {
+            tch_result(mask.f_view([rows, len]))?
+        } else {
+            let bits = size.iter().fold(1i64, |a, v| a.saturating_mul(*v));
+            tch_result(tch_result(unpack_bits_u8(mask, Some(bits)).f_to_kind(Bool))?.f_view([rows, len]))?
+        };
+        tch_result(tch_result(out.f_narrow(1, offset, len))?.f_copy_(&view))?;
+        offset += len;
+    }
+    let flattened = tch_result(out.f_reshape([-1]))?;
+    let mask = if aligned { flattened } else { pack_bits_bool(&flattened)? };
+    Ok((mask, merged))
+}
+
 impl CrossClcResultMerge for DistsMask {
     fn to_cpu(self) -> BoxFuture<'static, Result<Self, ThoError>> {
         async move { t!(DistsMask::to_cpu(self)).await }.boxed()
@@ -825,30 +866,7 @@ impl CrossClcResultMerge for DistsMask {
                 DistsMask::from_local_tensors(mask, dists, DistsMaskType::AsIs)
             }
             (DistsMaskType::MaskPacked(left_sizes, left_dists_size), DistsMaskType::MaskPacked(right_sizes, right_dists_size)) => {
-                assert!(left_sizes.len() == right_sizes.len() && !left_sizes.is_empty(), "DistsMask merge: size mismatch");
-
-                let last_dim = left_sizes.len() - 1;
-                assert_eq!(left_sizes[..last_dim], right_sizes[..last_dim], "DistsMask merge: size mismatch");
-
-                let left_last = left_sizes[last_dim];
-                let right_last = right_sizes[last_dim];
-                let rows: i64 = left_sizes[..last_dim].iter().fold(1i64, |a, v| a.saturating_mul(*v));
-
-                let total_left_bits: i64 = left_sizes.iter().fold(1i64, |a, v| a.saturating_mul(*v));
-                let total_right_bits: i64 = right_sizes.iter().fold(1i64, |a, v| a.saturating_mul(*v));
-
-                let packed_mask = if left_last % 8 == 0 && right_last % 8 == 0 {
-                    let left_bytes = left_last / 8;
-                    let right_bytes = right_last / 8;
-                    let left_view = tch_result(left_mask.f_view([rows, left_bytes]))?;
-                    let right_view = tch_result(right_mask.f_view([rows, right_bytes]))?;
-                    tch_result(tch_result(tch_result(Tensor::f_concat(&[left_view, right_view], 1))?.f_reshape([-1]))?.f_contiguous())?
-                } else {
-                    let left_bits = tch_result(tch_result(unpack_bits_u8(&left_mask, Some(total_left_bits)).f_to_kind(Bool))?.f_view([rows, left_last]))?;
-                    let right_bits = tch_result(tch_result(unpack_bits_u8(&right_mask, Some(total_right_bits)).f_to_kind(Bool))?.f_view([rows, right_last]))?;
-                    let merged_bits = tch_result(Tensor::f_concat(&[left_bits, right_bits], 1))?;
-                    pack_bits_bool(&tch_result(merged_bits.f_reshape([-1]))?)?
-                };
+                let (packed_mask, merged_sizes) = merge_packed_masks(&[(&left_mask, &left_sizes), (&right_mask, &right_sizes)])?;
 
                 let dists = match (left_dists, right_dists) {
                     (Some(left), Some(right)) => {
@@ -868,8 +886,6 @@ impl CrossClcResultMerge for DistsMask {
                     _ => return Err(ThoError::new("DistsMask merge: dists mismatch")),
                 };
 
-                let mut merged_sizes = left_sizes;
-                merged_sizes[last_dim] = left_last + right_last;
                 let merged_dists_sizes = dists.as_ref().map(|t| t.size());
 
                 DistsMask::from_local_tensors(packed_mask, dists, DistsMaskType::MaskPacked(merged_sizes, merged_dists_sizes))
@@ -953,28 +969,20 @@ impl CrossClcResultMerge for DistsMask {
                     return Err(ThoError::new("DistsMask merge: type mismatch"));
                 }
 
-                let first_size = parts[0].mask.size();
-                assert!(!first_size.is_empty(), "DistsMask merge: size mismatch");
-
-                let last_dim = first_size.len() - 1;
+                let sizes = parts.iter().map(|part| part.mask.size()).collect::<Vec<_>>();
+                let shapes = sizes.iter().map(Vec::as_slice).collect::<Vec<_>>();
+                let merged_mask_sizes = merged_last_shape(&shapes);
+                let last_dim = merged_mask_sizes.len() - 1;
                 let device = parts[0].mask.device();
-                let mut total_last = first_size[last_dim];
-
-                for part in parts.iter().skip(1) {
-                    let size = part.mask.size();
-                    assert!(size.len() == first_size.len() && size[..last_dim] == first_size[..last_dim], "DistsMask merge: size mismatch");
+                for part in &parts {
                     assert_eq!(part.mask.device(), device, "DistsMask merge: device mismatch");
-                    total_last += size[last_dim];
                 }
-
-                let mut merged_mask_sizes = first_size;
-                merged_mask_sizes[last_dim] = total_last;
                 let mask_out = tch_result(Tensor::f_zeros(merged_mask_sizes.as_slice(), (Bool, device)))?;
 
                 let mut offset = 0;
                 for part in parts.iter() {
                     let len = part.mask.size()[last_dim];
-                    mask_out.narrow(last_dim as i64, offset, len).copy_(&part.mask);
+                    tch_result(tch_result(mask_out.f_narrow(last_dim as i64, offset, len))?.f_copy_(&part.mask))?;
                     offset += len;
                 }
 
@@ -1022,64 +1030,16 @@ impl CrossClcResultMerge for DistsMask {
 
                 DistsMask::from_local_tensors(mask_out, dists, DistsMaskType::AsIs)
             }
-            DistsMaskType::MaskPacked(base_sizes, base_dists_size) => {
+            DistsMaskType::MaskPacked(_, base_dists_size) => {
                 if parts.iter().any(|p| !matches!(p.mask_type, DistsMaskType::MaskPacked(_, _))) {
                     return Err(ThoError::new("DistsMask merge: type mismatch"));
                 }
 
-                assert!(!base_sizes.is_empty(), "DistsMask merge: size mismatch");
-                let last_dim = base_sizes.len() - 1;
-                let device = parts[0].mask.device();
-
-                let mut total_last = base_sizes[last_dim];
-                let mut all_aligned = base_sizes[last_dim] % 8 == 0;
-
-                for part in parts.iter().skip(1) {
-                    let sizes = match &part.mask_type {
-                        DistsMaskType::MaskPacked(sizes, _) => sizes,
-                        _ => return Err(ThoError::new("DistsMask merge: type mismatch")),
-                    };
-
-                    assert!(sizes.len() == base_sizes.len() && sizes[..last_dim] == base_sizes[..last_dim], "DistsMask merge: size mismatch");
-                    assert_eq!(part.mask.device(), device, "DistsMask merge: device mismatch");
-
-                    total_last += sizes[last_dim];
-                    all_aligned &= sizes[last_dim] % 8 == 0;
-                }
-
-                let rows: i64 = base_sizes[..last_dim].iter().fold(1i64, |a, v| a.saturating_mul(*v));
-
-                let packed_mask = if all_aligned {
-                    let total_bytes = total_last / 8;
-                    let out = tch_result(Tensor::f_zeros([rows, total_bytes], (Uint8, device)))?;
-                    let mut byte_offset = 0;
-                    for part in parts.iter() {
-                        let sizes = match &part.mask_type {
-                            DistsMaskType::MaskPacked(sizes, _) => sizes,
-                            _ => return Err(ThoError::new("DistsMask merge: type mismatch")),
-                        };
-                        let bytes = sizes[last_dim] / 8;
-                        let part_view = tch_result(part.mask.f_view([rows, bytes]))?;
-                        out.narrow(1, byte_offset, bytes).copy_(&part_view);
-                        byte_offset += bytes;
-                    }
-                    tch_result(out.f_reshape([-1]))?
-                } else {
-                    let out_bits = tch_result(Tensor::f_zeros([rows, total_last], (Bool, device)))?;
-                    let mut offset = 0;
-                    for part in parts.iter() {
-                        let sizes = match &part.mask_type {
-                            DistsMaskType::MaskPacked(sizes, _) => sizes,
-                            _ => return Err(ThoError::new("DistsMask merge: type mismatch")),
-                        };
-                        let part_last = sizes[last_dim];
-                        let total_bits = sizes.iter().fold(1i64, |a, v| a.saturating_mul(*v));
-                        let bits = tch_result(tch_result(unpack_bits_u8(&part.mask, Some(total_bits)).f_to_kind(Bool))?.f_view([rows, part_last]))?;
-                        out_bits.narrow(1, offset, part_last).copy_(&bits);
-                        offset += part_last;
-                    }
-                    pack_bits_bool(&tch_result(out_bits.f_reshape([-1]))?)?
-                };
+                let packed_parts = parts.iter().map(|part| match &part.mask_type {
+                    DistsMaskType::MaskPacked(size, _) => Ok((&part.mask, size.as_slice())),
+                    _ => Err(ThoError::new("DistsMask merge: type mismatch")),
+                }).collect::<Result<Vec<_>, _>>()?;
+                let (packed_mask, merged_sizes) = merge_packed_masks(&packed_parts)?;
 
                 let has_dists = parts[0].dists.is_some();
                 if parts.iter().any(|p| p.dists.is_some() != has_dists) {
@@ -1140,9 +1100,6 @@ impl CrossClcResultMerge for DistsMask {
                 } else {
                     (None, None)
                 };
-
-                let mut merged_sizes = base_sizes;
-                merged_sizes[last_dim] = total_last;
 
                 DistsMask::from_local_tensors(packed_mask, dists, DistsMaskType::MaskPacked(merged_sizes, merged_dists_sizes))
             }
@@ -1489,6 +1446,31 @@ mod tests {
                 })
                 .collect();
             assert_eq!(*recorded[channel as usize].lock(), expected);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_packed_pair_and_batch_merge_preserve_row_boundaries() -> anyhow::Result<()> {
+        if !tch::Cuda::is_available() { return Ok(()); }
+        // Exercise aligned bytes and partial-byte joins over multiple rows and channels.
+        for (left_width, right_width) in [(8, 16), (3, 5), (8, 3), (3, 8)] {
+            let left_size = [2, 2, left_width];
+            let right_size = [2, 2, right_width];
+            let left = Tensor::f_arange(4 * left_width, (Kind::Float, Device::Cuda(0)))?.f_view(left_size)?;
+            let right = Tensor::f_arange(4 * right_width, (Kind::Float, Device::Cuda(0)))?.f_view(right_size)?.f_add_scalar(100.)?;
+            let left_mask = left.f_remainder(3.)?.f_eq(0.)?;
+            let right_mask = right.f_remainder(3.)?.f_eq(0.)?;
+            let expected_mask = Tensor::f_cat(&[&left_mask, &right_mask], 2)?;
+            let expected_dists = Tensor::f_cat(&[&left, &right], 2)?;
+            for many in [false, true] {
+                let a = DistsMask::new(left_mask.f_alias()?, Some(left.f_alias()?), DistsMaskType::MaskPacked(left_size.to_vec(), Some(left_size.to_vec())))?;
+                let b = DistsMask::new(right_mask.f_alias()?, Some(right.f_alias()?), DistsMaskType::MaskPacked(right_size.to_vec(), Some(right_size.to_vec())))?;
+                let merged = if many { a.merge_batch_1_many(vec![b])? } else { a.merge_batch_1(b)? };
+                let (mask, dists) = merged.unpack()?;
+                assert!(mask.f_equal(&expected_mask)?);
+                assert!(dists.unwrap().f_equal(&expected_dists)?);
+            }
         }
         Ok(())
     }
