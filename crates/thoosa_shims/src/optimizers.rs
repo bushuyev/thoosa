@@ -125,7 +125,12 @@ impl PartialEq for AdamParamStateSnapshot {
         self.step == other.step
             && self.exp_avg.allclose(&other.exp_avg, 0.01, 0.01, true)
             && self.exp_avg_sq.allclose(&other.exp_avg_sq, 0.01, 0.01, true)
-            && (self.max_exp_avg_sq.is_none() && other.max_exp_avg_sq.is_none() || self.max_exp_avg_sq.as_ref().map(|v| other.max_exp_avg_sq.as_ref().map(|other| other.allclose(&v, 0.01, 0.01, true)).unwrap_or(false)).unwrap_or(false))
+            // Optional AMSGrad state is equal only when both snapshots have the same presence.
+            && match (&self.max_exp_avg_sq, &other.max_exp_avg_sq) {
+                (None, None) => true,
+                (Some(left), Some(right)) => left.allclose(right, 0.01, 0.01, true),
+                _ => false,
+            }
     }
 }
 
