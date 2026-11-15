@@ -1,25 +1,17 @@
+#[path = "../build_support.rs"]
+mod build_support;
+
 use std::fs;
 
 fn main() {
-    let libtorch = std::env::var("LIBTORCH").expect("LIBTORCH must be set (see .cargo/config.toml)");
-    let libtorch = libtorch.trim_end_matches('/');
-    let mut ld = std::env::var("LD_LIBRARY_PATH").unwrap_or_default();
-
-    if !ld.is_empty() {
-        ld.push(':');
-    }
-    ld.push_str(&format!("{libtorch}/lib"));
-    println!("cargo:rustc-env=LD_LIBRARY_PATH={ld}");
-    println!("cargo:rerun-if-env-changed=LIBTORCH");
+    println!("cargo:rerun-if-changed=../build_support.rs");
+    build_support::configure_libtorch();
     println!("cargo:rerun-if-env-changed=CARGO_ENCODED_RUSTFLAGS");
-
-    println!("cargo:rustc-env=CARGO_TARGET_DIR=target"); //https://stackoverflow.com/a/73543282/656449 - avoid rebuild all deps
 
     let (debug_plots_mode, debug_plots_prefixes) = parse_debug_plots_rustflags(std::env::var("CARGO_ENCODED_RUSTFLAGS").ok().as_deref());
     println!("cargo:rustc-env=THO_DEBUG_PLOTS_MODE={debug_plots_mode}");
     println!("cargo:rustc-env=THO_DEBUG_PLOTS_PREFIXES={debug_plots_prefixes}");
 
-    println!("cargo:rustc-env=CARGO_TARGET_DIR=target"); //https://stackoverflow.com/a/73543282/656449 - avoid rebuild all deps
     // Explicit build IDs are reproducible; the package version is the stable default.
     println!("cargo:rerun-if-env-changed=THOOSA_BUILD_VERSION");
     let version = std::env::var("THOOSA_BUILD_VERSION").unwrap_or_else(|_| std::env::var("CARGO_PKG_VERSION").unwrap());
