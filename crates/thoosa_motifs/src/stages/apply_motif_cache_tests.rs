@@ -90,10 +90,15 @@ async fn cached_sets() -> Result<(), ThoError> {
     let store = store();
     let mut ctx = RunCtxImpl::new(1, "motif cache regression");
     let all = Arc::new(ApplyMotifNets::<RunCtxImpl>::from_trained_nets(&ws, &store, ctx.branch(true), 2, None, trained_nets(), false).await?);
+    let mut reversed = trained_nets();
+    reversed.reverse();
+    let same_set = Arc::new(ApplyMotifNets::<RunCtxImpl>::from_trained_nets(&ws, &store, ctx.branch(true), 2, None, reversed, false).await?);
     let subset = Arc::new(ApplyMotifNets::<RunCtxImpl>::from_trained_nets(&ws, &store, ctx.branch(true), 2, None, vec![trained_nets().remove(1)], false).await?);
     let input = input("shared motif input")?;
-    // This is the path used by label models: aggregate run is uncached, individual inference is cached.
-    let (first, second) = tokio::try_join!(all.clone().run(input.clone(), ctx.branch(true)), subset.clone().run(input.clone(), ctx.branch(true)))?;
+    // Concurrent labels must share the entire aggregate even if discovery returned models in another order.
+    let (first, shared, second) = tokio::try_join!(all.clone().run_cached(input.clone(), ctx.branch(true)), same_set.clone().run_cached(input.clone(), ctx.branch(true)), subset.clone().run_cached(input.clone(), ctx.branch(true)))?;
+    assert!(Arc::ptr_eq(&first, &shared), "identical model sets must share one aggregate allocation in both backends");
+    assert!(!Arc::ptr_eq(&first, &second), "different model sets must retain separate aggregates");
     assert_eq!(first.id(), &all.out_id(input.id()));
     assert_eq!(second.id(), &subset.out_id(input.id()));
     assert_ne!(first.id(), second.id());
@@ -121,9 +126,11 @@ async fn cached_sets() -> Result<(), ThoError> {
             "the second motif must use its filtered input"
         );
     }
-    // Stacking and GPU offload must leave cached probabilities usable in both backends.
+    // Offload must retain the shared aggregate and allow it to be borrowed on GPU again.
     GlobalCtx::global().dump_all_to_cpu(1, "cached motif regression").await?;
-    let again = all.clone().run(input.clone(), ctx.branch(true)).await?;
+    let again = same_set.clone().run_cached(input.clone(), ctx.branch(true)).await?;
+    assert!(Arc::ptr_eq(&first, &again), "offload must preserve the aggregate cache entry");
+    drop(again.borrow_ref(1).await?);
     let after = raw_stage.clone().run_cached(input.clone(), ctx.branch(true)).await?;
     assert!(Arc::ptr_eq(&cached, &after));
     assert_eq!(again.extra().await?, lengths);
@@ -141,6 +148,16 @@ async fn cached_sets() -> Result<(), ThoError> {
     assert_ne!(cached.id(), quantized_output.id());
     assert_eq!(stepped.id(), &different_step.out_id(input.id()));
     assert_eq!(quantized_output.id(), &quantized.out_id(input.id()));
+
+    // Aggregate identity must distinguish these settings too, even when per-model inference is already cached.
+    let different_step_set = Arc::new(ApplyMotifNets::<RunCtxImpl>::from_trained_nets(&ws, &store, ctx.branch(true), 3, None, trained_nets(), false).await?);
+    let quantized_set = Arc::new(ApplyMotifNets::<RunCtxImpl>::from_trained_nets(&ws, &store, ctx.branch(true), 2, None, trained_nets(), true).await?);
+    let stepped_matrix = different_step_set.clone().run_cached(input.clone(), ctx.branch(true)).await?;
+    let quantized_matrix = quantized_set.clone().run_cached(input.clone(), ctx.branch(true)).await?;
+    assert_ne!(first.id(), stepped_matrix.id(), "different scan steps must not share the aggregate cache");
+    assert_ne!(first.id(), quantized_matrix.id(), "quantized models must not share the unquantized aggregate");
+    assert_eq!(stepped_matrix.borrow_ref(0).await?.as_ref().data().size()[1], 31);
+    assert_eq!(quantized_matrix.extra().await?, lengths);
     Ok(())
 }
 

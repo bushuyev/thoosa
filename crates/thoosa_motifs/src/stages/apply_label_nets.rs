@@ -30,7 +30,7 @@ use thoosa_common::nets::batches::BatchLengths;
 use thoosa_common::nets::common_nets::ThoModuleWithStore;
 use thoosa_common::nets::nodes::ThoModule;
 use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
-use thoosa_common::runner::common::cachable::{BorrowRef, ConsumeData, DevicesWrap, ThoDataRef};
+use thoosa_common::runner::common::cachable::{BorrowRef, Cached, ConsumeData, DevicesWrap, ThoDataRef};
 use thoosa_common::runner::global_ctx::GlobalCtx;
 #[cfg(test)]
 use thoosa_common::runner::oom_handler::NoContexts;
@@ -97,7 +97,7 @@ pub type MotifNetsOutput = DataWithExtra<ThoTensor<MotifProbability, SynKey>, Ve
 struct ApplyNets<C, AMN>
 where
     C: RunCtx + Adjustable + 'static,
-    AMN: AsyncStage<Ctx = C, Out = Arc<DevicesWrap<MotifNetsOutput>>>, // + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    AMN: AsyncStage<Ctx = C, Out = Arc<DevicesWrap<MotifNetsOutput>>> + Cached + OutId,
     for<'a> AMN: Stage<In<'a> = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>,
 {
     apply_motif_nets: Arc<AMN>,
@@ -111,7 +111,7 @@ where
 pub struct ApplyLabelNets<C, AMN>
 where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,
-    AMN: AsyncStage<Ctx = C, Out = Arc<DevicesWrap<MotifNetsOutput>>>,
+    AMN: AsyncStage<Ctx = C, Out = Arc<DevicesWrap<MotifNetsOutput>>> + Cached + OutId,
     for<'a> AMN: Stage<In<'a> = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>,
 {
     id: SynKey,
@@ -152,7 +152,7 @@ where
 impl<C, AMN> ApplyLabelNets<C, AMN>
 where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,
-    AMN: AsyncStage<Ctx = C, Out = Arc<DevicesWrap<MotifNetsOutput>>>,
+    AMN: AsyncStage<Ctx = C, Out = Arc<DevicesWrap<MotifNetsOutput>>> + Cached + OutId,
     for<'a> AMN: Stage<In<'a> = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>,
 {
     pub async fn new_with_motif_nets_builder<R, F, Fut>(ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, store: &Arc<dyn MotifsStore>, train_label_nets_run_config_ids: Vec<RunConfigId>, mut stage_ctx: R, mut build_motif_nets: F) -> Result<Self, ThoError>
@@ -224,7 +224,7 @@ where
 impl<C, AMN> Stage for ApplyLabelNets<C, AMN>
 where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,
-    AMN: AsyncStage<Ctx = C, Out = Arc<DevicesWrap<MotifNetsOutput>>>,
+    AMN: AsyncStage<Ctx = C, Out = Arc<DevicesWrap<MotifNetsOutput>>> + Cached + OutId,
     for<'a> AMN: Stage<In<'a> = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>,
 {
     type Ctx = C;
@@ -235,7 +235,7 @@ where
 impl<C, AMN> AsyncStage for ApplyLabelNets<C, AMN>
 where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,
-    AMN: AsyncStage<Ctx = C, Out = Arc<DevicesWrap<MotifNetsOutput>>>, // + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    AMN: AsyncStage<Ctx = C, Out = Arc<DevicesWrap<MotifNetsOutput>>> + Cached + OutId,
     for<'a> AMN: Stage<In<'a> = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>,
 {
     // type RunInput = Arc<DevicesWrap<Self::In<'static>>>;
@@ -274,8 +274,9 @@ where
                     }?;
                 }
 
-                //First apply motif nets to the raw input to produce motif probabilities used by label nets.
-                let motif_probs: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>> = apply_motif_nets.run(input, ctx.branch(false)).await?;
+                // Labels sharing a motif set must also share its stretched/stacked matrix.
+                // The cache coalesces concurrent requests and retains managed residency in both modes.
+                let motif_probs: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>> = apply_motif_nets.run_cached(input, ctx.branch(false)).await?;
 
                 debug!("ApplyLabelNets::run: motif_probs={motif_probs:?}");
 
@@ -349,7 +350,7 @@ where
 impl<C, AMN> OutId for ApplyLabelNets<C, AMN>
 where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,
-    AMN: AsyncStage<Ctx = C, Out = Arc<DevicesWrap<MotifNetsOutput>>>, // + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    AMN: AsyncStage<Ctx = C, Out = Arc<DevicesWrap<MotifNetsOutput>>> + Cached + OutId,
     for<'a> AMN: Stage<In<'a> = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>,
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
@@ -1005,7 +1006,7 @@ mod tests {
     use thoosa_common::nets::batches::BatchLengths;
     use thoosa_common::nets::common_nets::{CommonTrainingRunConfig, LinLenNetParams, ThoModuleWithStore};
     use thoosa_common::nets::nodes::{ThoClosureModule, ThoModule};
-    use thoosa_common::runner::common::cachable::{BorrowRef, DevicesWrap};
+    use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
     use thoosa_common::runner::common::mock_run_ctx;
     use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
@@ -1280,12 +1281,21 @@ mod tests {
         let first = make_input(1u32)?;
         let second = make_input(2u32)?;
         let third = make_input(3u32)?;
+        let input_ids = [first.id().clone(), second.id().clone(), third.id().clone()];
         let expected_ids = [first.id(), second.id(), third.id()].map(|id| apply_label_nets.out_id(id));
         let (out, other) = tokio::try_join!(apply_label_nets.clone().run(first, run_ctx.branch(false)), apply_label_nets.clone().run(second, run_ctx.branch(false)),)?;
         let later = apply_label_nets.clone().run(third, run_ctx.branch(false)).await?;
         assert!(Arc::ptr_eq(&stack, &apply_label_nets.stack_applied_label_nets), "resource runs must retain the same stacking stage");
         for (output, expected_id) in [&out, &other, &later].into_iter().zip(expected_ids) {
             assert_eq!(output.id(), &expected_id, "each resource must keep its aggregate output identity");
+        }
+        // A direct AMN::run call can give correct values while bypassing aggregate reuse.
+        let cache = ApplyMotifNets::<mock_run_ctx::MockRunCtx>::cache().await?;
+        for input_id in &input_ids {
+            for apply_net in &apply_label_nets.apply_nets {
+                let key = apply_net.apply_motif_nets.out_id(input_id);
+                assert!(cache.get(&key).is_some_and(|entry| matches!(entry.peek(), Some(Ok(_)))), "label inference must populate the complete motif-feature cache for {key:?}");
+            }
         }
         let out = BorrowRef::borrow_ref(&out, 0).await?;
         for other in [&other, &later] {
@@ -1352,12 +1362,14 @@ mod tests {
             TestLabelNetSpec::new("A", 101, 2001, vec![20, 30], vec![2.0, 20.0], 0.2),
             TestLabelNetSpec::new("B", 200, 3000, vec![10], vec![3.0], 0.3),
             TestLabelNetSpec::new("C", 300, 4000, vec![30], vec![4.0], 0.4),
+            // Reuse A's complete feature matrix while preserving this label's own output position and weights.
+            TestLabelNetSpec::new("D", 400, 5000, vec![30, 10, 20], vec![5.0, 50.0, 500.0], 0.5),
         ];
 
         let (size, values) = run_apply_label_case(&labels, &motifs, motif_width, step, 3).await?;
         let expected = labels.iter().map(|label| expected_label_value(label, &motifs, motif_width, step)).collect::<Vec<_>>();
 
-        assert_eq!(vec![4, 1], size);
+        assert_eq!(vec![5, 1], size);
         assert_values_close(&values, &expected);
 
         Ok(())

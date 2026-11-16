@@ -321,8 +321,11 @@ where
     where
         R: RunCtx + MaxParallelCtx + Adjustable + 'static,
     {
-        // Aggregate caching must distinguish the same model set sampled differently.
-        let id = &SynKey::new([mono_key!(APPLY_MOTIF_NETS, "ApplyMotifNets"), mono_key!(slice_step, "slice_step"), mono_key!(quantize, "quantize")]) + &SynKey::new(trained_nets.iter().map(|net| mono_key!(net.id, format!("trained_net_id_{}", net.id))).collect::<Vec<_>>());
+        // Store order must not prevent labels with the same models from sharing an aggregate.
+        // Feature rows still follow (motif_id, net_id) order in run; scan and quantization remain distinct.
+        let mut trained_net_ids = trained_nets.iter().map(|net| net.id).collect::<Vec<_>>();
+        trained_net_ids.sort_unstable();
+        let id = &SynKey::new([mono_key!(APPLY_MOTIF_NETS, "ApplyMotifNets"), mono_key!(slice_step, "slice_step"), mono_key!(quantize, "quantize")]) + &SynKey::new(trained_net_ids.into_iter().map(|id| mono_key!(id, format!("trained_net_id_{id}"))).collect::<Vec<_>>());
 
         let stack_applied_motif_nets = StackAppliedMotifNets::<C>::new(stage_ctx.tho_device_idx().into()).await?;
 
