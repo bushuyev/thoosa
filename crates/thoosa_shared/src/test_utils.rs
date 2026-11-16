@@ -1,5 +1,5 @@
 use crate::LOG_INIT;
-use crate::perf_logging::{PerfLayer, SimplelogLikeEvent, init_log_tracer, perf_log_level, perf_output_filter, set_perf_log_level};
+use crate::perf_logging::{PerfLayer, SimplelogLikeEvent, aggregate_span_filter, init_log_tracer, perf_log_level, perf_output_filter, set_perf_log_level};
 use log::{LevelFilter, trace};
 use num_traits::{Num, Signed, ToPrimitive};
 use rand::RngExt;
@@ -79,7 +79,9 @@ pub fn init_test_logging() {
         .event_format(SimplelogLikeEvent::new(timer, true, include_log_fields))
         .with_filter(FilterFn::new(perf_output_filter));
 
-    let subscriber = tracing_subscriber::registry().with(stdout_layer).with(perf_layer).with(PerfLayer::new());
+    // Tests that inspect PERF retain collection, but unrelated spans must use
+    // the same filtered timing path as the application's explicit opt-in.
+    let subscriber = tracing_subscriber::registry().with(stdout_layer).with(perf_layer).with(PerfLayer::new().with_filter(FilterFn::new(aggregate_span_filter)));
 
     let _ = tracing::subscriber::set_global_default(subscriber);
 

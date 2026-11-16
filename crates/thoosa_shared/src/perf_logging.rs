@@ -191,6 +191,10 @@ pub(crate) fn perf_output_filter(meta: &tracing::Metadata<'_>) -> bool {
     fields.field("time.busy").is_some() || fields.field("time.idle").is_some()
 }
 
+pub(crate) fn aggregate_span_filter(meta: &tracing::Metadata<'_>) -> bool {
+    meta.is_span() && meta.fields().field("agg_perf").is_some()
+}
+
 fn level_filter_string(filter: LevelFilter) -> String {
     filter.to_string().to_lowercase()
 }
@@ -296,7 +300,9 @@ fn open_new_log_file(path: &Path) -> anyhow::Result<File> {
     OpenOptions::new().write(true).create_new(true).open(path).with_context(|| format!("refusing to open existing log file: {}", path.display()))
 }
 
-pub fn init_tracing(term_level: LevelFilter, term_extra_fields: bool, file_level: LevelFilter, file_extra_fields: bool, log_file: PathBuf, perf_filter: &str, perf_file: Option<PathBuf>, console_addr: Option<ServerAddr>) -> anyhow::Result<()> {
+/// Console is started only when an address is supplied. Aggregate timing is a
+/// separate opt-in: normal logging and a per-span performance file do not enable it.
+pub fn init_tracing(term_level: LevelFilter, term_extra_fields: bool, file_level: LevelFilter, file_extra_fields: bool, log_file: PathBuf, perf_filter: &str, perf_file: Option<PathBuf>, console_addr: Option<ServerAddr>, aggregate_timing: bool) -> anyhow::Result<()> {
     if TRACING_INIT.get().is_some() {
         panic!("init_tracing() called more than once in the same process");
     }
@@ -338,9 +344,14 @@ pub fn init_tracing(term_level: LevelFilter, term_extra_fields: bool, file_level
         None
     };
 
-    let console_layer = console_subscriber::ConsoleLayer::builder().server_addr(console_addr.unwrap_or(([127, 0, 0, 1], 6677).into())).spawn();
+    // Do not spawn Console's server/collector thread unless it was requested.
+    let console_layer = console_addr.map(|addr| console_subscriber::ConsoleLayer::builder().server_addr(addr).spawn());
+    // Filter this layer alone: Console and log output may still need unrelated
+    // spans, but they must not take timing extension locks on every enter/exit.
+    // FilterFn caches this metadata-only decision at each tracing callsite.
+    let aggregate_layer = aggregate_timing.then(|| PerfLayer::new().with_filter(FilterFn::new(aggregate_span_filter)));
 
-    let subscriber = registry().with(console_layer).with(stdout_layer).with(file_layer).with(perf_layer).with(PerfLayer::new());
+    let subscriber = registry().with(console_layer).with(stdout_layer).with(file_layer).with(perf_layer).with(aggregate_layer);
 
     tracing::subscriber::set_global_default(subscriber).context("set global tracing subscriber")?;
 
@@ -421,7 +432,7 @@ impl tracing::field::Visit for AggPerfFields {
 /// Global, so tests can call reset/print between blocks.
 pub static PERF: LazyLock<DashMap<String, PerfAgg>> = LazyLock::new(|| DashMap::new());
 
-/// Accumulates busy time for spans with `target == "perf"`.
+/// Accumulates busy and elapsed time only for spans declaring `agg_perf`.
 pub struct PerfLayer;
 
 impl PerfLayer {
@@ -442,8 +453,9 @@ where
             if v.agg_perf.is_some() {
                 log::trace!("PerfLayer::on_new_span: span.metadata={:?}", span.metadata());
 
-                span.extensions_mut().insert(v);
-                span.extensions_mut().insert(SpanTiming::new());
+                let mut extensions = span.extensions_mut();
+                extensions.insert(v);
+                extensions.insert(SpanTiming::new());
             }
         }
     }
@@ -593,6 +605,64 @@ pub fn format_perf_map(map: &DashMap<String, PerfAgg>) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn test_aggregate_timing_is_independent_of_info_logging() {
+        use super::*;
+
+        for enabled in [false, true] {
+            let key = if enabled { "test_optional_aggregate_enabled" } else { "test_optional_aggregate_disabled" };
+            let writer = SyncMakeWriter::new(Vec::<u8>::new());
+            let aggregate_layer = enabled.then(|| PerfLayer::new().with_filter(FilterFn::new(aggregate_span_filter)));
+            let subscriber = registry()
+                .with(fmt::layer().with_ansi(false).with_writer(writer.clone()).with_filter(tracing_subscriber::filter::LevelFilter::INFO))
+                .with(aggregate_layer);
+
+            tracing::subscriber::with_default(subscriber, || {
+                let unrelated = tracing::debug_span!("unrelated_diagnostic_span");
+                assert!(unrelated.is_disabled(), "timing must not enable unrelated DEBUG spans");
+                let measured = tracing::debug_span!("optional_aggregate_span", agg_perf = key);
+                assert_eq!(measured.is_disabled(), !enabled, "INFO output must not control aggregate collection");
+                measured.in_scope(|| {
+                    // Events declaring the same field must never be timed.
+                    tracing::info!(agg_perf = "test_aggregate_event_only", "ordinary INFO output");
+                });
+            });
+
+            assert_eq!(PERF.contains_key(key), enabled);
+            if enabled {
+                assert_eq!(PERF.get(key).unwrap().busy_calls.load(Relaxed), 1);
+            }
+            assert!(!PERF.contains_key("test_aggregate_event_only"));
+            assert!(String::from_utf8(writer.inner.lock().clone()).unwrap().contains("ordinary INFO output"));
+        }
+    }
+
+    #[test]
+    fn test_aggregate_timing_ignores_spans_enabled_by_other_layers() {
+        use super::*;
+
+        let subscriber = Arc::new(registry()
+            .with(PerfLayer::new().with_filter(FilterFn::new(aggregate_span_filter)))
+            .with(fmt::layer().with_writer(std::io::sink)));
+        tracing::subscriber::with_default(Arc::clone(&subscriber), || {
+            // DEBUG output or Console can enable spans that the timing layer
+            // rejects. Verify those spans never receive timing extensions.
+            let unrelated = tracing::debug_span!("log_only_diagnostic_span");
+            let id = unrelated.id().expect("output layer enables this span");
+            let span = subscriber.span(&id).unwrap();
+            assert!(span.extensions().get::<SpanTiming>().is_none());
+            unrelated.in_scope(|| {});
+
+            let measured = tracing::debug_span!("measured_diagnostic_span", agg_perf = "test_filtered_aggregate_span");
+            let id = measured.id().unwrap();
+            let span = subscriber.span(&id).unwrap();
+            assert!(span.extensions().get::<SpanTiming>().is_some());
+            measured.in_scope(|| {});
+        });
+        assert_eq!(PERF.get("test_filtered_aggregate_span").unwrap().busy_calls.load(Relaxed), 1);
+        assert!(!PERF.contains_key("log_only_diagnostic_span"));
+    }
+
     #[test]
     fn test_record_formatting_does_not_lock_the_shared_writer() {
         use std::io::Write;

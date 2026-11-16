@@ -61,6 +61,14 @@ where
     #[arg(long, default_value_t = false)]
     pub write_perf_log_file: bool,
 
+    /// Enable Tokio Console collection in the main process and IPC worker.
+    #[arg(long, default_value_t = false)]
+    pub tokio_console: bool,
+
+    /// Collect aggregate busy/elapsed timing for spans marked with agg_perf.
+    #[arg(long, default_value_t = false)]
+    pub aggregate_timing: bool,
+
     #[arg(long)]
     pub loader_threads: Option<usize>,
 

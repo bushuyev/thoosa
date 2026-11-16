@@ -609,6 +609,24 @@ mod cli_tests {
     }
 
     #[test]
+    fn test_diagnostic_collectors_are_independent_opt_ins() {
+        for console in [false, true] {
+            for aggregate in [false, true] {
+                for perf_file in [false, true] {
+                    let mut args = vec!["thoosa_motifs"];
+                    if console { args.push("--tokio-console"); }
+                    if aggregate { args.push("--aggregate-timing"); }
+                    if perf_file { args.push("--write-perf-log-file"); }
+                    let cli = MotifAppArgs::parse_from(args);
+                    assert_eq!(cli.common_args.tokio_console, console);
+                    assert_eq!(cli.common_args.aggregate_timing, aggregate);
+                    assert_eq!(cli.common_args.write_perf_log_file, perf_file);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn test_plot_data_resolution_flag_parses_high() {
         let cli = MotifAppArgs::parse_from(["thoosa_motifs", "plot-data", "--data-by", "motif_id:7", "--resolution", "high"]);
 

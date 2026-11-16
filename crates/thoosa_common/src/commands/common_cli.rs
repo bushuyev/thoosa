@@ -45,7 +45,8 @@ where
 
     install_panic_hook(SyncMakeWriter::new(OpenOptions::new().create(true).append(true).open(ws.read().log_path().join(format!("thoosa_panic_{}.log", cdt_for_dir)))?));
 
-    let _logging_guards = init_tracing(args.term_logger_level, args.term_logger_extra_fields, args.write_logger_level, args.write_logger_extra_fields, log_filename, "info", perf_path, None)?;
+    let console_addr = args.tokio_console.then(|| ([127, 0, 0, 1], 6677).into());
+    let _logging_guards = init_tracing(args.term_logger_level, args.term_logger_extra_fields, args.write_logger_level, args.write_logger_extra_fields, log_filename, "info", perf_path, console_addr, args.aggregate_timing)?;
 
     init_cpp_logging();
 
@@ -93,7 +94,16 @@ where
             anyhow::bail!("IPC mode requires CUDA_VISIBLE_DEVICES=-1");
         }
 
-        GlobalCtx::init_devices_ipc(num_devices, vec![format!("--ws-path={}", args.ws_path), format!("--term-logger-level={}", args.term_logger_level), format!("--write-logger-level={}", args.write_logger_level)]).await?;
+        let mut worker_args = vec![format!("--ws-path={}", args.ws_path), format!("--term-logger-level={}", args.term_logger_level), format!("--write-logger-level={}", args.write_logger_level)];
+        // Forward diagnostic opt-ins explicitly so IPC does not silently collect
+        // them a second time when the main process has disabled collection.
+        if args.tokio_console {
+            worker_args.push("--tokio-console".to_string());
+        }
+        if args.aggregate_timing {
+            worker_args.push("--aggregate-timing".to_string());
+        }
+        GlobalCtx::init_devices_ipc(num_devices, worker_args).await?;
     } else {
         // kick_register_cuda_hooks();
         GlobalCtx::init_devices(num_devices)?;
@@ -183,7 +193,9 @@ where
         Ok(())
     };
 
-    info!("perf: \n{}", format_perf_map(&PERF));
+    if args.aggregate_timing {
+        info!("perf: \n{}", format_perf_map(&PERF));
+    }
 
     t!(session.runtime.shutdown()).await;
 

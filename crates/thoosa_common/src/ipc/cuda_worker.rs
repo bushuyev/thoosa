@@ -419,6 +419,14 @@ pub struct WorkerCli {
     #[arg(long, default_value = "INFO")]
     pub write_logger_level: LevelFilter,
 
+    /// Enable Tokio Console collection for this worker.
+    #[arg(long, default_value_t = false)]
+    pub tokio_console: bool,
+
+    /// Collect aggregate busy/elapsed timing for spans marked with agg_perf.
+    #[arg(long, default_value_t = false)]
+    pub aggregate_timing: bool,
+
     #[arg(long, default_value_t = 0)]
     pub cuda_device: usize,
 }
@@ -443,7 +451,8 @@ impl CudaWorker {
 
             let log_filename = ws_root.join("log").join(format!("thoosa_worker_{}.log", cdt).to_owned());
 
-            let _logging_guards = init_tracing(worker_cli.term_logger_level, false, worker_cli.write_logger_level, false, log_filename, "info", None, Some(([127, 0, 0, 1], 6667).into()))?;
+            let console_addr = worker_cli.tokio_console.then(|| ([127, 0, 0, 1], 6667).into());
+            let _logging_guards = init_tracing(worker_cli.term_logger_level, false, worker_cli.write_logger_level, false, log_filename, "info", None, console_addr, worker_cli.aggregate_timing)?;
 
             debug!("CudaWorker::run_if_sock: sock_path={sock_path:?}");
             let exec_context = ThoCudaContext::new(0i32)?; //TODO device
@@ -467,7 +476,9 @@ impl CudaWorker {
                 CudaWorker::run_worker(sock_path, &ws, init_map, ThoDevice::from(1usize)).await //TODO Cuda(0)
             })?;
 
-            info!("perf: \n{}", format_perf_map(&PERF));
+            if worker_cli.aggregate_timing {
+                info!("perf: \n{}", format_perf_map(&PERF));
+            }
 
             std::process::exit(0);
         }
@@ -1121,6 +1132,22 @@ mod request_tests {
     use futures_util::FutureExt;
     use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[test]
+    fn test_worker_diagnostic_collectors_are_independent_opt_ins() {
+        for console in [false, true] {
+            for aggregate in [false, true] {
+                let mut args = vec!["thoosa_hbac"];
+                if console { args.push("--tokio-console"); }
+                if aggregate { args.push("--aggregate-timing"); }
+                let cli = WorkerCli::parse_from(args);
+                assert_eq!(cli.tokio_console, console);
+                assert_eq!(cli.aggregate_timing, aggregate);
+                assert_eq!(cli.term_logger_level, LevelFilter::Info);
+                assert_eq!(cli.write_logger_level, LevelFilter::Info);
+            }
+        }
+    }
 
     fn worker_id() -> CudaWorkerId {
         CudaWorkerId {
