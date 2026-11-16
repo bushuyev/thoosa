@@ -188,12 +188,14 @@ async fn check_prepared_outer() -> Result<(), ThoError> {
     );
     changed_lengths.prepared_outer = Some(prepared.clone());
     assert!(changed_lengths.borrow_ref(1).await.is_err());
-    let selectable = CrossInputSelectorWrap::new(
+    let mut selectable = CrossInputSelectorWrap::new(
         "selected".into(),
         ResourceBatch::try_new(tensors[..3].to_vec(), resources[..3].to_vec())?,
         ResourceBatch::try_new(tensors[3..].to_vec(), resources[3..].to_vec())?,
         CacheArea::default(),
     );
+    // Changing the outer selection must bypass the full prepared batch.
+    selectable.prepared_outer = Some(prepared.clone());
     {
         let selected = selectable
             .select_ref(

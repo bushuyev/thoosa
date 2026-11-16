@@ -309,7 +309,9 @@ where
     async fn run_inner_batches(&self, resources: &[Arc<Resource>], t_0_batch: LoadedResourceBatch, outer_batch_last_i: usize, skip_0_i: usize, max_batch: i64, receiver: Arc<RSV>, mut ctx: C) -> Result<(), ThoError> {
         debug!("CrossLoader::run_inner_batches: t_0_batch={t_0_batch:?} skip_0_i={skip_0_i}");
 
-        let _prepared_outer = if let Some(stage) = &self.prepare_outer {
+        // Reuse successful preparation across inner batches; the guarded entry
+        // keeps its tensor offloadable through OOM retries in either execution mode.
+        let prepared_outer = if let Some(stage) = &self.prepare_outer {
             let prepared_cache = Arc::new(TmpCached::new("discovery_outer_batch").await);
 
             let input = Arc::new(CrossInputSelectorWrap::new(
@@ -346,7 +348,6 @@ where
             None
         };
 
-        let prepared_outer = None;
         let mut pending_consumer = None;
         let result = async {
             let mut t_1_batch = ResourceBatch::default();
@@ -1589,7 +1590,9 @@ mod tests {
             ThoDevice::from(0usize),
         ));
 
-        let batch_clc_fn: Box<dyn CrossBatchFn<DistsMask, (), RunCtxImpl>> = Box::new(move |t_0: Tensor, t_1: Tensor, _input: &CrossInput<Arc<Resource>>, _ctx: &(), _: &RunCtxImpl| {
+        let batch_clc_fn: Box<dyn CrossBatchFn<DistsMask, (), RunCtxImpl>> = Box::new(move |t_0: Tensor, t_1: Tensor, input: &CrossInput<Arc<Resource>>, _ctx: &(), _: &RunCtxImpl| {
+            // Check the loader handoff on normal comparisons and inner OOM retries.
+            assert!(input.raw_outer().is_err(), "successful outer preparation must reach every inner comparison");
             if let Some(limit) = oom_limit {
                 let batch_1_len = t_1.size()[1];
                 if batch_1_len > limit {
