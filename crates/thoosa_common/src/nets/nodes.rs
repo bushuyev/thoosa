@@ -17,6 +17,7 @@ use std::borrow::Borrow;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tch::Kind::Float;
 use tch::nn::{BatchNorm, BatchNormConfig, Conv, Init, LayerNormConfig, LinearConfig, ModuleT, Path, batch_norm1d};
 use tch::nn::{ConvConfig, Module};
@@ -1236,13 +1237,59 @@ fn valid_time_mask(lengths: &[i64], batch: i64, max_l: i64, device: tch::Device)
     Ok(pos.f_lt_tensor(&len)?)
 }
 
-fn self_attention_forward_t(x: Tensor, key_valid: Tensor, w_q: &nn::Linear, w_k: &nn::Linear, w_v: &nn::Linear, w_o: &nn::Linear, n_heads: i64, head_dim: i64, dropout: f64, train: bool) -> anyhow::Result<Tensor> {
+fn scaled_attention(mut q: Tensor, mut k: Tensor, mut v: Tensor, key_valid: Option<Tensor>, dropout: f64, train: bool) -> anyhow::Result<Tensor> {
+    let head_dim = q.size()[3];
+    // The search grid includes arbitrary head widths. Align CUDA Q/K/V for the
+    // memory-efficient kernels without changing the model width or softmax scale.
+    let padding = if q.device().is_cuda() { (8 - head_dim % 8) % 8 } else { 0 };
+    if padding != 0 {
+        q = q.f_constant_pad_nd([0, padding])?;
+        k = k.f_constant_pad_nd([0, padding])?;
+        v = v.f_constant_pad_nd([0, padding])?;
+    }
+    let scale = Some(1.0 / (head_dim as f64).sqrt());
+    // SDPA boolean masks use true for valid keys. Broadcasting this [B,1,1,L]
+    // mask avoids allocating a separate [B,H,L,L] mask in either execution mode.
+    let mask = key_valid.map(|mask| mask.f_unsqueeze(1)?.f_unsqueeze(2)).transpose()?;
+    // Unlike Tensor::dropout, SDPA has no train flag and always uses dropout_p.
+    let dropout_p = if train { dropout } else { 0.0 };
+
+    if log::log_enabled!(log::Level::Info) {
+        // Query the actual dispatcher with the same inputs as SDPA, without a
+        // tensor readback. Report each backend/mask/dropout/device-type/dtype combination
+        // once per process, including the worker, so math fallbacks are visible.
+        static REPORTED_BACKENDS: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
+        let backend = Tensor::f_internal_fused_sdp_choice(&q, &k, &v, mask.as_ref(), dropout_p, false, scale, false)?;
+        let backend_name = match backend {
+            0 => "math (quadratic score storage)",
+            1 => "flash_attention",
+            2 => "efficient_attention",
+            3 => "cudnn_attention",
+            4 => "overrideable",
+            _ => "unknown",
+        };
+        // Backend values follow LibTorch's ATen/SDPBackend.h; reserve slot 5 for unknown values.
+        let slot = if (0..=4).contains(&backend) { backend as u32 } else { 5 };
+        let kind_slot = match q.kind() { Kind::Float => 0, Kind::Half => 1, Kind::BFloat16 => 2, _ => 3 };
+        let bit = 1u64 << (slot * 8 + u32::from(mask.is_some()) * 4 + u32::from(dropout_p > 0.0) * 2 + u32::from(q.device().is_cuda()));
+        if REPORTED_BACKENDS[kind_slot].fetch_or(bit, Ordering::Relaxed) & bit == 0 {
+            log::info!("SelfAttention::scaled_attention: backend={backend_name} device={:?} kind={:?} q_shape={:?} head_dim={head_dim} masked={} train={train} dropout_p={dropout_p}", q.device(), q.kind(), q.size(), mask.is_some());
+        }
+    }
+
+    // Keep automatic dispatch and its math fallback for unsupported devices,
+    // dtypes, masks or dropout; forcing Flash would reject valid training inputs.
+    let output = Tensor::f_scaled_dot_product_attention(&q, &k, &v, mask.as_ref(), dropout_p, false, scale, false)?;
+    Ok(if padding == 0 { output } else { output.f_narrow(-1, 0, head_dim)? })
+}
+
+fn self_attention_forward_t(x: Tensor, key_valid: Option<Tensor>, w_q: &nn::Linear, w_k: &nn::Linear, w_v: &nn::Linear, w_o: &nn::Linear, n_heads: i64, head_dim: i64, dropout: f64, train: bool) -> anyhow::Result<Tensor> {
     let (b, l, _d) = {
         let s = x.size();
         (s[0], s[1], s[2])
     };
 
-    trace!("SelfAttention::tho_forward: key_valid=\n{key_valid}");
+    trace!("SelfAttention::tho_forward: key_valid={key_valid:?}");
 
     debug!(
         "SelfAttention::tho_forward: x={:?}, key_valid={:?}, w_q.ws={:?}, w_q.bs={:?}, w_k.ws={:?}, w_k.bs={:?}, w_v.ws={:?}, w_v.bs={:?}, w_o.ws={:?}, w_o.bs={:?}, n_heads={:?}, head_dim={:?}, dropout={:?}",
@@ -1269,37 +1316,7 @@ fn self_attention_forward_t(x: Tensor, key_valid: Tensor, w_q: &nn::Linear, w_k:
 
     drop(x);
 
-    let scale = (head_dim as f64).sqrt();
-
-    let attn = {
-        let scores = {
-            let mut raw_scores = panic_to_err!(q.f_matmul(&k.f_transpose(-2, -1)?)?.f_div_scalar(scale))?;
-
-            let masked_scores = {
-                let invalid_mask = key_valid.f_logical_not()?.f_unsqueeze(1)?.f_unsqueeze(2)?;
-
-                drop(key_valid);
-
-                panic_to_err!(raw_scores.f_masked_fill_(&invalid_mask, -1e4))?
-            };
-
-            drop(raw_scores);
-            masked_scores
-        };
-
-        let attn = scores.f_softmax(-1, scores.kind())?.f_dropout(dropout, train)?;
-
-        drop(scores);
-        attn
-    };
-
-    drop(q);
-    drop(k);
-
-    let y = attn.f_matmul(&v)?.f_transpose(1, 2)?.f_contiguous()?.f_view([b, l, n_heads * head_dim])?;
-
-    drop(attn);
-    drop(v);
+    let y = scaled_attention(q, k, v, key_valid, dropout, train)?.f_transpose(1, 2)?.f_contiguous()?.f_view([b, l, n_heads * head_dim])?;
 
     let out = y.f_linear(&w_o.ws, w_o.bs.as_ref())?;
     drop(y);
@@ -1307,7 +1324,7 @@ fn self_attention_forward_t(x: Tensor, key_valid: Tensor, w_q: &nn::Linear, w_k:
     Ok(out.f_dropout(dropout, train)?)
 }
 
-fn attn_block_forward_t(x: &Tensor, key_valid: Tensor, ln1: &nn::LayerNorm, ln2: &nn::LayerNorm, w_q: &nn::Linear, w_k: &nn::Linear, w_v: &nn::Linear, w_o: &nn::Linear, ff1: &nn::Linear, ff2: &nn::Linear, n_heads: i64, head_dim: i64, dropout: f64, train: bool) -> anyhow::Result<Tensor> {
+fn attn_block_forward_t(x: &Tensor, key_valid: Option<Tensor>, ln1: &nn::LayerNorm, ln2: &nn::LayerNorm, w_q: &nn::Linear, w_k: &nn::Linear, w_v: &nn::Linear, w_o: &nn::Linear, ff1: &nn::Linear, ff2: &nn::Linear, n_heads: i64, head_dim: i64, dropout: f64, train: bool) -> anyhow::Result<Tensor> {
     debug!("attn_block_forward_t: x.kind={:?} ln1.ws.kind={:?}", x.kind(), ln1.ws.as_ref().map(|ws| ws.kind()));
 
     let h = x.f_layer_norm(
@@ -1427,18 +1444,27 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for SelfAttention {
         let mut h = x.f_add(&pos)?;
 
         let key_valid = if let Some(lengths) = lengths.as_deref() {
-            valid_time_mask(lengths.as_slice(), b, l, x.device())?
+            if lengths.as_slice().len() != b as usize {
+                return Err(anyhow::anyhow!("SelfAttention::tho_forward lengths mismatch: batch={b} lengths.len={}", lengths.as_slice().len()));
+            }
+            // An all-valid mask can exclude fused CUDA backends unnecessarily.
+            if lengths.as_slice().iter().all(|&len| len >= l) { None } else { Some(valid_time_mask(lengths.as_slice(), b, l, x.device())?) }
         } else {
-            Tensor::f_ones([b, l], (Kind::Bool, x.device()))?
+            None
         };
 
-        let mask_f = key_valid.f_to_kind(t.local()?.kind())?.f_unsqueeze(-1)?;
-        h = h.f_mul(&mask_f)?;
+        if let Some(mask) = &key_valid {
+            h = h.f_mul(&mask.f_to_kind(x.kind())?.f_unsqueeze(-1)?)?;
+        }
         h = attn_block_forward_t(&h, key_valid, &self.ln1, &self.ln2, &self.w_q, &self.w_k, &self.w_v, &self.w_o, &self.ff1, &self.ff2, self.n_heads, self.head_size, self.dropout, train)?;
 
         Ok(h.into())
     }
 }
+
+#[cfg(test)]
+#[path = "attention_tests.rs"]
+mod attention_tests;
 
 #[cfg(test)]
 mod tch_tests {

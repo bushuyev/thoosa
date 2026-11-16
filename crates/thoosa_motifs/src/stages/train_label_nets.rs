@@ -39,7 +39,7 @@ use crate::stages::stage_ids::RAW_TENSOR_LOADER;
 use crate::train_nets::{LabelNetParams, LabelNetTypeArgs, LabelNetTypeArgsBuilder, LabelNetTypeArgsFields, LabelNetTypeArgsRangeOrValue, LabelNetTypeParams, LinNetArgs, TrainLabelNetRunConfigResultParams};
 use clap::Args;
 use mockall_double::double;
-use rand::rng;
+use rand::{Rng, rng, seq::SliceRandom};
 use thoosa_common::dims::{Batch, Dims, ThoBatch};
 use thoosa_common::instance_cache::InstanceCache;
 use thoosa_common::ipc::worker_msg::WorkerInput;
@@ -66,7 +66,7 @@ use thoosa_shared::run_configs::RunConfig;
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::tmp_file::TmpFile;
 use thoosa_shared::tracked_await::t;
-use thoosa_shared::{CopyToDevice, FuturesOrdering, ThoError, collect_futures_with_progress, mono_key, panic_to_err, shuffle_and_chunk_with_rng};
+use thoosa_shared::{CopyToDevice, FuturesOrdering, ThoError, collect_futures_with_progress, mono_key, panic_to_err};
 use tokio::try_join;
 
 pub const SYNC_LABEL_BATCH_ENDPOINT: &str = "SyncLabelBatch";
@@ -678,6 +678,7 @@ where
                                     Arc::clone(&resources_1_valid),
                                     Arc::clone(&resources_0_train),
                                     Arc::clone(&resources_0_valid),
+                                    |value| value.size().dim_1(),
                                     Arc::new(
                                         move |x_1_wrapped: Vec<Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>>, x_0_wrapped: Vec<Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>>, mut ctx: C| {
                                             let label = label.clone();
@@ -730,6 +731,31 @@ where
 #[allow(type_alias_bounds)]
 type BuildBatchFn<LD: Data + CopyToDevice + WithId + Send + Sync + 'static, X: Dims + 'static, Y: Dims + 'static, C> = Arc<dyn Fn(Vec<Arc<DevicesWrap<LD>>>, Vec<Arc<DevicesWrap<LD>>>, C) -> BoxFuture<'static, Result<(ThoBatch<X>, Option<BatchLengths>, ThoBatch<Y>), ThoError>> + Send + Sync>;
 
+fn length_balanced_batches(resources_1: &[Resource], resources_0: &[Resource], half_batch_size: u32, sequence_lengths: &HashMap<u32, i64>, rng: &mut impl Rng) -> Vec<Box<[(usize, usize)]>> {
+    let half_batch_size = half_batch_size as usize;
+    let full_len = resources_1.len() / half_batch_size * half_batch_size;
+    let mut ordered = |resources: &[Resource]| {
+        let mut indexes = (0..resources.len()).collect::<Vec<_>>();
+        indexes.shuffle(rng);
+        // Keep the existing full-batch policy, but choose the omitted remainder
+        // BEFORE sorting so the longest resources are not systematically dropped.
+        indexes.truncate(full_len);
+        // Raw lengths bootstrap the first pass. Observed motif-output lengths
+        // account for preprocessing and application stride on subsequent passes.
+        indexes.sort_by_key(|&index| sequence_lengths.get(&resources[index].id()).copied().unwrap_or(i64::from(resources[index].length())));
+        indexes
+    };
+    let positive = ordered(resources_1);
+    let negative = ordered(resources_0);
+    // Pair ranks across classes, then group adjacent ranks: every full batch
+    // remains balanced while similar sequence lengths share their padding.
+    let pairs = positive.into_iter().zip(negative).collect::<Vec<_>>();
+    let mut batches = pairs.chunks_exact(half_batch_size).map(|chunk| chunk.to_vec().into_boxed_slice()).collect::<Vec<_>>();
+    // Avoid imposing a short-to-long training curriculum; ties were shuffled above.
+    batches.shuffle(rng);
+    batches
+}
+
 // #[derive(Debug)]
 struct ResourcesBatch<L, C, LD, X, Y>
 where
@@ -745,6 +771,8 @@ where
     resources_0_train: Arc<Vec<Resource>>,
     resources_0_valid: Arc<Vec<Resource>>,
     loader: Arc<L>,
+    sequence_length: fn(&DevicesWrap<LD>) -> i64,
+    sequence_lengths: Arc<RwLock<HashMap<u32, i64>>>,
     build_batch_fn: BuildBatchFn<LD, X, Y, C>,
 }
 
@@ -769,7 +797,7 @@ where
     X: Dims + 'static,
     Y: Dims + 'static,
 {
-    pub fn new(loader: Arc<L>, batch_size: u32, resources_1_train: Arc<Vec<Resource>>, resources_1_valid: Arc<Vec<Resource>>, resources_0_train: Arc<Vec<Resource>>, resources_0_valid: Arc<Vec<Resource>>, build_batch_fn: BuildBatchFn<LD, X, Y, C>) -> Self {
+    pub fn new(loader: Arc<L>, batch_size: u32, resources_1_train: Arc<Vec<Resource>>, resources_1_valid: Arc<Vec<Resource>>, resources_0_train: Arc<Vec<Resource>>, resources_0_valid: Arc<Vec<Resource>>, sequence_length: fn(&DevicesWrap<LD>) -> i64, build_batch_fn: BuildBatchFn<LD, X, Y, C>) -> Self {
         debug!("ResourcesBatch::new: batch_size={batch_size:?}");
         debug!("ResourcesBatch::new: resources_1_train={resources_1_train:?}");
         debug!("ResourcesBatch::new: resources_1_valid={resources_1_valid:?}");
@@ -794,6 +822,8 @@ where
             resources_0_valid,
             half_batch_size,
             loader,
+            sequence_length,
+            sequence_lengths: Arc::new(RwLock::new(HashMap::new())),
             build_batch_fn,
         }
     }
@@ -808,21 +838,21 @@ where
     Y: Dims + 'static,
 {
     fn train_batch_stream<'a>(&'a self, ctx: C) -> BoxStream<'a, Result<(ThoBatch<X>, Option<BatchLengths>, ThoBatch<Y>), ThoError>> {
-        let batches = shuffle_and_chunk_with_rng(self.resources_1_train.len(), self.half_batch_size, &mut rng());
+        let batches = length_balanced_batches(&self.resources_1_train, &self.resources_0_train, self.half_batch_size, &self.sequence_lengths.read(), &mut rng());
 
         debug!("ResourcesBatch::train_batch_stream: batches={batches:?}");
         assert!(!batches.is_empty(), "train_batch_stream: batch is empty, self.resources_1_train={:?} self.resources_0_train={:?}", self.resources_1_train, self.resources_0_train);
 
-        Self::build_batch_stream(Arc::clone(&self.build_batch_fn), batches, Arc::clone(&self.loader), ctx, Arc::clone(&self.resources_1_train), Arc::clone(&self.resources_0_train), "train")
+        self.build_batch_stream(batches, ctx, Arc::clone(&self.resources_1_train), Arc::clone(&self.resources_0_train), "train")
     }
 
     fn valid_batch_stream<'a>(&'a self, ctx: C) -> BoxStream<'a, Result<(ThoBatch<X>, Option<BatchLengths>, ThoBatch<Y>), ThoError>> {
-        let batches = shuffle_and_chunk_with_rng(self.resources_1_valid.len(), self.half_batch_size, &mut rng());
+        let batches = length_balanced_batches(&self.resources_1_valid, &self.resources_0_valid, self.half_batch_size, &self.sequence_lengths.read(), &mut rng());
 
         debug!("ResourcesBatch::valid_batch_stream: batches={batches:?}");
         assert!(!batches.is_empty(), "valid_batch_stream: batch is empty, self.resources_1_train={:?} self.resources_0_train={:?}", self.resources_1_train, self.resources_0_train);
 
-        Self::build_batch_stream(Arc::clone(&self.build_batch_fn), batches, Arc::clone(&self.loader), ctx, Arc::clone(&self.resources_1_valid), Arc::clone(&self.resources_0_valid), "valid")
+        self.build_batch_stream(batches, ctx, Arc::clone(&self.resources_1_valid), Arc::clone(&self.resources_0_valid), "valid")
     }
 
     fn num_batches(&self) -> usize {
@@ -840,9 +870,8 @@ where
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "ResourcesBatch::build_batch_stream"))]
     fn build_batch_stream(
-        build_batch_fn: BuildBatchFn<LD, X, Y, C>,
-        resource_indexes_for_batches: Vec<Box<[usize]>>,
-        loader: Arc<L>,
+        &self,
+        resource_indexes_for_batches: Vec<Box<[(usize, usize)]>>,
         mut ctx: C,
         x_1: Arc<Vec<Resource>>,
         x_0: Arc<Vec<Resource>>,
@@ -850,18 +879,23 @@ where
     ) -> BoxStream<'static, Result<(ThoBatch<X>, Option<BatchLengths>, ThoBatch<Y>), ThoError>> {
         debug!("ResourcesBatch::build_batch_stream: resource_indexes_for_batches={resource_indexes_for_batches:?}");
 
+        let build_batch_fn = Arc::clone(&self.build_batch_fn);
+        let loader = Arc::clone(&self.loader);
+        let sequence_length = self.sequence_length;
+        let sequence_lengths = Arc::clone(&self.sequence_lengths);
         let futures = futures::stream::iter(resource_indexes_for_batches.into_iter().enumerate()).then(move |(i, batch_keys)| {
             let build_batch_fn = Arc::clone(&build_batch_fn);
             let loader = Arc::clone(&loader);
             let x_1 = Arc::clone(&x_1);
             let x_0 = Arc::clone(&x_0);
+            let sequence_lengths = Arc::clone(&sequence_lengths);
             let mut ctx_for_build_fn = ctx.branch(false);
 
             async move {
                 debug!("ResourcesBatch::build_batch_stream: descr={descr} batch_i={i} batch_keys={batch_keys:?}");
 
                 let batch_len = batch_keys.len();
-                let futures = batch_keys.into_iter().map(|index| {
+                let futures = batch_keys.iter().copied().map(|(index_1, index_0)| {
                     debug!("ResourcesBatch::build_batch_stream: descr={descr} batch_i={i} in future 0");
 
                     let loader = Arc::clone(&loader);
@@ -873,7 +907,7 @@ where
                     async move {
                         debug!("ResourcesBatch::build_batch_stream: descr={descr} batch_i={i} in future 1");
 
-                        try_join!(Arc::clone(&loader).run_cached(Arc::new(x_1[index].clone()), ctx_x1), Arc::clone(&loader).run_cached(Arc::new(x_0[index].clone()), ctx_x0))
+                        try_join!(Arc::clone(&loader).run_cached(Arc::new(x_1[index_1].clone()), ctx_x1), Arc::clone(&loader).run_cached(Arc::new(x_0[index_0].clone()), ctx_x0))
                     }
                 });
 
@@ -886,6 +920,16 @@ where
                     .into_iter()
                     // Preserve pair order without constructing an intermediate collection.
                     .unzip::<_, _, Vec<_>, Vec<_>>();
+                {
+                    // DevicesWrap keeps shape metadata on the host in local and
+                    // IPC modes. Retain only lengths, never tensors or leases, and
+                    // release the lock before the batch builder can await/OOM.
+                    let mut lengths = sequence_lengths.write();
+                    for ((index_1, index_0), (value_1, value_0)) in batch_keys.iter().zip(x_1_wrapped.iter().zip(&x_0_wrapped)) {
+                        lengths.insert(x_1[*index_1].id(), sequence_length(value_1));
+                        lengths.insert(x_0[*index_0].id(), sequence_length(value_0));
+                    }
+                }
                 //
                 debug!("ResourcesBatch::build_batch_stream: descr={descr} x_1_wrapped={x_1_wrapped:?} x_0_wrapped={x_0_wrapped:?}");
 
@@ -1034,7 +1078,7 @@ mod tests {
     use crate::stages::apply_motif_nets::{ApplyMotifNets, motif_test_net_};
     use crate::stages::cross_loader::ResourcesConfigInput;
     use crate::stages::tensor_loader::mock_tensor_loader;
-    use crate::stages::train_label_nets::{ResourcesBatch, TrainLabelNetRunConfig, TrainLabelNetRunConfigFields, TrainLabelNetRunConfigResult, new_train_label_nets};
+    use crate::stages::train_label_nets::{ResourcesBatch, TrainLabelNetRunConfig, TrainLabelNetRunConfigFields, TrainLabelNetRunConfigResult, length_balanced_batches, new_train_label_nets};
     use crate::tch_test_utils::motifs_tensor;
     use crate::tch_test_utils::resource_tensor;
     use crate::train_nets::{LabelNetParams, LabelNetTypeArgs, LabelNetTypeArgsFields, LabelNetTypeParams, LinNetArgs, LinNetArgsFields, TrainLabelNetRunConfigResultParams, TrainMotifNetRunConfig};
@@ -1044,7 +1088,7 @@ mod tests {
     use log::LevelFilter::Debug;
     use log::{Level, debug, log_enabled};
     use parking_lot::RwLock;
-    use rand::{RngExt, rng};
+    use rand::{RngExt, SeedableRng, rng, rngs::StdRng};
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
@@ -1081,6 +1125,67 @@ mod tests {
     #[ctor::ctor]
     pub fn init() {
         thoosa_shared::test_utils::init_test_logging();
+    }
+
+    #[test]
+    fn test_length_balanced_batches_reduce_padding_and_preserve_coverage() {
+        let positive = [10, 100, 12, 120].into_iter().enumerate().map(|(i, length)| Resource::new(i as u32, 1, "positive", length)).collect::<Vec<_>>();
+        let negative = [120, 12, 100, 10].into_iter().enumerate().map(|(i, length)| Resource::new(i as u32 + 4, 1, "negative", length)).collect::<Vec<_>>();
+        let batches = length_balanced_batches(&positive, &negative, 2, &HashMap::new(), &mut StdRng::seed_from_u64(1));
+        assert_eq!(batches.len(), 2);
+        let mut seen_positive = Vec::new();
+        let mut seen_negative = Vec::new();
+        let mut padded_attention_elements = 0u64;
+        for batch in batches {
+            assert_eq!(batch.len(), 2, "each batch must contain two resources from each class");
+            let mut max_length = 0;
+            for (i, j) in batch {
+                seen_positive.push(i);
+                seen_negative.push(j);
+                max_length = max_length.max(positive[i].length()).max(negative[j].length());
+            }
+            padded_attention_elements += 4 * u64::from(max_length).pow(2);
+        }
+        seen_positive.sort_unstable();
+        seen_negative.sort_unstable();
+        assert_eq!(seen_positive, vec![0, 1, 2, 3]);
+        assert_eq!(seen_negative, vec![0, 1, 2, 3]);
+        // Pairing the original indices would force both batches to long lengths.
+        assert_eq!(padded_attention_elements, 4 * (12u64.pow(2) + 120u64.pow(2)));
+    }
+
+    #[test]
+    fn test_length_balanced_batches_use_motif_lengths_and_randomize_remainder() {
+        // Raw lengths are deliberately uninformative; observed motif lengths
+        // must control grouping without introducing a permanent longest tail.
+        let positive = (0..7).map(|id| Resource::new(id, 1, "positive", 1000)).collect::<Vec<_>>();
+        let negative = (7..14).map(|id| Resource::new(id, 1, "negative", 1000)).collect::<Vec<_>>();
+        let lengths = (0..7).flat_map(|i| [(i, i64::from(i + 1) * 10), (13 - i, i64::from(i + 1) * 10)]).collect::<HashMap<_, _>>();
+        let mut seen_positive = [false; 7];
+        let mut seen_negative = [false; 7];
+        let mut first_batch_lengths = std::collections::HashSet::new();
+        for seed in 0..32 {
+            let batches = length_balanced_batches(&positive, &negative, 2, &lengths, &mut StdRng::seed_from_u64(seed));
+            assert_eq!(batches.len(), 3);
+            let mut used_positive = std::collections::HashSet::new();
+            let mut used_negative = std::collections::HashSet::new();
+            first_batch_lengths.insert(lengths[&positive[batches[0][0].0].id()]);
+            for batch in batches {
+                assert_eq!(batch.len(), 2);
+                // At most one missing resource separates neighboring ranks.
+                assert!(lengths[&positive[batch[1].0].id()] - lengths[&positive[batch[0].0].id()] <= 20);
+                assert!(lengths[&negative[batch[1].1].id()] - lengths[&negative[batch[0].1].id()] <= 20);
+                for (i, j) in batch {
+                    assert!(used_positive.insert(i), "duplicate positive resource");
+                    assert!(used_negative.insert(j), "duplicate negative resource");
+                    assert!((lengths[&positive[i].id()] - lengths[&negative[j].id()]).abs() <= 10, "class ranks should have similar motif lengths");
+                    seen_positive[i] = true;
+                    seen_negative[j] = true;
+                }
+            }
+        }
+        assert!(seen_positive.into_iter().all(|seen| seen) && seen_negative.into_iter().all(|seen| seen), "remainder sampling must not always discard long resources");
+        assert!(first_batch_lengths.len() > 1, "batch order must be shuffled");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
@@ -1316,6 +1421,7 @@ mod tests {
             resources_1_valid,
             resources_0_train,
             resources_0_valid,
+            |value| value.size().dim_1(),
             Arc::new(|x_1_wrapped: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>, x_0_wrapped: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>, ctx: MockRunCtx| {
                 async move {
                     let x_1 = try_join_all(x_1_wrapped.iter().map(|x| x.borrow_ref(ctx.tho_device_idx()))).await?;
@@ -1337,6 +1443,7 @@ mod tests {
         let mut batch = resource_batch.train_batch_stream(mock_run_ctx::default(1));
         let (_batch_x, _lengths, _batch_y) = batch.next().await.expect("no batch").expect("batch failed");
         assert!(batch.next().await.is_none()); //should be only one
+        assert_eq!(*resource_batch.sequence_lengths.read(), HashMap::from([(0, 10), (1, 10), (2, 10), (6, 10), (7, 10), (8, 10)]), "cache only the loaded motif lengths for subsequent schedules");
 
         let mut batch = resource_batch.valid_batch_stream(mock_run_ctx::default(1));
         let (_batch_x, _lengths, _batch_y) = batch.next().await.expect("no batch").expect("batch failed");
@@ -1377,6 +1484,7 @@ mod tests {
             resources_1_valid,
             resources_0_train,
             resources_0_valid,
+            |value| value.size().dim_1(),
             Arc::new(|x_1_wrapped: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>, x_0_wrapped: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>, ctx: MockRunCtx| {
                 async move {
                     let x_1 = try_join_all(x_1_wrapped.iter().map(|x| x.borrow_ref(ctx.tho_device_idx()))).await?;
