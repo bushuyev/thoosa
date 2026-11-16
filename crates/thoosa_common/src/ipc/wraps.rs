@@ -4,6 +4,7 @@ use crate::ipc::serialization::json::IpcCodec;
 use crate::ipc::state_transfer::{CheckpointRestore, StateTransfer};
 use crate::ipc::worker_msg::WorkerInput;
 use crate::runner::purge::CachePurger;
+use crate::runner::blocking::STAGE_BLOCKING_POOL;
 use crate::runner::sync_stage::{ConsumingStage, PrepareStage};
 use crate::tho_device::ThoDevice;
 use futures_util::FutureExt;
@@ -445,10 +446,13 @@ pub(crate) fn run_worker_stage(execution: WorkerExecution<'_>, input: Box<dyn Wo
 
 async fn run_worker_stage_with_state<T: SyncStageIpcWrapperWithState>(stage: &T, input: &Box<dyn WorkerInput>, all_cuda_tensors: &AllTensors, tho_device: &ThoDevice, run_ctx: &WokerRunCtx, handle_ctx: &mut dyn HandleCtx) -> Result<Box<dyn WorkerOutput>, ThoError> {
     let mut state = stage.pre_run(tho_device).await?;
-    // Create the thread-affine guard only after the last await. Keep ownership
-    // of state here while submission and synchronization run, even on unwind.
-    let _guard = handle_ctx.sync_ctx()?;
-    run_cuda_stage(|| stage.do_run_with_state(input, all_cuda_tensors, &mut *state, tho_device, run_ctx), || handle_ctx.on_after_run())
+    STAGE_BLOCKING_POOL.acquire().await?.run(|| {
+        // Create the thread-affine guard inside the blocking boundary, after
+        // preparation. Keep state and the caller's endpoint lease until sync and
+        // unwind finish, so purge/recovery cannot race a detached kernel.
+        let _guard = handle_ctx.sync_ctx()?;
+        run_cuda_stage(|| stage.do_run_with_state(input, all_cuda_tensors, &mut *state, tho_device, run_ctx), || handle_ctx.on_after_run())
+    })
 }
 
 impl<T> ErasedWithState for T
@@ -598,7 +602,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_worker_state_guard_survives_synchronization_on_success_error_and_panic() {
         let tensors = AllTensors::new(CudaWorkerId {
             device_idx: 1,

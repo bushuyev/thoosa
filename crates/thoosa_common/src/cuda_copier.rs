@@ -724,7 +724,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_state_guard_survives_synchronization_on_success_error_and_panic() {
         use super::mock_stateful_stage::MockStatefulStageBuilder;
         use crate::runner::common::cachable::DevicesWrap;
@@ -971,7 +971,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_consume_stream_lifecycle_and_error_precedence() {
         // Exercise the real actor entry point, rather than just the error-merging helper.
         for execution in [Ok(TestOutput::new(7.)), Err(ThoError::oom()), Err(fatal_consume_error())] {

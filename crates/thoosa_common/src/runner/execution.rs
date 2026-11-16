@@ -1,6 +1,7 @@
 //! The common async execution handle owns preparation and stream lifetimes.
 //! Kernel traits never advertise remote or consuming operations they cannot run.
 use crate::cuda_copier::{HandleCtx, LocalCudaExecution, finish_cuda_error, finish_cuda_panic, finish_cuda_run, run_cuda_stage};
+use crate::runner::blocking::STAGE_BLOCKING_POOL;
 use crate::runner::{
     common::cachable::{BorrowRef, ConsumeData, SelectRef},
     global_ctx::{CudaActorHandleEnum, DeviceExecutionCtx},
@@ -158,8 +159,12 @@ impl<S: SyncStage + Send + Sync> StageExecution for S {
         Box::pin(async move {
             let input = input.await?;
             let mut handle = execution.local_context().await?;
-            let _guard = handle.sync_ctx()?;
-            run_cuda_stage(|| self.do_run(input.borrow(), ctx), || handle.on_after_run())
+            STAGE_BLOCKING_POOL.acquire().await?.run(|| {
+                // Bind the stream only on the executing thread, after the last
+                // await. Retain the input and activity lease through completion.
+                let _guard = handle.sync_ctx()?;
+                run_cuda_stage(|| self.do_run(input.borrow(), ctx), || handle.on_after_run())
+            })
         })
     }
 }
@@ -178,9 +183,12 @@ where
     let mut state = stage.pre_run(ctx.tho_device_idx()).await?;
     let input = input.await?;
     let mut handle = execution.local_context().await?;
-    let _guard = handle.sync_ctx()?;
-    // Keep both state and input alive until synchronization, including unwind.
-    run_cuda_stage(|| Arc::clone(&stage).do_run_with_state(input.borrow(), &mut *state, ctx), || handle.on_after_run())
+    STAGE_BLOCKING_POOL.acquire().await?.run(|| {
+        let _guard = handle.sync_ctx()?;
+        // Keep both state and input alive until synchronization, including unwind.
+        // Only the synchronous kernel blocks; preparation and admission stay async.
+        run_cuda_stage(|| Arc::clone(&stage).do_run_with_state(input.borrow(), &mut *state, ctx), || handle.on_after_run())
+    })
 }
 
 impl<S: ConsumingStage + Send + Sync> ConsumingExecution for S {
@@ -196,17 +204,25 @@ impl<S: ConsumingStage + Send + Sync> ConsumingExecution for S {
                 Ok(handle) => handle,
                 Err(error) => return Ok(ConsumeResult::Failed { input, error }),
             };
-            let guard = match handle.sync_ctx() {
-                Ok(guard) => guard,
+            let slot = match STAGE_BLOCKING_POOL.acquire().await {
+                Ok(slot) => slot,
                 Err(error) => return Ok(ConsumeResult::Failed { input, error }),
             };
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.consume(input, ctx)));
-            let sync = handle.on_after_run();
-            drop(guard);
-            match finish_cuda_panic(result, &sync)? {
-                ConsumeResult::Ok(output) => finish_cuda_run(Ok(output), sync).map(ConsumeResult::Ok),
-                ConsumeResult::Failed { input, error } => Ok(ConsumeResult::Failed { input, error: finish_cuda_error(error, sync) }),
-            }
+            slot.run(|| {
+                let guard = match handle.sync_ctx() {
+                    Ok(guard) => guard,
+                    Err(error) => return Ok(ConsumeResult::Failed { input, error }),
+                };
+                // Consumed input ownership and failure returns use the same
+                // synchronization boundary as borrowed/stateful execution.
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.consume(input, ctx)));
+                let sync = handle.on_after_run();
+                drop(guard);
+                match finish_cuda_panic(result, &sync)? {
+                    ConsumeResult::Ok(output) => finish_cuda_run(Ok(output), sync).map(ConsumeResult::Ok),
+                    ConsumeResult::Failed { input, error } => Ok(ConsumeResult::Failed { input, error: finish_cuda_error(error, sync) }),
+                }
+            })
         })
     }
 }

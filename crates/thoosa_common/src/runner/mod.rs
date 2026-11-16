@@ -20,4 +20,6 @@ pub mod stage_install;
 
 pub mod execution;
 
+pub mod blocking;
+
 pub mod residency;

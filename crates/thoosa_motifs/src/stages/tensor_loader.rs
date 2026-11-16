@@ -5,10 +5,11 @@ use log::debug;
 use mockall_double::double;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use tch::Device;
 use tch::Device::Cpu;
 use thoosa_common::runner::common::cachable::DevicesWrap;
+use thoosa_common::runner::blocking::BlockingPool;
 #[double]
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::tho_device::ThoDevice;
@@ -21,6 +22,11 @@ use thoosa_shared::{ThoError, mono_key};
 // use crate::stages::stages_seq::StagesSeq;
 
 type LoadFn = dyn Fn(&Resource, &Device) -> Result<ThoTensor<ChannelsData, SynKey>, ThoError> + Sync + Send;
+
+// Share the disk/deserialization bound across loader instances and labels. This
+// is independent of CUDA execution, so stream synchronization cannot occupy all
+// of the loader's admission slots.
+static FILE_LOAD_POOL: LazyLock<BlockingPool> = LazyLock::new(|| BlockingPool::new(4));
 
 ///it always loads data into CPU tensors which are copied to gpu cells of its DevicesWrap output when BorrowRef::borrow_to is invoked from thoosa_common::runner::oom_handler::run_stage_borrowed
 /// it needs to be on main side to retain CPU tensors when worker is restarted
@@ -62,14 +68,24 @@ where
     async fn run(self: Arc<Self>, input: Self::In<'static>, ctx: Self::Ctx) -> Result<Self::Out, ThoError> {
         debug!("RawTensorLoader::run: input={input:?} ctx={ctx:?}");
 
-        let cpu_tensor = (self.loader_fn)(&input, &Cpu)?;
+        let loader_fn = Arc::clone(&self.loader_fn);
+        let resource = Arc::clone(&input);
+        let loaded = FILE_LOAD_POOL.run_owned(move || {
+            // Register the result before returning across the task boundary;
+            // cancellation drops this managed value together with the result.
+            Ok(Arc::new(DevicesWrap::wrap(loader_fn(&resource, &Cpu)?)))
+        }).await?;
+        if ctx.tho_device_idx() == 0 {
+            return Ok(loaded);
+        }
+
+        // Preserve the explicit-device path's output ID and copy ownership.
+        // The usual CPU path keeps its managed result and needs no detach/copy.
+        let loaded = Arc::into_inner(loaded).ok_or_else(|| ThoError::new("raw tensor load result is shared before device copy"))?;
+        let cpu_tensor = loaded.take_data(0).await?;
         debug!("RawTensorLoader::run: cpu_tensor={cpu_tensor:?}");
 
-        let tensor = if ctx.tho_device_idx() != 0 {
-            GlobalCtx::global().cuda_actor(ctx.tho_device_idx()).copy(cpu_tensor.strip_types(), ctx.tho_device_idx().into()).await?.to_types(self.out_id(input.id()))?
-        } else {
-            cpu_tensor
-        };
+        let tensor = GlobalCtx::global().cuda_actor(ctx.tho_device_idx()).copy(cpu_tensor.strip_types(), ctx.tho_device_idx().into()).await?.to_types(self.out_id(input.id()))?;
 
         debug!("RawTensorLoader::run: tensor={tensor:?}");
 
@@ -199,6 +215,33 @@ pub(crate) mod mock_tensor_loader {
 
 #[cfg(test)]
 mod tests {
+
+    #[tokio::test]
+    async fn test_file_loader_leaves_scheduler_and_preserves_load_error() -> anyhow::Result<()> {
+        use super::*;
+        use std::time::Duration;
+        use thoosa_common::runner::common::{MockRunCtx, mock_run_ctx};
+
+        let scheduler_thread = std::thread::current().id();
+        let (started_tx, mut started_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (finish_tx, finish_rx) = std::sync::mpsc::channel();
+        let finish_rx = std::sync::Mutex::new(finish_rx);
+        let loader = Arc::new(RawTensorLoader::<MockRunCtx>::new(move |resource, device| {
+            assert_eq!(resource.id(), 123);
+            assert_eq!(*device, Cpu, "file loading must stay on CPU in both execution modes");
+            started_tx.send(std::thread::current().id()).expect("test is waiting for file work");
+            finish_rx.lock().expect("test receiver lock").recv_timeout(Duration::from_secs(5)).expect("scheduler must release file work");
+            // No tensor/device initialization is needed to verify propagation of
+            // a typed loader failure across the new blocking-task boundary.
+            Err(ThoError::oom())
+        }, ThoDevice::from(0usize)));
+        let load = tokio::spawn(loader.run(Arc::new(Resource::new(123, 1, "resource", 10)), mock_run_ctx::default(0)));
+        let file_thread = started_rx.recv().await.expect("loader started");
+        assert_ne!(file_thread, scheduler_thread, "synchronous file work ran on Tokio's current-thread scheduler");
+        finish_tx.send(())?;
+        assert!(load.await?.unwrap_err().is_oom());
+        Ok(())
+    }
 
     //TODO
     // #[tokio::test]

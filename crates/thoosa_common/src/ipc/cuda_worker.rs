@@ -10,6 +10,7 @@ use crate::ipc::worker_msg::CudaWorkerId;
 use crate::ipc::worker_msg::{CudaWorkerMsgIn, CudaWorkerMsgOut, DebugOutput, DeviceStatsOutput, OpResult, Operation, WorkerCopyDonePayload, WorkerInput};
 use crate::ipc::wraps::{ErasedWithState, SyncStageIpcWrapper};
 use crate::tho_device::ThoDevice;
+use crate::runner::blocking::STAGE_BLOCKING_POOL;
 use crate::tho_tensor::ThoTensor;
 use crate::ws::{FsWorkspace, Workspace, WsConfigs};
 use anyhow::Context as _;
@@ -754,7 +755,12 @@ impl CudaWorker {
                         }
                         None => {
                             debug!("run_worker: invoke endpoint endpoint_key={endpoint_key:?} no state");
-                            panic_to_err!(crate::ipc::wraps::run_worker_stage(endpoint.stage.execution(), input, consume, &context.all_cuda_tensors, &context.tho_device, &run_ctx, &mut stream))
+                            // The request/endpoint/input/stream owners stay on this
+                            // stack until synchronization. Transport and async
+                            // submission remain on the Tokio scheduler.
+                            STAGE_BLOCKING_POOL.acquire().await?.run(|| {
+                                panic_to_err!(crate::ipc::wraps::run_worker_stage(endpoint.stage.execution(), input, consume, &context.all_cuda_tensors, &context.tho_device, &run_ctx, &mut stream))
+                            })
                         }
                     };
                     if let Err(e) = &result {
