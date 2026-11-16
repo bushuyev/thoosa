@@ -68,8 +68,9 @@ where
     x_f: Arc<F>,
     loss_fn: LossFp,
     best_checkpoint_path: PathBuf,
-    // A retry after reply/stream completion failure must not apply a committed batch twice.
-    last_training_batch: std::sync::Mutex<Option<(u64, f32)>>,
+    // Cache the full acknowledgement, including completion without a loss, so a
+    // retry after reply/stream completion failure cannot apply a committed batch twice.
+    last_training_batch: std::sync::Mutex<Option<(u64, TrainStepOutput)>>,
     pd: PhantomData<C>,
 }
 
@@ -215,14 +216,14 @@ where
             .await
     }
 
-    pub(crate) async fn run_batches(self: &Arc<Self>, batches: BoxStream<'_, Result<(ThoBatch<DI>, Option<BatchLengths>, ThoBatch<DO>), ThoError>>, mut ctx: C, train: bool, max_other_parallel: usize, prefetch: bool, mut on_completed: impl FnMut(f32) + Send) -> Result<(), ThoError>
+    pub(crate) async fn run_batches(self: &Arc<Self>, batches: BoxStream<'_, Result<(ThoBatch<DI>, Option<BatchLengths>, ThoBatch<DO>), ThoError>>, mut ctx: C, train: bool, loss_reporting: LossReporting, max_other_parallel: usize, prefetch: bool, mut on_completed: impl FnMut(TrainStepOutput) -> Result<(), ThoError> + Send) -> Result<(), ThoError>
     where
         C: MaxParallelCtx + Adjustable,
     {
         let cache = Arc::new(TmpCached::new("prepared_training_batches").await);
         // Cache synchronously when preparation finishes: a ready future must
         // never hold raw tensors while the other half of the join is pending.
-        let mut batches = batches.map(|batch| batch.map(|(x, lengths, expected)| cache.insert_guarded(TrainStepInput::new(x, lengths, expected, train))));
+        let mut batches = batches.map(|batch| batch.map(|(x, lengths, expected)| cache.insert_guarded(TrainStepInput::new(x, lengths, expected, train, loss_reporting))));
         let mut current = cooperative(batches.next()).await;
         while let Some(input) = current {
             let step = self.run_once(input?, ctx.branch(false), max_other_parallel);
@@ -237,7 +238,7 @@ where
                     return Err(error.clone());
                 }
             }
-            on_completed(output?.loss);
+            on_completed(output?)?;
             current = if prefetch { next } else { cooperative(batches.next()).await };
         }
         Ok(())
@@ -365,7 +366,7 @@ where
                 let _ = std::fs::remove_file(&pending);
             }
             result?;
-            return Ok(TrainStepOutput::new(0.0)); //TODO add enum in TrainStepOutput for each input command to avoid sending dummy 0.0
+            return Ok(TrainStepOutput::Completed);
         }
         let train = input.train();
         let batch_len = *input.x_ref()?.size().first().ok_or_else(|| ThoError::new("training input has no batch dimension"))?;
@@ -374,7 +375,7 @@ where
             return Err(ThoError::new("training requires a nonempty batch and positive microbatch size"));
         }
         let calculate = |module: &mut ThoTrainModule<DI, DO>| -> Result<TrainStepOutput, ThoError> {
-            let mut weighted_loss = 0.0;
+            let mut weighted_loss: Option<Tensor> = None;
             for start in (0..batch_len).step_by(chunk_len as usize) {
                 let end = (start + chunk_len).min(batch_len);
                 let chunk = input.select_batch((start..end).into())?;
@@ -387,24 +388,43 @@ where
 
                 let loss = (self.loss_fn)(&*predicted.local()?, &*chunk.expected_y_ref()?.local()?)?;
                 let weight = (end - start) as f64 / batch_len as f64;
-                weighted_loss += tch_result(loss.f_double_value(&[]))? * weight;
+                if input.loss_reporting == LossReporting::Report {
+                    // Detach so reporting cannot retain training graphs between chunks.
+                    // Unsplit batches need no weighting; microbatch sums keep the
+                    // previous host-side double precision without per-chunk readbacks.
+                    let detached = tch_result(loss.f_detach())?;
+                    let weighted = if chunk_len >= batch_len {
+                        detached
+                    } else {
+                        let detached = tch_result(detached.f_to_kind(tch::Kind::Double))?;
+                        tch_result(detached.f_mul_scalar(weight))?
+                    };
+                    weighted_loss = Some(match weighted_loss {
+                        Some(total) => tch_result(total.f_add(&weighted))?,
+                        None => weighted,
+                    });
+                }
                 if train {
                     // Loss is a mean over equally weighted samples. Backward accumulates;
                     // only training_transaction may update the optimizer, after every chunk.
                     tch_result(tch_result(loss.f_mul_scalar(weight))?.f_backward())?;
                 }
             }
-            Ok(TrainStepOutput::new(weighted_loss as f32))
+            // Completion-only training never reads a scalar back from the GPU.
+            match weighted_loss {
+                Some(loss) => Ok(TrainStepOutput::Loss(tch_result(loss.f_double_value(&[]))? as f32)),
+                None => Ok(TrainStepOutput::Completed),
+            }
         };
         if train {
             let mut committed = self.last_training_batch.lock().or_else(|_| Err(ThoError::new("training acknowledgement state poisoned")))?;
-            if let Some((id, loss)) = *committed {
+            if let Some((id, output)) = *committed {
                 if id == input.request_id {
-                    return Ok(TrainStepOutput::new(loss));
+                    return Ok(output);
                 }
             }
             let output = train_module.training_transaction(calculate)?; //<-opt.step and zero_grad are here
-            *committed = Some((input.request_id, output.loss));
+            *committed = Some((input.request_id, output));
             Ok(output)
         } else {
             panic_to_err!(tch::no_grad(|| calculate(train_module)))
@@ -467,6 +487,13 @@ enum TrainStepCommand {
     Checkpoint,
 }
 
+/// Completion acknowledgements do not require a GPU scalar readback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LossReporting {
+    Skip,
+    Report,
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(bound(serialize = "", deserialize = ""))]
 pub struct TrainStepInput<DI: Dims, DO: Dims> {
@@ -475,12 +502,13 @@ pub struct TrainStepInput<DI: Dims, DO: Dims> {
     pub lengths: Option<BatchLengths>,
     expected_y: Option<ThoBatch<DO>>,
     command: TrainStepCommand,
+    loss_reporting: LossReporting,
     request_id: u64,
     microbatch_size: Option<i64>,
 }
 
 impl<DI: Dims, DO: Dims> TrainStepInput<DI, DO> {
-    pub fn new(x: ThoBatch<DI>, lengths: Option<BatchLengths>, expected_y: ThoBatch<DO>, train: bool) -> Self {
+    pub fn new(x: ThoBatch<DI>, lengths: Option<BatchLengths>, expected_y: ThoBatch<DO>, train: bool, loss_reporting: LossReporting) -> Self {
         let request_id: u64 = rand::random();
         Self {
             // Active and prefetched batches coexist in one temporary cache.
@@ -489,6 +517,7 @@ impl<DI: Dims, DO: Dims> TrainStepInput<DI, DO> {
             lengths,
             expected_y: Some(expected_y),
             command: if train { TrainStepCommand::Train } else { TrainStepCommand::Validate },
+            loss_reporting,
             request_id,
             microbatch_size: None,
         }
@@ -502,6 +531,7 @@ impl<DI: Dims, DO: Dims> TrainStepInput<DI, DO> {
             expected_y: None,
             lengths: None,
             command: TrainStepCommand::Checkpoint,
+            loss_reporting: LossReporting::Skip,
             request_id: rand::random(),
             microbatch_size: None,
         })
@@ -540,6 +570,7 @@ impl<DI: Dims, DO: Dims> TrainStepInput<DI, DO> {
             lengths: self.lengths.clone(),
             expected_y: Some(self.expected_y_ref()?.clone_ref()?),
             command: self.command,
+            loss_reporting: self.loss_reporting,
             request_id: self.request_id,
             microbatch_size: self.microbatch_size,
         })
@@ -562,6 +593,7 @@ impl<DI: Dims, DO: Dims> TrainStepInput<DI, DO> {
             lengths,
             expected_y: Some(select_batch_tensor(self.expected_y_ref()?, &batch_range)?),
             command: self.command,
+            loss_reporting: self.loss_reporting,
             request_id: self.request_id,
             microbatch_size: None,
         })
@@ -656,6 +688,7 @@ impl<DI: Dims, DO: Dims> CopyToDevice for TrainStepInput<DI, DO> {
             lengths: self.lengths.clone(),
             expected_y: Some(t!(self.expected_y_ref()?.copy_to_device(dst_device)).await?),
             command: self.command,
+            loss_reporting: self.loss_reporting,
             request_id: self.request_id,
             microbatch_size: self.microbatch_size,
         })
@@ -753,14 +786,19 @@ impl<DI: Dims, DO: Dims> SelectRef<TrainStepInputSelector> for TrainStepInputWra
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-pub struct TrainStepOutput {
-    pub loss: f32,
+/// Both variants acknowledge completion; only explicit reporting carries a loss.
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
+pub enum TrainStepOutput {
+    Completed,
+    Loss(f32),
 }
 
 impl TrainStepOutput {
-    fn new(loss: f32) -> Self {
-        Self { loss }
+    pub fn loss(&self) -> Result<f32, ThoError> {
+        match self {
+            Self::Loss(loss) => Ok(*loss),
+            Self::Completed => Err(ThoError::new("training step acknowledged completion without a requested loss")),
+        }
     }
 }
 
@@ -799,6 +837,7 @@ where
             lengths: self.lengths.clone(),
             expected_y: Some(WorkerStageInput::ref_to_tensor(self.expected_y_ref()?, all_cuda_tensors, remove)?),
             command: self.command,
+            loss_reporting: self.loss_reporting,
             request_id: self.request_id,
             microbatch_size: self.microbatch_size,
         })

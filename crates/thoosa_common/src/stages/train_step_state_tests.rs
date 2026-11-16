@@ -125,6 +125,7 @@ fn input(train: bool) -> Result<TrainStepInput<AnyDims, AnyDims>, ThoError> {
         None,
         ThoTensor::new(debug_id!("train state y"), tch_result(Tensor::f_zeros([2, 1], (Kind::Float, Device::Cpu)))?)?,
         train,
+        LossReporting::Report,
     ))
 }
 
@@ -149,8 +150,8 @@ async fn prepared_batch_round_trips() -> Result<(), ThoError> {
     GlobalCtx::global().dump_all_to_cpu(1, "queued batch test").await?;
     assert!(wrapped.is_all_on_cpu().await, "queued batch must be visible to OOM offload");
     drop(wrapped);
-    let actual = pipeline.run_once(entry, ctx.branch(false), 0).await?.loss;
-    let expected = GlobalCtx::global().execution(1).run_stage(reference.clone(), input(true)?, 1, &ctx).await?.loss;
+    let actual = pipeline.run_once(entry, ctx.branch(false), 0).await?.loss()?;
+    let expected = GlobalCtx::global().execution(1).run_stage(reference.clone(), input(true)?, 1, &ctx).await?.loss()?;
     assert!((actual - expected).abs() < 1e-6, "offloaded batch did not reload correctly");
     assert!(cache_alive.upgrade().is_none(), "consumed batch retained its temporary cache");
 
@@ -163,10 +164,13 @@ async fn prepared_batch_round_trips() -> Result<(), ThoError> {
                 })
                 .boxed();
             let mut actual = vec![];
-            pipeline.run_batches(source, ctx.branch(false), train, 32, prefetch, |loss| actual.push(loss)).await?;
+            pipeline.run_batches(source, ctx.branch(false), train, LossReporting::Report, 32, prefetch, |output| {
+                actual.push(output.loss()?);
+                Ok(())
+            }).await?;
             assert_eq!(actual.len(), 4);
             for actual in actual {
-                let expected = GlobalCtx::global().execution(1).run_stage(reference.clone(), input(train)?, 1, &ctx).await?.loss;
+                let expected = GlobalCtx::global().execution(1).run_stage(reference.clone(), input(train)?, 1, &ctx).await?.loss()?;
                 assert!((actual - expected).abs() < 1e-6, "prefetch={prefetch}, train={train}: batch order or update changed");
             }
         }
@@ -189,12 +193,12 @@ async fn prepared_batch_round_trips() -> Result<(), ThoError> {
         }))
         .chain(futures_util::stream::once(async { panic!("preparation continued after a failed epoch") }))
         .boxed();
-    let error = pipeline.run_batches(source, ctx.branch(false), true, 32, true, |_| panic!("failed or speculative batch was committed")).await.unwrap_err();
+    let error = pipeline.run_batches(source, ctx.branch(false), true, LossReporting::Skip, 32, true, |_| panic!("failed or speculative batch was committed")).await.unwrap_err();
     assert!(error.is_oom());
     assert!(drained.load(std::sync::atomic::Ordering::SeqCst), "rollback can race an undrained producer");
     pipeline.schedule_epoch_restore(saved, 1).await?;
-    let actual = GlobalCtx::global().execution(1).run_stage(pipeline.clone(), input(false)?, 1, &ctx).await?.loss;
-    let expected = GlobalCtx::global().execution(1).run_stage(reference, input(false)?, 1, &ctx).await?.loss;
+    let actual = GlobalCtx::global().execution(1).run_stage(pipeline.clone(), input(false)?, 1, &ctx).await?.loss()?;
+    let expected = GlobalCtx::global().execution(1).run_stage(reference, input(false)?, 1, &ctx).await?.loss()?;
     assert!((actual - expected).abs() < 1e-6, "failed epoch changed committed state");
 
     // Cancellation must drop the pending producer instead of leaving a spawned
@@ -212,7 +216,7 @@ async fn prepared_batch_round_trips() -> Result<(), ThoError> {
             }
         }))
         .boxed();
-    let mut run = Box::pin(pipeline.run_batches(source, ctx.branch(false), true, 32, true, |_| {}));
+    let mut run = Box::pin(pipeline.run_batches(source, ctx.branch(false), true, LossReporting::Skip, 32, true, |_| Ok(())));
     tokio::select! {
         _ = preparing.notified() => {},
         result = &mut run => panic!("pipeline finished before cancellation: {result:?}"),
@@ -271,7 +275,10 @@ fn test_prepared_batches_retry_after_worker_reset_ipc() -> Result<(), ThoError> 
                             })
                             .boxed();
                         let mut losses = vec![];
-                        pipeline.run_batches(source, RunCtxImpl::new(1, "reset batches"), true, 32, true, |loss| losses.push(loss)).await?;
+                        pipeline.run_batches(source, RunCtxImpl::new(1, "reset batches"), true, LossReporting::Report, 32, true, |output| {
+                            losses.push(output.loss()?);
+                            Ok(())
+                        }).await?;
                         Ok(losses)
                     }
                 });
@@ -287,7 +294,7 @@ fn test_prepared_batches_retry_after_worker_reset_ipc() -> Result<(), ThoError> 
                 let reference = step(0, "reset-reference".into(), PathBuf::from("/tmp/unused-reset-reference")).await?;
                 assert_eq!(losses.len(), 3);
                 for actual in losses {
-                    let expected = GlobalCtx::global().execution(1).run_stage(Arc::clone(&reference), input(true)?, 1, &RunCtxImpl::new(1, "reset reference")).await?.loss;
+                    let expected = GlobalCtx::global().execution(1).run_stage(Arc::clone(&reference), input(true)?, 1, &RunCtxImpl::new(1, "reset reference")).await?.loss()?;
                     assert!((actual - expected).abs() < 1e-6, "replacement trial changed batch order or optimizer updates");
                 }
                 Ok(())
@@ -360,8 +367,10 @@ async fn test_prepared_batches_overlap_and_bound() -> Result<(), ThoError> {
     };
     let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(15), async {
         tokio::join!(
-            pipeline.run_batches(source, RunCtxImpl::new(1, "overlap"), true, 32, true, |_| {
+            pipeline.run_batches(source, RunCtxImpl::new(1, "overlap"), true, LossReporting::Skip, 32, true, |output| {
+                assert_eq!(output, TrainStepOutput::Completed);
                 completed.fetch_add(1, Ordering::SeqCst);
+                Ok(())
             }),
             observe
         )
@@ -423,8 +432,8 @@ async fn round_trips() -> Result<(), ThoError> {
             assert!(!restored.has_gpu_data(1).await);
             restored.schedule_epoch_restore(saved, 1).await?;
             let train = cycle > 0;
-            let expected = GlobalCtx::global().execution(1).run_stage(reference.clone(), input(train)?, 1, &ctx).await?.loss;
-            let actual = GlobalCtx::global().execution(1).run_stage(restored.clone(), input(train)?, 1, &ctx).await?.loss;
+            let expected = GlobalCtx::global().execution(1).run_stage(reference.clone(), input(train)?, 1, &ctx).await?.loss()?;
+            let actual = GlobalCtx::global().execution(1).run_stage(restored.clone(), input(train)?, 1, &ctx).await?.loss()?;
             assert!((actual - expected).abs() < 1e-6, "optimizer={optimizer}, cycle={cycle}: {actual} != {expected}");
             restored.purge_gpu(None, 2, "wrong device").await?;
             assert!(restored.has_gpu_data(1).await);
@@ -440,8 +449,8 @@ async fn round_trips() -> Result<(), ThoError> {
             }
         }
         // Check the final update too: training returns the loss before its update.
-        let expected = GlobalCtx::global().execution(1).run_stage(reference, input(false)?, 1, &ctx).await?.loss;
-        let actual = GlobalCtx::global().execution(1).run_stage(restored, input(false)?, 1, &ctx).await?.loss;
+        let expected = GlobalCtx::global().execution(1).run_stage(reference, input(false)?, 1, &ctx).await?.loss()?;
+        let actual = GlobalCtx::global().execution(1).run_stage(restored, input(false)?, 1, &ctx).await?.loss()?;
         assert!((actual - expected).abs() < 1e-6, "optimizer={optimizer}: final loss {actual} != {expected}");
     }
     // Use the real selector/actor/worker path: one selected training invocation must
@@ -450,14 +459,29 @@ async fn round_trips() -> Result<(), ThoError> {
         let checkpoint = thoosa_shared::tmp_file::TmpFile::new(format!("/tmp/train-transaction-{}-{optimizer}.safetensors", std::process::id()));
         let split = step(optimizer, format!("split-{optimizer}"), checkpoint.path().to_owned()).await?;
         let full = step(optimizer, format!("full-{optimizer}"), PathBuf::from("/tmp/unused-full")).await?;
-        for _ in 0..3 {
-            let expected = GlobalCtx::global().execution(1).run_stage(full.clone(), uneven_input(true)?, 1, &ctx).await?.loss;
-            let wrapper = TrainStepInputWrapper::new(uneven_input(true)?);
-            let actual = GlobalCtx::global().execution(1).run_stage_with_select(split.clone(), wrapper, Some(TrainStepInputSelector::from(0..2)), 1, &ctx).await?.loss;
-            assert!((actual - expected).abs() < 1e-5, "split loss mismatch: {actual} vs {expected}");
+        for loss_reporting in [LossReporting::Report, LossReporting::Skip] {
+            for _ in 0..3 {
+                let expected = GlobalCtx::global().execution(1).run_stage(full.clone(), uneven_input(true)?, 1, &ctx).await?.loss()?;
+                let mut input = uneven_input(true)?;
+                input.loss_reporting = loss_reporting;
+                let wrapper = Arc::new(TrainStepInputWrapper::new(input));
+                let actual = GlobalCtx::global().execution(1).run_stage_with_select(split.clone(), wrapper.clone(), Some(TrainStepInputSelector::from(0..2)), 1, &ctx).await?;
+                // Replaying either response must acknowledge the original update,
+                // including across selection, device copies and the IPC wire.
+                let replay = GlobalCtx::global().execution(1).run_stage_with_select(split.clone(), wrapper, Some(TrainStepInputSelector::from(0..2)), 1, &ctx).await?;
+                assert_eq!(replay, actual, "duplicate request changed its acknowledgement");
+                if loss_reporting == LossReporting::Report {
+                    assert!((actual.loss()? - expected).abs() < 1e-5, "split loss mismatch: {actual:?} vs {expected}");
+                } else {
+                    assert_eq!(actual, TrainStepOutput::Completed);
+                }
+            }
         }
-        let expected = GlobalCtx::global().execution(1).run_stage(full, uneven_input(false)?, 1, &ctx).await?.loss;
-        let actual = GlobalCtx::global().execution(1).run_stage(split.clone(), uneven_input(false)?, 1, &ctx).await?.loss;
+        let expected = GlobalCtx::global().execution(1).run_stage(full, uneven_input(false)?, 1, &ctx).await?.loss()?;
+        // Validation weights the uneven final chunk and reports one detached scalar.
+        let mut validation = uneven_input(false)?;
+        validation.microbatch_size = Some(2);
+        let actual = GlobalCtx::global().execution(1).run_stage(split.clone(), validation, 1, &ctx).await?.loss()?;
         assert!((actual - expected).abs() < 1e-5, "split updates differ: {actual} vs {expected}");
         // A final validation has no later training call to trigger checkpointing.
         split.checkpoint(RunCtxImpl::new(1, "checkpoint"), 32).await?;
@@ -484,13 +508,13 @@ async fn restore_oom_round_trip() -> Result<(), ThoError> {
     // The initial and max-parallel attempts fail, forcing DumpToCpu. If the
     // epoch's exclusive cap were reset to 32, this would succeed without dumping.
     std::fs::write(failure_file.path(), "2")?;
-    let actual = restored.run_once(cache.insert_guarded(input(true)?), ctx.branch(false), 0).await?.loss;
+    let actual = restored.run_once(cache.insert_guarded(input(true)?), ctx.branch(false), 0).await?.loss()?;
     assert_eq!(std::fs::read_to_string(failure_file.path())?, "0");
     assert!(!reference.has_gpu_data(1).await, "reconstruction OOM did not reach DumpToCpu");
-    let expected = reference.run_once(cache.insert_guarded(input(true)?), ctx.branch(false), 0).await?.loss;
+    let expected = reference.run_once(cache.insert_guarded(input(true)?), ctx.branch(false), 0).await?.loss()?;
     assert!((actual - expected).abs() < 1e-6, "restoration retries changed the training update");
-    let actual = restored.run_once(cache.insert_guarded(input(false)?), ctx.branch(false), 0).await?.loss;
-    let expected = reference.run_once(cache.insert_guarded(input(false)?), ctx.branch(false), 0).await?.loss;
+    let actual = restored.run_once(cache.insert_guarded(input(false)?), ctx.branch(false), 0).await?.loss()?;
+    let expected = reference.run_once(cache.insert_guarded(input(false)?), ctx.branch(false), 0).await?.loss()?;
     assert!((actual - expected).abs() < 1e-6, "restoration retries applied an update twice");
     // The checkpoint command itself can be the first invocation after rollback.
     restored.schedule_epoch_restore(saved, 1).await?;
@@ -543,6 +567,7 @@ fn uneven_input(train: bool) -> Result<TrainStepInput<AnyDims, AnyDims>, ThoErro
         None,
         ThoTensor::new(debug_id!("transaction y"), tch_result(tch_result(Tensor::f_from_slice(&[0f32, 0., 1.]))?.f_reshape([3, 1]))?)?,
         train,
+        LossReporting::Report,
     ))
 }
 
@@ -574,7 +599,10 @@ async fn test_train_transaction_cpu() -> Result<(), ThoError> {
         let full = Arc::new(local_step::<RunCtxImpl>(optimizer, 0.into(), PathBuf::from("/tmp/unused-cpu-full")).await?);
         for cycle in 0..3 {
             let input = uneven_input(true)?;
-            let wrapper = TrainStepInputWrapper::new(uneven_input(true)?);
+            let mut split_input = uneven_input(true)?;
+            // Failure and replay handling must also work without a loss response.
+            split_input.loss_reporting = if cycle == 1 { LossReporting::Skip } else { LossReporting::Report };
+            let wrapper = TrainStepInputWrapper::new(split_input);
             let selected = wrapper.select_ref(0, (0..2).into()).await?;
             let mut state = MutexGuard::map(split.train_module.lock().await, |state| &mut state.module);
             let saved_info = state.state_info()?;
@@ -593,21 +621,25 @@ async fn test_train_transaction_cpu() -> Result<(), ThoError> {
                 state.set_state_tensor(&key, tensor, 0)?;
             }
             state.prepare_state(0)?;
-            let actual = split.clone().do_run_with_state(selected.as_ref(), &mut state, &ctx)?.loss;
+            let actual = split.clone().do_run_with_state(selected.as_ref(), &mut state, &ctx)?;
             let mut full_state = MutexGuard::map(full.train_module.lock().await, |state| &mut state.module);
-            let expected = full.clone().do_run_with_state(&input, &mut full_state, &ctx)?.loss;
+            let expected = full.clone().do_run_with_state(&input, &mut full_state, &ctx)?.loss()?;
             // Replaying a committed request (for example after lost acknowledgement)
             // returns its previous result without a second optimizer update.
-            let replay = split.clone().do_run_with_state(selected.as_ref(), &mut state, &ctx)?.loss;
+            let replay = split.clone().do_run_with_state(selected.as_ref(), &mut state, &ctx)?;
             assert_eq!(replay, actual);
-            assert!((actual - expected).abs() < 1e-5, "optimizer={optimizer}, cycle={cycle}: loss differs after retry");
+            if cycle == 1 {
+                assert_eq!(actual, TrainStepOutput::Completed);
+            } else {
+                assert!((actual.loss()? - expected).abs() < 1e-5, "optimizer={optimizer}, cycle={cycle}: loss differs after retry");
+            }
             let valid = uneven_input(false)?;
-            let actual = split.clone().do_run_with_state(&valid, &mut state, &ctx)?.loss;
-            let expected = full.clone().do_run_with_state(&valid, &mut full_state, &ctx)?.loss;
+            let actual = split.clone().do_run_with_state(&valid, &mut state, &ctx)?.loss()?;
+            let expected = full.clone().do_run_with_state(&valid, &mut full_state, &ctx)?.loss()?;
             assert!((actual - expected).abs() < 1e-5, "optimizer={optimizer}, cycle={cycle}: update differs after retry");
         }
         let mut state = MutexGuard::map(split.train_module.lock().await, |state| &mut state.module);
-        let valid = split.clone().do_run_with_state(&uneven_input(false)?, &mut state, &ctx)?.loss;
+        let valid = split.clone().do_run_with_state(&uneven_input(false)?, &mut state, &ctx)?.loss()?;
         split.clone().do_run_with_state(&TrainStepInput::checkpoint()?, &mut state, &ctx)?;
         assert!((checkpoint_loss(checkpoint.path())? - valid).abs() < 1e-5, "final checkpoint differs from validation");
     }

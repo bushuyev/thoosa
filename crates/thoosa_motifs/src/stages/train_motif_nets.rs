@@ -1382,7 +1382,7 @@ mod tests {
     use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::runner::run_ctx::RunCtxImpl;
-    use thoosa_common::stages::train_step::{TrainStep, TrainStepInput, TrainStepXFn};
+    use thoosa_common::stages::train_step::{LossReporting, TrainStep, TrainStepInput, TrainStepOutput, TrainStepXFn};
     use thoosa_common::tch_error::tch_result;
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::tho_tensor::ThoTensor;
@@ -1660,6 +1660,7 @@ mod tests {
                 None,
                 cuda_actor.copy(ThoTensor::new((), tch_result(Tensor::f_zeros([3, 1], FLOAT_CPU))?)?, 1.into()).await?.to_types(debug_id!("3"))?,
                 false,
+                LossReporting::Report,
             ))
         }
 
@@ -1684,18 +1685,18 @@ mod tests {
                 let ctx = RunCtxImpl::new(1, "train_step_ipc");
                 // let before = train_step.clone().do_run(&input, &ctx)?;
                 let before = GlobalCtx::global().execution(1).run_stage(Arc::clone(&train_step), input_0, ctx.tho_device_idx(), &ctx).await?;
-                assert!(before.loss.is_finite());
+                assert!(before.loss()?.is_finite());
 
                 // Reuse worker-owned tensor refs across training and validation to verify
                 // that adapting the wire input preserves both tensors and mutable state.
-                let training_input = TrainStepInput::new(input.x_ref()?.clone_ref()?, input.lengths.clone(), input.expected_y_ref()?.clone_ref()?, true);
+                let training_input = TrainStepInput::new(input.x_ref()?.clone_ref()?, input.lengths.clone(), input.expected_y_ref()?.clone_ref()?, true, LossReporting::Skip);
                 // let trained = train_step.clone().do_run(&training_input, &ctx)?;
                 let trained = GlobalCtx::global().execution(1).run_stage(Arc::clone(&train_step), training_input, ctx.tho_device_idx(), &ctx).await?;
-                assert!(trained.loss.is_finite());
+                assert_eq!(trained, TrainStepOutput::Completed);
                 // let after = train_step.do_run(&input, &ctx)?;
                 let after = GlobalCtx::global().execution(1).run_stage(Arc::clone(&train_step), input, ctx.tho_device_idx(), &ctx).await?;
-                assert!(after.loss.is_finite());
-                assert!((after.loss - before.loss).abs() > f32::EPSILON, "training must update the worker's model: before={} after={}", before.loss, after.loss);
+                assert!(after.loss()?.is_finite());
+                assert!((after.loss()? - before.loss()?).abs() > f32::EPSILON, "training must update the worker's model: before={} after={}", before.loss()?, after.loss()?);
                 Ok(())
             },
             async |sock_path| {

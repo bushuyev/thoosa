@@ -19,7 +19,7 @@ use thoosa_common::nets::batches::AsyncDataBatch;
 use thoosa_common::nets::common_nets::{CommonTrainingRunConfig, OptConfig, WithCommonTrainingRunConfig, opt_train};
 use thoosa_common::parzen::optimizer::CompletedTrial;
 use thoosa_common::runner::purge::CachePurger;
-use thoosa_common::stages::train_step::{TrainStep, TrainStepXFn};
+use thoosa_common::stages::train_step::{LossReporting, TrainStep, TrainStepXFn};
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::utils::TrainListener;
 use thoosa_cpu_data_derive::CpuData;
@@ -261,9 +261,11 @@ where
                 let epoch_result = async {
                     let batches = batch.train_batch_stream(ctx.branch(false));
                     let batch_eta_guard = CollectEtaInvocationGuard::new(&format!("epoch_{idx}_batches_in_{descr}"), batch.num_batches(), 1);
+                    // Training only needs the committed-step acknowledgement for progress.
                     train_step
-                        .run_batches(batches, ctx.branch(false), true, max_other_parallel, prefetch, |_| {
+                        .run_batches(batches, ctx.branch(false), true, LossReporting::Skip, max_other_parallel, prefetch, |_| {
                             collect_eta_record_completion(batch_eta_guard.id());
+                            Ok(())
                         })
                         .await?;
                     let mut valid_loss = None;
@@ -272,9 +274,10 @@ where
                         let mut sum = 0.0;
                         let mut count = 0;
                         train_step
-                            .run_batches(batches, ctx.branch(false), false, max_other_parallel, prefetch, |loss| {
-                                sum += loss;
+                            .run_batches(batches, ctx.branch(false), false, LossReporting::Report, max_other_parallel, prefetch, |output| {
+                                sum += output.loss()?;
                                 count += 1;
+                                Ok(())
                             })
                             .await?;
                         if count > 0 {
