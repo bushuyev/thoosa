@@ -5,7 +5,7 @@ use crate::dims::Dims;
 use crate::ipc::cuda_process;
 use crate::ipc::cuda_process::{DeviceInfo, IPC_SOCK_ENV};
 use crate::ipc::ipc_cuda_utils::recv_fd;
-use crate::ipc::serialization::{PostcardToFromBytes, ToFromBytes};
+use crate::ipc::serialization::{PostcardToFromBytes, ToFromBytes, MessageHeader, decode_failure, message_header};
 use crate::ipc::worker_msg::CudaWorkerId;
 use crate::ipc::worker_msg::{CudaWorkerMsgIn, CudaWorkerMsgOut, DebugOutput, DeviceStatsOutput, OpResult, Operation, WorkerCopyDonePayload, WorkerInput};
 use crate::ipc::wraps::{ErasedWithState, SyncStageIpcWrapper};
@@ -18,7 +18,7 @@ use clap::Parser;
 use dashmap::DashMap;
 use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
-use log::{LevelFilter, debug, info, warn};
+use log::{LevelFilter, debug, error, info, warn};
 use memmap2::{MmapMut, MmapOptions};
 use parking_lot::{Mutex, RwLock};
 use serde::Serialize;
@@ -114,15 +114,23 @@ where
     F: Fn(CudaWorkerMsgIn) -> Fut,
     Fut: std::future::Future<Output = Result<OpResult, ThoError>> + Send + 'static,
 {
-    let (frame_tx, mut frame_rx) = mpsc::channel(2048);
+    let (frame_tx, mut frame_rx) = mpsc::channel::<Result<CudaWorkerMsgIn, (Option<MessageHeader>, ThoError)>>(2048);
     let reader_task = tokio::spawn(async move {
         let mut reader = reader;
         loop {
             let request = match cuda_process::read_frame(&mut reader, "worker requests", cuda_process::MAX_FRAME_LEN).await {
-                Ok(payload) => PostcardToFromBytes::from_bytes::<CudaWorkerMsgIn>(&payload),
+                Ok(payload) => match PostcardToFromBytes::from_bytes::<CudaWorkerMsgIn>(&payload) {
+                    Ok(request) => Ok(request),
+                    Err(error) => {
+                        let header = message_header(&payload).ok().map(|(header, _)| header);
+                        let failure = decode_failure("parent request", &format!("parent; receiving worker pid={} worker={worker_id:?}", std::process::id()), &payload, &error);
+                        Err((header, failure))
+                    }
+                },
                 Err(error) => {
                     warn!("serve_worker_requests: error={error:?}");
-                    Err(error.into())
+                    let failure = if error.kind() == std::io::ErrorKind::InvalidData { ThoError::IpcProtocol(format!("invalid request framing for worker={worker_id:?}: {error}")) } else { error.into() };
+                    Err((None, failure))
                 }
             };
             let failed = request.is_err();
@@ -149,7 +157,25 @@ where
                 joined.expect("nonempty request tasks").context("worker request task failed")??;
             }
             frame = frame_rx.recv() => {
-                let request = frame.context("worker frame reader stopped")??;
+                let request = match frame.context("worker frame reader stopped")? {
+                    Ok(request) => request,
+                    Err((header, failure)) => {
+                        error!("worker request reader failed: {failure:#}");
+                        // Flush a terminal error using the readable header before
+                        // exiting. A bare EOF would hide the decoder bug from the parent.
+                        if failure.is_ipc_protocol_failure() {
+                            // Request zero is reserved for an unreadable header;
+                            // terminal errors close the parent gate even without a waiter.
+                            let request_id = header.map_or(0, |header| header.request_id);
+                            reply_tx.send(CudaWorkerMsgOut { worker_id, request_id, status: failure.clone().into() }).await.context("worker protocol failure writer is closed")?;
+                            request_tasks.abort_all();
+                            // The writer exits after flushing this terminal reply,
+                            // independently of request tasks still unwinding kernels.
+                            writer_task.await.context("worker protocol failure writer task failed")??;
+                        }
+                        return Err(failure.into());
+                    }
+                };
                 debug!("cuda_wokrer::serve_worker_requests: request={request:?}");
                 if request.worker_id == worker_id && matches!(&request.operation, Operation::Shutdown { .. }) {
                     break request.request_id;
@@ -170,7 +196,7 @@ where
                     // This is the only send for an ordinary request. A panic
                     // instead fails this task and the supervisor closes transport.
                     let status = match result { Ok(status) => status, Err(error) => {
-                        warn!("serve_worker_requests: error={error:?}");
+                        if error.is_ipc_protocol_failure() { error!("serve_worker_requests: {error:#}"); } else { warn!("serve_worker_requests: error={error:?}"); }
                         error.into()
                     } };
                     replies.send(CudaWorkerMsgOut { worker_id, request_id, status }).await.context("worker response writer is closed")
@@ -1164,6 +1190,25 @@ mod request_tests {
     async fn receive<R: tokio::io::AsyncRead + Unpin>(reader: &mut R) -> CudaWorkerMsgOut {
         let payload = tokio::time::timeout(Duration::from_secs(3), cuda_process::read_frame(reader, "test reply", cuda_process::MAX_FRAME_LEN)).await.unwrap().unwrap();
         PostcardToFromBytes::from_bytes(&payload).unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_bad_request_payload_sends_terminal_reply_before_exit() {
+        let (mut client, server) = tokio::io::duplex(4096);
+        let (reader, writer) = tokio::io::split(server);
+        let handler = MockRequestHandlerBuilder { calls: 0, run: |_| async { Ok(OpResult::Ok(None)) }.boxed() }.build();
+        let worker = tokio::spawn(serve_worker_requests(reader, writer, worker_id(), move |request| handler.run(request)));
+        let request = CudaWorkerMsgIn::new(worker_id(), 42, Operation::InvokeStage { endpoint_name: "TrainLabelStep".into(), stage_id: None, input: Box::new(()), consume: false });
+        let mut frame = PostcardToFromBytes::to_bytes(&request).unwrap();
+        let start = frame.windows(4).position(|bytes| bytes == b"void").unwrap();
+        frame[start] = b'X';
+        cuda_process::write_frame(&mut client, &frame, "bad request").await.unwrap();
+        let reply = receive(&mut client).await;
+        assert_eq!(reply.request_id, 42);
+        let OpResult::Failed(error) = reply.status else { panic!("expected terminal error") };
+        assert!(error.requires_worker_exit());
+        assert!(ThoError::from(error).is_ipc_protocol_failure());
+        assert!(tokio::time::timeout(Duration::from_secs(3), worker).await.unwrap().unwrap().is_err());
     }
 
     #[tokio::test]

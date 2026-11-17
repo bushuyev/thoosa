@@ -146,6 +146,31 @@ pub enum Operation {
     GetDeviceStats,
 }
 
+impl Operation {
+    // Keep diagnostics small: Debug on the complete request can include large
+    // tensor metadata or initializer payloads. Retain only the operation identity.
+    pub(crate) fn summary(&self) -> String {
+        match self {
+            Self::DescribeRef { tensor_key } => format!("DescribeRef tensor_key={tensor_key}"),
+            Self::H2dCopy { .. } => "H2dCopy".into(),
+            Self::D2hCopy { .. } => "D2hCopy".into(),
+            Self::DropThoTensor { tensor_key } => format!("DropThoTensor tensor_key={tensor_key}"),
+            Self::InstallStage { endpoint_name, stage_id, .. } => format!("InstallStage endpoint={endpoint_name} stage_id={stage_id:?}"),
+            Self::InvokeStage { endpoint_name, stage_id, consume, .. } => format!("InvokeStage endpoint={endpoint_name} stage_id={stage_id:?} consume={consume}"),
+            Self::GetStageStateInfo { endpoint_name, stage_id } => format!("GetStageStateInfo endpoint={endpoint_name} stage_id={stage_id:?}"),
+            Self::PurgeStage { endpoint_name, stage_id } => format!("PurgeStage endpoint={endpoint_name} stage_id={stage_id:?}"),
+            Self::BeginStageStatePurge { endpoint_name, stage_id } => format!("BeginStageStatePurge endpoint={endpoint_name} stage_id={stage_id:?}"),
+            Self::ExportStageTensors { endpoint_name, stage_id, export_id, .. } => format!("ExportStageTensors endpoint={endpoint_name} stage_id={stage_id:?} export_id={export_id}"),
+            Self::FinishStageStatePurge { endpoint_name, stage_id, export_id, .. } => format!("FinishStageStatePurge endpoint={endpoint_name} stage_id={stage_id:?} export_id={export_id}"),
+            Self::ResetStageState { endpoint_name, stage_id, .. } => format!("ResetStageState endpoint={endpoint_name} stage_id={stage_id:?}"),
+            Self::DropStage { endpoint_name, stage_id } => format!("DropStage endpoint={endpoint_name} stage_id={stage_id:?}"),
+            Self::Debug => "Debug".into(),
+            Self::Shutdown { .. } => "Shutdown".into(),
+            Self::GetDeviceStats => "GetDeviceStats".into(),
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CudaWorkerMsgIn {
     pub worker_id: CudaWorkerId,
@@ -188,6 +213,7 @@ enum WorkerErrorKind {
     // Preserve both the OOM cause and the prohibition on replaying a partial update.
     TrainingSessionFailed { original: Box<WorkerError>, recovery: Option<Box<WorkerError>> },
     Data(thoosa_shared::DataErrorKind),
+    IpcProtocol,
 }
 
 impl WorkerErrorKind {
@@ -210,6 +236,7 @@ impl WorkerErrorKind {
             } //TODO add
             ThoError::CudaBeingRecovered => Self::ContextReset,
             ThoError::MissingEndpoint(key) => Self::MissingEndpoint(key.clone()),
+            ThoError::IpcProtocol(_) => Self::IpcProtocol,
             ThoError::SyncStageRunner(SyncStageRunnerError::SubmitErrorClosed) => Self::SubmitErrorClosed,
             ThoError::SyncStageRunner(SyncStageRunnerError::SubmitErrorCancelled) => Self::SubmitErrorCancelled,
             // Job IDs remain in the diagnostic; the parent needs the underlying recovery action.
@@ -232,7 +259,7 @@ impl WorkerError {
     pub(crate) fn requires_worker_exit(&self) -> bool {
         match &self.kind {
             WorkerErrorKind::TrainingSessionFailed { original, recovery } => original.requires_worker_exit() || recovery.as_ref().is_some_and(|error| error.requires_worker_exit()),
-            _ => matches!(self.kind, WorkerErrorKind::Cuda(CudaAction::NeedsRestart) | WorkerErrorKind::CudaRecoveryFailed { .. }),
+            _ => matches!(self.kind, WorkerErrorKind::Cuda(CudaAction::NeedsRestart) | WorkerErrorKind::CudaRecoveryFailed { .. } | WorkerErrorKind::IpcProtocol),
         }
     }
 }
@@ -248,6 +275,7 @@ impl From<WorkerError> for ThoError {
             WorkerErrorKind::NotFound => Self::NotFound(Some("worker".to_string())).context(message),
             WorkerErrorKind::ContextReset => Self::CudaBeingRecovered.context(message),
             WorkerErrorKind::MissingEndpoint(key) => Self::MissingEndpoint(key).context(message),
+            WorkerErrorKind::IpcProtocol => Self::IpcProtocol(message),
             WorkerErrorKind::SubmitErrorClosed => Self::from(SyncStageRunnerError::SubmitErrorClosed).context(message),
             WorkerErrorKind::SubmitErrorCancelled => Self::from(SyncStageRunnerError::SubmitErrorCancelled).context(message),
             WorkerErrorKind::Data(kind) => Self::Data { kind, msg: message },
@@ -296,6 +324,19 @@ impl From<ThoError> for OpResult {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn test_worker_protocol_error_round_trip_stays_terminal() -> anyhow::Result<()> {
+        let error = thoosa_shared::ThoError::IpcProtocol("unknown output type".into()).context("worker request 42");
+        let bytes = postcard::to_allocvec(&super::WorkerError::from(error))?;
+        let restored: super::WorkerError = postcard::from_bytes(&bytes)?;
+        assert!(restored.requires_worker_exit());
+        let restored = thoosa_shared::ThoError::from(restored);
+        assert!(restored.is_ipc_protocol_failure());
+        assert!(!restored.is_oom() && !restored.needs_cuda_recovery());
+        assert!(restored.to_string().contains("worker request 42"));
+        Ok(())
+    }
+
     #[test]
     fn test_worker_data_error_round_trip_preserves_category() -> anyhow::Result<()> {
         use thoosa_shared::{DataErrorKind, ThoError};

@@ -522,7 +522,7 @@ impl SyncStageRunner {
             if let Some(error) = error {
                 debug!("SyncStageRunner::submit: needs_cuda_ctx_reset={} is_cuda_recovery_failed={} recovery={recovery:?}", error.needs_cuda_recovery(), error.is_cuda_recovery_failed());
 
-                if (error.needs_cuda_recovery() || error.is_cuda_recovery_failed())
+                if (error.needs_cuda_recovery() || error.is_cuda_recovery_failed() || error.is_ipc_protocol_failure())
                     && let Some(recovery) = &recovery
                 {
                     retry.clear_exclusive();

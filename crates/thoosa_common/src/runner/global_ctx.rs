@@ -53,10 +53,24 @@ pub struct ResidencyService {
 }
 
 #[derive(Debug)]
-struct RuntimeFailure {
+pub(crate) struct RuntimeFailure {
     shutting_down: AtomicBool,
     failure: tokio::sync::watch::Sender<Option<ThoError>>,
     gates: Vec<Arc<CudaActivityGate>>,
+}
+
+impl RuntimeFailure {
+    pub(crate) fn fail(&self, error: ThoError) {
+        // The command and detached transport work share this notification in
+        // both modes. Close every gate before waking the application shutdown path.
+        self.shutting_down.store(true, Relaxed);
+        for gate in &self.gates {
+            gate.fail_process(error.clone());
+        }
+        self.failure.send_if_modified(|current| {
+            if current.is_some() { false } else { *current = Some(error); true }
+        });
+    }
 }
 
 // Actor, scheduling, and transport installation share one device admission gate.
@@ -180,7 +194,7 @@ impl Runtime {
         });
         let mut devices = vec![DeviceExecutionCtx::cpu()];
         for gate in gates {
-            let ipc_actor = CudaIPCActorHandle::new(Arc::clone(&gate), cuda_worker_args.clone(), arena_fd.try_clone()?).await?;
+            let ipc_actor = CudaIPCActorHandle::new_with_failure(Arc::clone(&gate), cuda_worker_args.clone(), arena_fd.try_clone()?, Some(Arc::clone(&failure))).await?;
             let actor = Arc::new(ipc_actor.clone());
             let handle_enum = CudaActorHandleEnum::Ipc(Arc::clone(&actor));
             let recovery = Self::recovery(Arc::clone(&gate), handle_enum.clone(), Arc::clone(&residency), Arc::clone(&failure));
@@ -227,25 +241,9 @@ impl Runtime {
                 }
                 CudaActorHandleEnum::Local(_) | CudaActorHandleEnum::None => None,
             },
-            // Local CUDA failure affects this process; IPC failure is contained in its worker.
-            if matches!(actor, CudaActorHandleEnum::Local(_)) {
-                Some(Arc::new(move |error| {
-                    failure.shutting_down.store(true, Relaxed);
-                    for gate in &failure.gates {
-                        gate.fail_process(error.clone());
-                    }
-                    failure.failure.send_if_modified(|current| {
-                        if current.is_some() {
-                            false
-                        } else {
-                            *current = Some(error);
-                            true
-                        }
-                    });
-                }))
-            } else {
-                None
-            },
+            // IPC may restart a failed child, but terminal protocol/recovery
+            // failures must wake the same application shutdown path as local CUDA.
+            Some(Arc::new(move |error| failure.fail(error))),
         )
     }
     pub fn is_shutting_down(&self) -> bool {

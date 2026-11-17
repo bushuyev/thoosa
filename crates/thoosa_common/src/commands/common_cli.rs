@@ -182,8 +182,8 @@ where
     let command_result = if let Some(command) = args.command {
         let root_ctx = RunCtxImpl::new_in(&session.runtime, execution_device, "root_ctx");
         debug!("run_common_cli: command={command:?}");
-        // A local CUDA failure can originate in detached copy work even if the
-        // command no longer awaits that request. Still terminate the application.
+        // Local CUDA or terminal IPC failure can originate in detached work even
+        // if the command no longer awaits that request. Still terminate the application.
         tokio::select! {
             biased;
             failure = session.runtime.wait_for_process_failure() => Err(failure.into()),
@@ -200,8 +200,8 @@ where
     t!(session.runtime.shutdown()).await;
 
     let _ = stop_cpu_purge_tx.send(true);
-    // A purge may be waiting for work in the poisoned local process. It must
-    // not delay the application shutdown requested by the recovery coordinator.
+    // A purge may be waiting for failed GPU/IPC work. It must not delay the
+    // application shutdown requested by the recovery coordinator or transport.
     tokio::select! {
         _ = session.runtime.wait_for_process_failure() => {
             purge_cpu_worker.abort();

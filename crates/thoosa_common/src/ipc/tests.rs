@@ -89,7 +89,7 @@ where
 
         main_rt.block_on(async {
             let _ctx = init_ipc_test(module_path).await?;
-            let r = run_ipc_main(main_f, GlobalCtx::global().shutdown()).await;
+            let r = run_ipc_main(main_f, GlobalCtx::global().shutdown(), GlobalCtx::wait_for_process_failure()).await;
             info!("main done: r={r:?}");
 
             info!("main perf:\n{}", format_perf_map(&PERF));
@@ -102,12 +102,20 @@ where
     Ok(())
 }
 
-async fn run_ipc_main(main_f: impl Future<Output = Result<(), ThoError>>, shutdown: impl Future<Output = ()>) -> Result<(), ThoError> {
+async fn run_ipc_main(main_f: impl Future<Output = Result<(), ThoError>>, shutdown: impl Future<Output = ()>, failure: impl Future<Output = ThoError>) -> Result<(), ThoError> {
     use futures_util::FutureExt;
     // Catch panics while polling the main future so unwinding cannot destroy
     // the runtime in the middle of worker retirement or replacement. Preserve
     // the original test failure after the actor has finished cleanup.
-    let result = std::panic::AssertUnwindSafe(main_f).catch_unwind().await;
+    let result = std::panic::AssertUnwindSafe(async {
+        // Match the CLI: detached protocol/recovery failures terminate a heavy
+        // test even when its main future is waiting outside GPU admission.
+        tokio::select! {
+            biased;
+            failure = failure => Err(failure),
+            result = main_f => result,
+        }
+    }).catch_unwind().await;
     shutdown.await;
     match result {
         Ok(result) => result,
@@ -322,6 +330,18 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_process_failure_interrupts_main_and_finishes_shutdown_ipc() {
+        let mut cleaned_up = false;
+        let result = super::run_ipc_main(
+            std::future::pending(),
+            async { cleaned_up = true; },
+            std::future::ready(ThoError::IpcProtocol("bad worker reply".into())),
+        ).await;
+        assert!(result.unwrap_err().is_ipc_protocol_failure());
+        assert!(cleaned_up);
+    }
+
+    #[tokio::test]
     async fn test_main_panic_waits_for_shutdown_ipc() {
         let mut cleaned_up = false;
         let result = std::panic::AssertUnwindSafe(super::run_ipc_main(
@@ -334,6 +354,7 @@ mod tests {
                 tokio::task::yield_now().await;
                 cleaned_up = true;
             },
+            std::future::pending(),
         ))
         .catch_unwind()
         .await;

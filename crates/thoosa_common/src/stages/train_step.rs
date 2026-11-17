@@ -788,9 +788,30 @@ impl<DI: Dims, DO: Dims> SelectRef<TrainStepInputSelector> for TrainStepInputWra
 
 /// Both variants acknowledge completion; only explicit reporting carries a loss.
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
+#[serde(from = "TrainStepWireOutput", into = "TrainStepWireOutput")]
 pub enum TrainStepOutput {
     Completed,
     Loss(f32),
+}
+
+// Internally tagged WorkerOutput must expose named fields to Postcard. Encoding
+// the enum directly makes typetag decode its string variant as an identifier,
+// which Postcard cannot read. Keep the acknowledgement API independent of that wire shape.
+#[derive(Deserialize, Serialize)]
+struct TrainStepWireOutput {
+    loss: Option<f32>,
+}
+
+impl From<TrainStepOutput> for TrainStepWireOutput {
+    fn from(output: TrainStepOutput) -> Self {
+        Self { loss: match output { TrainStepOutput::Completed => None, TrainStepOutput::Loss(loss) => Some(loss) } }
+    }
+}
+
+impl From<TrainStepWireOutput> for TrainStepOutput {
+    fn from(output: TrainStepWireOutput) -> Self {
+        output.loss.map_or(Self::Completed, Self::Loss)
+    }
 }
 
 impl TrainStepOutput {

@@ -442,6 +442,8 @@ pub mod tho_error {
         NotFound(Option<String>),
         // Missing execution infrastructure cannot be treated as an incompatible data item.
         MissingEndpoint(String),
+        // A broken wire contract is an application bug; replacing the worker cannot repair it.
+        IpcProtocol(String),
         SyncStageRunner(SyncStageRunnerError),
         CudaBeingRecovered,
     }
@@ -522,6 +524,7 @@ impl Display for ThoError {
             Self::Anyhow(error) => Display::fmt(error.as_ref(), f),
             Self::NotFound(what) => f.write_str(&format!("{what:?} not found")),
             Self::MissingEndpoint(key) => write!(f, "no initialized endpoint for endpoint_key={key}"),
+            Self::IpcProtocol(message) => write!(f, "terminal IPC protocol failure: {message}"),
             Self::SyncStageRunner(error) => Display::fmt(error, f),
             Self::CudaBeingRecovered => f.write_str("Cuda is being recovered"),
         }
@@ -651,6 +654,16 @@ impl ThoError {
             Self::MissingEndpoint(_) => true,
             Self::TrainingSessionFailed(failure) => failure.original.is_missing_endpoint() || failure.recovery.as_ref().is_some_and(Self::is_missing_endpoint),
             Self::SyncStageRunner(SyncStageRunnerError::JobError { inner, .. }) => inner.is_missing_endpoint(),
+            _ => false,
+        }
+    }
+
+    pub fn is_ipc_protocol_failure(&self) -> bool {
+        match self.what() {
+            Self::IpcProtocol(_) => true,
+            Self::CudaRecoveryFailed(failure) => failure.original.is_ipc_protocol_failure() || failure.recovery.as_ref().is_some_and(Self::is_ipc_protocol_failure),
+            Self::TrainingSessionFailed(failure) => failure.original.is_ipc_protocol_failure() || failure.recovery.as_ref().is_some_and(Self::is_ipc_protocol_failure),
+            Self::SyncStageRunner(SyncStageRunnerError::JobError { inner, .. }) => inner.is_ipc_protocol_failure(),
             _ => false,
         }
     }

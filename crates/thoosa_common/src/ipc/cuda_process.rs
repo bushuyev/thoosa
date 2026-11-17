@@ -4,9 +4,9 @@ use crate::cuda_copier::CudaActorHandle;
 use crate::cuda_utils::tensor_mem_size;
 use crate::ipc::ipc_cuda_utils::send_fd;
 use crate::ipc::proxy::StageStateDump;
-use crate::ipc::serialization::{PostcardToFromBytes, ToFromBytes};
+use crate::ipc::serialization::{PostcardToFromBytes, ToFromBytes, decode_failure, message_header};
 use crate::ipc::worker_msg::{CudaWorkerId, CudaWorkerMsgIn, CudaWorkerMsgOut, DeviceStatsOutput, OpResult, Operation, WorkerCopyDonePayload, WorkerInput};
-use crate::runner::global_ctx::GlobalCtx;
+use crate::runner::global_ctx::{GlobalCtx, RuntimeFailure};
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
 use anyhow::Context as _;
@@ -72,8 +72,22 @@ where
 {
     while let Some(msg) = reply_rx.recv().await {
         trace!("worker_response_writer_loop: msg={msg:?}");
-        write_frame(&mut writer, &PostcardToFromBytes::to_bytes(&msg)? /*TODO move to codec*/, "worker").await?;
+        let terminal = matches!(&msg.status, OpResult::Failed(error) if ThoError::from(error.clone()).is_ipc_protocol_failure());
+        let frame = match PostcardToFromBytes::to_bytes(&msg) {
+            Ok(frame) => frame,
+            Err(error) => {
+                // Send a serializable terminal reply before closing the socket;
+                // otherwise the parent mistakes an encoder bug for worker death.
+                let failure = ThoError::IpcProtocol(format!("worker pid={} encoding response worker={:?} request_id={} status={:?}: {error:#}", std::process::id(), msg.worker_id, msg.request_id, msg.status));
+                error!("{failure:#}");
+                let reply = CudaWorkerMsgOut { worker_id: msg.worker_id, request_id: msg.request_id, status: failure.clone().into() };
+                write_frame(&mut writer, &PostcardToFromBytes::to_bytes(&reply)?, "worker protocol failure").await?;
+                return Err(failure);
+            }
+        };
+        write_frame(&mut writer, &frame, "worker").await?;
         trace!("worker_response_writer_loop: msg out ok");
+        if terminal { return Ok(()); }
     }
     Ok(())
 }
@@ -191,6 +205,7 @@ pub struct CudaIPCActor {
     // Keep an actor-owned descriptor so a reset can map the same parent allocator into the replacement worker.
     arena_fd: OwnedFd,
     release: Option<TensorReleaseHandle>,
+    runtime_failure: Option<Arc<RuntimeFailure>>,
 }
 
 #[derive(Debug)]
@@ -310,7 +325,7 @@ fn unit_reply(response: CudaWorkerMsgOut) -> Result<(), ThoError> {
 }
 
 impl CudaIPCActor {
-    async fn new(gate: Arc<thoosa_shared::CudaActivityGate>, cuda_worker_args: Vec<String>, receiver: mpsc::Receiver<CudaIPCActorMessage>, control: mpsc::UnboundedReceiver<BackendControl>, arena_fd: OwnedFd, release: Option<TensorReleaseHandle>) -> Result<Self, ThoError> {
+    async fn new(gate: Arc<thoosa_shared::CudaActivityGate>, cuda_worker_args: Vec<String>, receiver: mpsc::Receiver<CudaIPCActorMessage>, control: mpsc::UnboundedReceiver<BackendControl>, arena_fd: OwnedFd, release: Option<TensorReleaseHandle>, runtime_failure: Option<Arc<RuntimeFailure>>) -> Result<Self, ThoError> {
         let tho_device_idx = gate.device_idx();
         let cuda_worker_args = Arc::new(cuda_worker_args);
 
@@ -322,6 +337,7 @@ impl CudaIPCActor {
             &cuda_worker_args,
             arena_fd.as_fd(),
             release.clone(),
+            runtime_failure.clone(),
         )
         .await?;
 
@@ -337,6 +353,7 @@ impl CudaIPCActor {
             spawned_state: Some(spawned_state),
             retirement_error: None,
             release: release.clone(),
+            runtime_failure,
             control,
             next_id: Arc::new(AtomicU64::new(1)),
             tho_device_idx,
@@ -345,7 +362,7 @@ impl CudaIPCActor {
         })
     }
 
-    async fn spawn_worker_and_loops(worker_id: CudaWorkerId, cuda_worker_args: &Vec<String>, arena_fd: std::os::fd::BorrowedFd<'_>, release: Option<TensorReleaseHandle>) -> Result<SpawnedState, ThoError> {
+    async fn spawn_worker_and_loops(worker_id: CudaWorkerId, cuda_worker_args: &Vec<String>, arena_fd: std::os::fd::BorrowedFd<'_>, release: Option<TensorReleaseHandle>, runtime_failure: Option<Arc<RuntimeFailure>>) -> Result<SpawnedState, ThoError> {
         info!("CudaIPCActor::spawn_worker_and_loops: cuda_worker_args={cuda_worker_args:?}");
 
         let (child, stream, device_info) = Self::spawn_worker_for_cuda_device(worker_id, cuda_worker_args, arena_fd).await?;
@@ -356,7 +373,11 @@ impl CudaIPCActor {
 
         let (tx, rx): (Sender<CudaWorkerMsgIn>, Receiver<CudaWorkerMsgIn>) = mpsc::channel::<CudaWorkerMsgIn>(2048);
 
-        let pending = Arc::new(PendingRequests::new(worker_id));
+        let mut pending = PendingRequests::new(worker_id);
+        pending.peer_pid = child.id();
+        pending.gate = release.as_ref().map(|owner| Arc::clone(&owner.gate));
+        pending.runtime_failure = runtime_failure;
+        let pending = Arc::new(pending);
         let cancel = CancellationToken::new();
         let writer_handle = tokio::spawn(writer_loop(writer, rx, Arc::clone(&pending), cancel.child_token()));
         let reader_handle = tokio::spawn(reader_loop(reader, Arc::clone(&pending), cancel.child_token(), release));
@@ -459,7 +480,7 @@ impl CudaIPCActor {
         // Retirement can consume the worker before a queued message is handled.
         // Resolve its response without borrowing a missing transport.
         if self.spawned_state.is_none() {
-            Self::reject(msg, ThoError::CudaBeingRecovered);
+            Self::reject(msg, self.gate.failure().unwrap_or(ThoError::CudaBeingRecovered));
             return Ok(());
         }
         let (worker_id, activity) = match &msg {
@@ -989,7 +1010,7 @@ impl CudaIPCActor {
                         device_idx: self.tho_device_idx,
                         generation: thoosa_shared::CudaDeviceGeneration(self.gate.device_generation().0.checked_add(1).expect("worker generation overflow")),
                     };
-                    let replacement = Self::spawn_worker_and_loops(worker_id, &self.cuda_worker_args, self.arena_fd.as_fd(), self.release.clone()).await?;
+                    let replacement = Self::spawn_worker_and_loops(worker_id, &self.cuda_worker_args, self.arena_fd.as_fd(), self.release.clone(), self.runtime_failure.clone()).await?;
                     // Spawning awaits readiness; do not publish a replacement
                     // if recovery authority was revoked during that wait.
                     if let Err(error) = self.gate.check_recovery_authority(authority, true) {
@@ -1012,7 +1033,13 @@ impl CudaIPCActor {
                     Self::reject(message, ThoError::new("CUDA actor is shutting down"));
                 }
                 let result = match self.spawned_state.take() {
-                    Some(worker) => worker.shutdown(self.next_id.fetch_add(1, Ordering::Relaxed)).await,
+                    Some(worker) => match self.gate.failure() {
+                        // Shutdown can win the biased control select before the
+                        // transport-failure branch. Do not wait for an unusable
+                        // reader/writer to acknowledge graceful shutdown.
+                        Some(error) => worker.retire(error).await,
+                        None => worker.shutdown(self.next_id.fetch_add(1, Ordering::Relaxed)).await,
+                    },
                     None => Ok(()),
                 };
                 let _ = respond_to.send(result);
@@ -1091,6 +1118,14 @@ impl CudaIPCActor {
                     let worker = actor.worker();
                     let generation = worker.worker_id.generation;
                     let error = worker.pending.failure();
+                    if error.is_ipc_protocol_failure() {
+                        // Protocol failure is terminal even before a replacement's
+                        // generation is published. Retire below, without a reset.
+                        actor.gate.fail_process(error.clone());
+                        if let Some(failure) = &actor.runtime_failure { failure.fail(error.clone()); }
+                        actor.retire(error).await?;
+                        continue;
+                    }
                     // Restart's acknowledgment precedes coordinator publication.
                     // If the ready child dies in that interval, report against
                     // its published generation instead of discarding it as future.
@@ -1100,9 +1135,8 @@ impl CudaIPCActor {
                             continue;
                         }
                     }
-                    // A broken transport cannot serve or safely release pending
-                    // requests. Replacing this IPC worker is the last resort,
-                    // independent of the original error's CUDA classification.
+                    // Ordinary I/O failures can replace a worker, subject to the
+                    // coordinator's budget. Protocol failures exited above.
                     let cause = error.clone().context("CUDA worker transport is unavailable");
                     debug!("CudaIPCActor::run: cause={cause:?} is_installed={}", GlobalCtx::is_installed());
 
@@ -1111,7 +1145,8 @@ impl CudaIPCActor {
                     } else {
                         // A worker can die while GlobalCtx is still constructing
                         // other devices. Close this gate without using the singleton.
-                        actor.gate.fail_process(cause);
+                        actor.gate.fail_process(cause.clone());
+                        if let Some(failure) = &actor.runtime_failure { failure.fail(cause); }
                     }
                     actor.retire(error).await?;
                 }
@@ -1215,9 +1250,10 @@ where
         let frame = match PostcardToFromBytes::to_bytes(&msg) {
             Ok(frame) => frame,
             Err(e) => {
-                error!("worker IPC writer failed to encode request {request_id}: {e}");
-                pending.finish_one(request_id, Err(ThoError::new(format!("failed to encode request {request_id}: {e}"))));
-                continue;
+                let error = ThoError::IpcProtocol(format!("parent encoding request_id={request_id} {} for {pending:?}: {e:#}", msg.operation.summary()));
+                error!("{error:#}");
+                pending.transport_failed(error);
+                break;
             }
         };
 
@@ -1255,9 +1291,11 @@ where
                 match result {
                     Ok(frame) => frame,
                     Err(e) => {
-                        warn!("worker IPC reader stopped: {e}");
-
-                        pending.transport_failed(ThoError::new(format!("worker IPC reader stopped: {e}")));
+                        let error = if e.kind() == std::io::ErrorKind::InvalidData {
+                            ThoError::IpcProtocol(format!("invalid response framing from {pending:?}: {e}"))
+                        } else { ThoError::new(format!("worker IPC reader stopped for {pending:?}: {e}")) };
+                        if error.is_ipc_protocol_failure() { error!("{error:#}"); } else { warn!("{error:#}"); }
+                        pending.transport_failed(error);
 
                         break;
                     }
@@ -1271,16 +1309,23 @@ where
         } {
             Ok(msg) => {
                 debug!("reader_loop: msg={msg:?}");
+                if let OpResult::Failed(error) = &msg.status {
+                    let error = ThoError::from(error.clone());
+                    if error.is_ipc_protocol_failure() {
+                        error!("terminal reply from {pending:?} request_id={} {}: {error:#}", msg.request_id, pending.describe(msg.request_id));
+                    }
+                }
                 if let Err(error) = pending.complete(msg) {
-                    warn!("reader_loop: error={error:?}");
+                    error!("worker reply rejected for {pending:?}: {error:#}");
                     pending.transport_failed(error);
                     break;
                 }
             }
             Err(e) => {
-                warn!("reader_loop: e={e:?}");
-
-                pending.transport_failed(ThoError::new(format!("bad worker response frame: {e}")));
+                let request = message_header(&frame).map(|(header, _)| pending.describe(header.request_id)).unwrap_or_else(|_| "unknown request".into());
+                let error = decode_failure("worker response", &format!("{pending:?}; {request}"), &frame, &e);
+                error!("{error:#}");
+                pending.transport_failed(error);
                 break;
             }
         }
@@ -1485,6 +1530,10 @@ impl CudaIPCActorHandle {
     }
 
     pub async fn new(gate: Arc<thoosa_shared::CudaActivityGate>, cuda_worker_args: Vec<String>, arena_fd: OwnedFd) -> Result<Self, ThoError> {
+        Self::new_with_failure(gate, cuda_worker_args, arena_fd, None).await
+    }
+
+    pub(crate) async fn new_with_failure(gate: Arc<thoosa_shared::CudaActivityGate>, cuda_worker_args: Vec<String>, arena_fd: OwnedFd, runtime_failure: Option<Arc<RuntimeFailure>>) -> Result<Self, ThoError> {
         let tho_device_id = gate.device_idx();
         debug!("CudaIPCActorHandle::new: tho_device_id={tho_device_id}");
 
@@ -1503,9 +1552,19 @@ impl CudaIPCActorHandle {
                 gate: Arc::clone(&gate),
                 owner_id: release_id,
             }),
+            runtime_failure.clone(),
         )
         .await?;
-        tokio::spawn(CudaIPCActor::run(actor));
+        let failure_gate = Arc::clone(&gate);
+        tokio::spawn(async move {
+            // Detached actor failures must not disappear while the command
+            // awaits work whose transport or retirement has already failed.
+            if let Err(error) = CudaIPCActor::run(actor).await {
+                error!("CUDA IPC actor failed: {error:#}");
+                failure_gate.fail_process(error.clone());
+                if let Some(failure) = runtime_failure { failure.fail(error); }
+            }
+        });
 
         Ok(Self {
             tho_device_idx: tho_device_id,
@@ -2116,10 +2175,73 @@ mod tests {
             assert!(futures::poll!(response.as_mut()).is_pending(), "a malformed reply cannot prove worker access ended");
             pending.exited(ThoError::CudaBeingRecovered);
             let error = tokio::time::timeout(std::time::Duration::from_secs(2), response).await.unwrap().unwrap_err();
-            assert!(matches!(error.what(), ThoError::CudaBeingRecovered));
+            assert!(error.is_ipc_protocol_failure());
             cancel.cancel();
             reader_task.await.unwrap();
         }
+    }
+
+    #[tokio::test]
+    async fn test_response_encoder_failure_sends_terminal_reply() -> anyhow::Result<()> {
+        use super::*;
+        let worker = CudaWorkerId { device_idx: 1, generation: thoosa_shared::CudaDeviceGeneration(7) };
+        // Actual CPU tensors cannot be encoded as remote refs. Exercise a real
+        // encoder failure rather than an artificial Serialize implementation.
+        let output: ThoTensor = ThoTensor::new((), Tensor::f_zeros([1], (tch::Kind::Float, tch::Device::Cpu))?)?;
+        let (tx, rx) = mpsc::channel(1);
+        tx.send(CudaWorkerMsgOut { worker_id: worker, request_id: 42, status: OpResult::Ok(Some(Box::new(output))) }).await.unwrap();
+        let (mut client, writer) = tokio::io::duplex(4096);
+        let writing = tokio::spawn(worker_response_writer_loop(writer, rx));
+        let frame = timeout(Duration::from_secs(3), read_frame(&mut client, "encoder error", MAX_FRAME_LEN)).await??;
+        let reply: CudaWorkerMsgOut = PostcardToFromBytes::from_bytes(&frame)?;
+        assert_eq!(reply.request_id, 42);
+        assert_eq!(reply.worker_id, worker);
+        let OpResult::Failed(error) = reply.status else { panic!("expected terminal encoder error") };
+        assert!(ThoError::from(error).is_ipc_protocol_failure());
+        assert!(writing.await?.unwrap_err().is_ipc_protocol_failure());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_bad_dynamic_reply_reports_request_and_retains_storage_until_exit() {
+        use super::*;
+        use crate::stages::train_step::TrainStepOutput;
+        let worker = CudaWorkerId { device_idx: 1, generation: thoosa_shared::CudaDeviceGeneration(7) };
+        let gate = Arc::new(thoosa_shared::CudaActivityGate::new(1));
+        let mut pending = PendingRequests::new(worker);
+        pending.peer_pid = Some(12345);
+        pending.gate = Some(Arc::clone(&gate));
+        let pending = Arc::new(pending);
+        let (tx, mut requests) = mpsc::channel(1);
+        let (reply, mut response) = oneshot::channel();
+        let storage = Arc::new(vec![0u8; 8]);
+        let weak = Arc::downgrade(&storage);
+        let request = CudaWorkerMsgIn::new(worker, 42, Operation::InvokeStage { endpoint_name: "TrainLabelStep".into(), stage_id: Some("label-7".into()), input: Box::new(()), consume: false });
+        pending.enqueue(tx.reserve().await.unwrap(), request, reply, Some(Box::new(storage)), false).unwrap();
+        requests.recv().await.unwrap();
+        let reply = CudaWorkerMsgOut { worker_id: worker, request_id: 42, status: OpResult::Ok(Some(Box::new(TrainStepOutput::Completed))) };
+        let mut frame = PostcardToFromBytes::to_bytes(&reply).unwrap();
+        let tag = b"TrainStepOutput";
+        let start = frame.windows(tag.len()).position(|bytes| bytes == tag).unwrap();
+        frame[start] = b'X'; // Unknown typetag produces Postcard's generic custom error.
+        let (reader, mut writer) = tokio::io::duplex(4096);
+        write_frame(&mut writer, &frame, "malformed reply").await.unwrap();
+        reader_loop(reader, Arc::clone(&pending), CancellationToken::new(), None).await;
+        let failure = pending.failure();
+        assert!(failure.is_ipc_protocol_failure());
+        assert!(gate.failure().unwrap().is_ipc_protocol_failure());
+        let message = failure.to_string();
+        for expected in ["12345", "request_id=42", "TrainLabelStep", "label-7", "XrainStepOutput", "frame_len=", "first_256_bytes="] {
+            assert!(message.contains(expected), "missing diagnostic {expected}: {message}");
+        }
+        // Neither malformed bytes nor a later reset error certifies DMA ended.
+        pending.transport_failed(ThoError::new("socket reset"));
+        assert!(pending.failure().is_ipc_protocol_failure());
+        assert!(weak.upgrade().is_some());
+        assert!(matches!(response.try_recv(), Err(oneshot::error::TryRecvError::Empty)));
+        pending.exited(ThoError::CudaBeingRecovered);
+        assert!(response.await.unwrap().unwrap_err().is_ipc_protocol_failure());
+        assert!(weak.upgrade().is_none());
     }
 
     #[tokio::test]

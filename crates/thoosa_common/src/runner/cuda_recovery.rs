@@ -1,6 +1,7 @@
 use std::ops::Deref;
+use std::collections::VecDeque;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use futures_util::future::BoxFuture;
 use log::{debug, error, info, warn};
@@ -14,6 +15,8 @@ pub(crate) type RetireFn = Arc<dyn Fn(usize, CudaActivityPauseTicket) -> BoxFutu
 pub(crate) type ProcessFailureFn = Arc<dyn Fn(ThoError) + Send + Sync>;
 const RECOVERY_DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
 const RECOVERY_BACKEND_TIMEOUT: Duration = Duration::from_secs(60);
+const MAX_RECOVERIES_IN_WINDOW: usize = 3;
+const RECOVERY_WINDOW: Duration = Duration::from_secs(60);
 
 #[derive(Debug)]
 struct RecoveryCycle {
@@ -28,7 +31,10 @@ pub(crate) struct CudaRecoveryCoordinator {
     cycle: Mutex<Option<RecoveryCycle>>,
     restart_fn: RestartFn,
     retire: Option<RetireFn>,
-    process_failure: Option<ProcessFailureFn>, //to tear down main process in local mode.
+    process_failure: Option<ProcessFailureFn>,
+    // Keep history outside the per-generation cycle: a fresh child cannot erase
+    // repeated transport failures and restart the same training trial forever.
+    recoveries: Mutex<VecDeque<Instant>>,
     drain_timeout: Duration,
 }
 
@@ -51,6 +57,7 @@ impl CudaRecoveryCoordinator {
             restart_fn,
             retire,
             process_failure,
+            recoveries: Mutex::new(VecDeque::new()),
             drain_timeout: RECOVERY_DRAIN_TIMEOUT,
         })
     }
@@ -83,24 +90,28 @@ impl CudaRecoveryCoordinator {
             cycle.deref()
         );
 
-        if (cause.needs_cuda_recovery() || cause.is_cuda_recovery_failed())
-            && let Some(process_failure) = &self.process_failure
-        {
-            // Local fatal errors or an unsuccessful stream drain invalidate the
-            // process; neither can be repaired by resetting live LibTorch state.
-            // Publish synchronously,
-            // notify the application, and never attempt an in-process repair.
-            // A maintenance cycle may already own the pause. Failure must also
-            // supersede that cycle, without borrowing a non-owner pause ticket.
+        let terminal = cause.is_ipc_protocol_failure()
+            || (self.retire.is_none() && self.process_failure.is_some() && (cause.needs_cuda_recovery() || cause.is_cuda_recovery_failed()));
+        let budget_exhausted = if !terminal && cycle.is_none() {
+            let now = Instant::now();
+            let mut history = self.recoveries.lock();
+            while history.front().is_some_and(|started| now.duration_since(*started) >= RECOVERY_WINDOW) { history.pop_front(); }
+            if history.len() >= MAX_RECOVERIES_IN_WINDOW { true } else { history.push_back(now); false }
+        } else { false };
+        if terminal || budget_exhausted {
+            let cause = if budget_exhausted { cause.context(format!("CUDA device {} exceeded {MAX_RECOVERIES_IN_WINDOW} recovery attempts in {} seconds", gate.device_idx(), RECOVERY_WINDOW.as_secs())) } else { cause };
+            // Terminal reports supersede an active pause and never invoke restart.
+            // Local CUDA cannot be repaired in-process; IPC protocol bugs cannot
+            // be repaired by replacing a child. Drain still cancels queued work.
             gate.fail_process(cause);
-            let failure = gate.failure().expect("failed local CUDA process");
+            let failure = gate.failure().expect("terminal CUDA process failure");
             let task = cycle.take().and_then(|cycle| cycle.task);
             let _ = drain();
             drop(cycle);
             if let Some(task) = task {
                 task.abort();
             }
-            process_failure(failure.clone());
+            if let Some(process_failure) = &self.process_failure { process_failure(failure.clone()); }
             return Err(failure);
         }
         if let Some(recovery) = cycle.as_ref() {
@@ -118,7 +129,10 @@ impl CudaRecoveryCoordinator {
                 error!("CudaRecoveryCoordinator::request: drain failed: e={error:?}");
                 gate.fail_pause(ticket, Some(error));
                 cycle.take();
-                return Err(gate.failure().expect("failed recovery"));
+                let failure = gate.failure().expect("failed recovery");
+                drop(cycle);
+                if let Some(process_failure) = &self.process_failure { process_failure(failure.clone()); }
+                return Err(failure);
             }
         };
 
@@ -205,8 +219,7 @@ impl CudaRecoveryCoordinator {
             cycle.take();
             let failure = self.gate.failure().expect("failed CUDA recovery");
             drop(cycle);
-            // A failed local maintenance operation cannot be repaired by a
-            // successor worker either; terminate the application in this case.
+            // Once recovery itself fails, both modes must notify the application.
             if let Some(process_failure) = &self.process_failure {
                 process_failure(failure);
             }
@@ -243,6 +256,62 @@ mod tests {
         let (tx, rx) = oneshot::channel();
         tx.send(()).unwrap();
         Ok(rx)
+    }
+
+    #[tokio::test]
+    async fn test_protocol_failure_supersedes_active_recovery_without_restarting() {
+        let gate = Arc::new(CudaActivityGate::new(1));
+        let (failure_tx, mut failures) = tokio::sync::mpsc::unbounded_channel();
+        let coordinator = CudaRecoveryCoordinator::with_backend(
+            Arc::clone(&gate),
+            Arc::new(|_| panic!("protocol failure must not restart")),
+            Some(Arc::new(|_, _| panic!("actor owns terminal worker retirement"))),
+            Some(Arc::new(move |error| { failure_tx.send(error).unwrap(); })),
+        );
+        let (_held, pending) = oneshot::channel();
+        let ticket = coordinator.request(gate.device_generation(), ThoError::CudaBeingRecovered, || Ok(pending)).unwrap().unwrap();
+        let error = coordinator.request(gate.device_generation(), ThoError::IpcProtocol("bad reply".into()).context("request 42"), drained).unwrap_err();
+        assert!(error.is_ipc_protocol_failure() && error.is_cuda_recovery_failed());
+        assert!(failures.recv().await.unwrap().is_ipc_protocol_failure());
+        assert!(gate.wait_for_pause_to_finish(ticket).await.unwrap_err().is_ipc_protocol_failure());
+        tokio::task::yield_now().await;
+        assert_eq!(gate.device_generation(), CudaDeviceGeneration(0));
+        assert!(failures.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn test_repeated_worker_recovery_is_bounded_across_generations() {
+        let gate = Arc::new(CudaActivityGate::new(1));
+        let (failure_tx, mut failures) = tokio::sync::mpsc::unbounded_channel();
+        let coordinator = CudaRecoveryCoordinator::with_backend(
+            Arc::clone(&gate),
+            Arc::new(|_| Box::pin(async { Ok(()) })),
+            Some(Arc::new(|_, _| Box::pin(async { Ok(()) }))),
+            Some(Arc::new(move |error| { failure_tx.send(error).unwrap(); })),
+        );
+        // Successful worker replacement is permitted, but cannot reset the budget.
+        for _ in 0..MAX_RECOVERIES_IN_WINDOW {
+            let ticket = coordinator.request(gate.device_generation(), fatal(), drained).unwrap().unwrap();
+            gate.wait_for_pause_to_finish(ticket).await.unwrap();
+        }
+        assert_eq!(gate.device_generation().0, MAX_RECOVERIES_IN_WINDOW as u64);
+        assert!(failures.try_recv().is_err());
+        let error = coordinator.request(gate.device_generation(), fatal(), drained).unwrap_err();
+        assert!(error.is_cuda_recovery_failed() && !error.needs_cuda_recovery());
+        assert!(error.to_string().contains("exceeded 3 recovery attempts"));
+        assert!(failures.recv().await.unwrap().is_cuda_recovery_failed());
+        assert!(gate.check_admission().is_err());
+    }
+
+    #[tokio::test]
+    async fn test_old_recoveries_do_not_exhaust_current_window() {
+        let gate = Arc::new(CudaActivityGate::new(1));
+        let coordinator = CudaRecoveryCoordinator::new(Arc::clone(&gate), Arc::new(|_| Box::pin(async { Ok(()) })));
+        // Seed expired history rather than sleeping for the production window.
+        coordinator.recoveries.lock().extend(std::iter::repeat_n(Instant::now() - RECOVERY_WINDOW, MAX_RECOVERIES_IN_WINDOW));
+        let ticket = coordinator.request(gate.device_generation(), ThoError::CudaBeingRecovered, drained).unwrap().unwrap();
+        gate.wait_for_pause_to_finish(ticket).await.unwrap();
+        assert_eq!(coordinator.recoveries.lock().len(), 1);
     }
 
     #[tokio::test]

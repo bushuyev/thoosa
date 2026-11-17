@@ -1,6 +1,7 @@
 use super::worker_msg::{CudaWorkerId, CudaWorkerMsgIn, CudaWorkerMsgOut};
 use parking_lot::Mutex;
 use std::collections::HashMap;
+use std::sync::Arc;
 use thoosa_shared::ThoError;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
@@ -11,6 +12,7 @@ type Reply = oneshot::Sender<Result<CudaWorkerMsgOut, ThoError>>;
 struct Request {
     reply: Reply,
     keepalive: Option<KeepAlive>,
+    summary: String,
 }
 
 #[derive(Default)]
@@ -43,13 +45,16 @@ impl Drop for State {
 /// in-flight requests: only a checked reply or confirmed child exit can do that.
 pub(super) struct PendingRequests {
     worker: CudaWorkerId,
+    pub peer_pid: Option<u32>,
+    pub gate: Option<Arc<thoosa_shared::CudaActivityGate>>,
+    pub runtime_failure: Option<Arc<crate::runner::global_ctx::RuntimeFailure>>,
     state: Mutex<State>,
     pub failed: CancellationToken,
 }
 
 impl std::fmt::Debug for PendingRequests {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PendingRequests").field("worker", &self.worker).finish_non_exhaustive()
+        f.debug_struct("PendingRequests").field("worker", &self.worker).field("peer_pid", &self.peer_pid).finish_non_exhaustive()
     }
 }
 
@@ -57,6 +62,9 @@ impl PendingRequests {
     pub fn new(worker: CudaWorkerId) -> Self {
         Self {
             worker,
+            peer_pid: None,
+            gate: None,
+            runtime_failure: None,
             state: Mutex::new(State::default()),
             failed: CancellationToken::new(),
         }
@@ -74,7 +82,7 @@ impl PendingRequests {
         if state.requests.contains_key(&request.request_id) {
             return Err(ThoError::new("duplicate worker request identity"));
         }
-        state.requests.insert(request.request_id, Request { reply, keepalive });
+        state.requests.insert(request.request_id, Request { reply, keepalive, summary: request.operation.summary() });
         permit.send(request);
         Ok(())
     }
@@ -93,8 +101,22 @@ impl PendingRequests {
     }
 
     pub fn transport_failed(&self, error: ThoError) {
-        self.close(ThoError::CudaBeingRecovered.context(format!("worker transport failed: {error}")));
+        // A protocol bug must remain terminal, even if a socket failure raced
+        // it. Do not let the transport guard replace it with a reset request.
+        if error.is_ipc_protocol_failure() {
+            self.state.lock().closed = Some(error.clone());
+            // Publish before actor scheduling/recovery can observe a concurrent
+            // socket error and mistake this protocol bug for a restart request.
+            if let Some(gate) = &self.gate { gate.fail_process(error.clone()); }
+            if let Some(failure) = &self.runtime_failure { failure.fail(error); }
+        } else {
+            self.close(ThoError::CudaBeingRecovered.context(format!("worker transport failed: {error}")));
+        }
         self.failed.cancel();
+    }
+
+    pub fn describe(&self, request_id: u64) -> String {
+        self.state.lock().requests.get(&request_id).map(|request| request.summary.clone()).unwrap_or_else(|| "unknown request".into())
     }
 
     pub fn failure(&self) -> ThoError {
@@ -102,7 +124,9 @@ impl PendingRequests {
     }
 
     pub fn complete(&self, response: CudaWorkerMsgOut) -> Result<(), ThoError> {
-        response.worker_id.check(self.worker)?;
+        if response.worker_id != self.worker {
+            return Err(ThoError::IpcProtocol(format!("response worker {:?} does not match {:?}; request_id={} {}", response.worker_id, self.worker, response.request_id, self.describe(response.request_id))));
+        }
         if let super::worker_msg::OpResult::Failed(error) = &response.status
             && error.requires_worker_exit()
         {
@@ -110,13 +134,16 @@ impl PendingRequests {
             // to host storage ended. Report promptly, retain storage until exit.
             let request = {
                 let mut state = self.state.lock();
-                state.closed.get_or_insert_with(|| error.clone().into());
+                let error: ThoError = error.clone().into();
+                if error.is_ipc_protocol_failure() { state.closed = Some(error); } else { state.closed.get_or_insert(error); }
                 let mut request = state.requests.remove(&response.request_id);
                 if let Some(keepalive) = request.as_mut().and_then(|request| request.keepalive.take()) {
                     state.retained.push(keepalive);
                 }
                 request
             };
+            let failure: ThoError = error.clone().into();
+            if failure.is_ipc_protocol_failure() { self.transport_failed(failure); }
             self.failed.cancel();
             if let Some(request) = request {
                 let _ = request.reply.send(Ok(response));
@@ -129,37 +156,41 @@ impl PendingRequests {
 
     pub fn finish_one(&self, id: u64, result: Result<CudaWorkerMsgOut, ThoError>) {
         let request = self.state.lock().requests.remove(&id);
-        if let Some(Request { reply, keepalive }) = request {
+        if let Some(Request { reply, keepalive, .. }) = request {
             drop(keepalive);
             let _ = reply.send(result);
         }
     }
 
     pub fn exited(&self, error: ThoError) {
-        let (requests, retained) = {
+        let (requests, retained, error) = {
             let mut state = self.state.lock();
             state.closed.get_or_insert(error.clone());
+            // An I/O/retirement race must not erase the terminal decoder cause
+            // already published to the gate and application.
+            let error = state.closed.as_ref().filter(|error| error.is_ipc_protocol_failure()).cloned().unwrap_or(error);
             state.exited = true;
-            (std::mem::take(&mut state.requests), std::mem::take(&mut state.retained))
+            (std::mem::take(&mut state.requests), std::mem::take(&mut state.retained), error)
         };
         drop(retained);
-        for (_, Request { reply, keepalive }) in requests {
+        for (_, Request { reply, keepalive, .. }) in requests {
             drop(keepalive);
             let _ = reply.send(Err(error.clone()));
         }
     }
 
     pub fn quarantine(&self, error: ThoError) {
-        let requests = {
+        let (requests, error) = {
             let mut state = self.state.lock();
             state.closed.get_or_insert(error.clone());
+            let error = state.closed.as_ref().filter(|error| error.is_ipc_protocol_failure()).cloned().unwrap_or(error);
             let mut requests = std::mem::take(&mut state.requests);
             for request in requests.values_mut() {
                 if let Some(keepalive) = request.keepalive.take() {
                     state.retained.push(keepalive);
                 }
             }
-            requests
+            (requests, error)
         };
         // Cancellation or an unreapable child must not strand request waiters.
         // Their allocations stay retained (and leak on Drop if exit is unknown).
