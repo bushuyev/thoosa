@@ -267,7 +267,7 @@ where
                 ))
                 .await?;
 
-                info!("SelectMotifsStage::filter_motifs_by_criteria: motif_stats_output={motif_stats_output:?}");
+                debug!("SelectMotifsStage::filter_motifs_by_criteria: motif_stats_output={motif_stats_output:?}");
 
                 let criterion_scores = criteria_constraints
                     .iter()
