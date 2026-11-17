@@ -678,7 +678,12 @@ where
                                     Arc::clone(&resources_1_valid),
                                     Arc::clone(&resources_0_train),
                                     Arc::clone(&resources_0_valid),
-                                    |value| value.size().dim_1(),
+                                    |value| async move {
+                                        // MotifProbability uses AnyMetrics. The aggregate is
+                                        // stretched to the longest detector output, recorded
+                                        // in CPU metadata in both local and IPC modes.
+                                        Ok(value.extra().await?.into_iter().max().unwrap_or(0))
+                                    }.boxed(),
                                     Arc::new(
                                         move |x_1_wrapped: Vec<Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>>, x_0_wrapped: Vec<Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>>, mut ctx: C| {
                                             let label = label.clone();
@@ -771,7 +776,7 @@ where
     resources_0_train: Arc<Vec<Resource>>,
     resources_0_valid: Arc<Vec<Resource>>,
     loader: Arc<L>,
-    sequence_length: fn(&DevicesWrap<LD>) -> i64,
+    sequence_length: for<'a> fn(&'a DevicesWrap<LD>) -> BoxFuture<'a, Result<i64, ThoError>>,
     sequence_lengths: Arc<RwLock<HashMap<u32, i64>>>,
     build_batch_fn: BuildBatchFn<LD, X, Y, C>,
 }
@@ -797,7 +802,7 @@ where
     X: Dims + 'static,
     Y: Dims + 'static,
 {
-    pub fn new(loader: Arc<L>, batch_size: u32, resources_1_train: Arc<Vec<Resource>>, resources_1_valid: Arc<Vec<Resource>>, resources_0_train: Arc<Vec<Resource>>, resources_0_valid: Arc<Vec<Resource>>, sequence_length: fn(&DevicesWrap<LD>) -> i64, build_batch_fn: BuildBatchFn<LD, X, Y, C>) -> Self {
+    pub fn new(loader: Arc<L>, batch_size: u32, resources_1_train: Arc<Vec<Resource>>, resources_1_valid: Arc<Vec<Resource>>, resources_0_train: Arc<Vec<Resource>>, resources_0_valid: Arc<Vec<Resource>>, sequence_length: for<'a> fn(&'a DevicesWrap<LD>) -> BoxFuture<'a, Result<i64, ThoError>>, build_batch_fn: BuildBatchFn<LD, X, Y, C>) -> Self {
         debug!("ResourcesBatch::new: batch_size={batch_size:?}");
         debug!("ResourcesBatch::new: resources_1_train={resources_1_train:?}");
         debug!("ResourcesBatch::new: resources_1_valid={resources_1_valid:?}");
@@ -920,16 +925,15 @@ where
                     .into_iter()
                     // Preserve pair order without constructing an intermediate collection.
                     .unzip::<_, _, Vec<_>, Vec<_>>();
-                {
-                    // DevicesWrap keeps shape metadata on the host in local and
-                    // IPC modes. Retain only lengths, never tensors or leases, and
-                    // release the lock before the batch builder can await/OOM.
-                    let mut lengths = sequence_lengths.write();
-                    for ((index_1, index_0), (value_1, value_0)) in batch_keys.iter().zip(x_1_wrapped.iter().zip(&x_0_wrapped)) {
-                        lengths.insert(x_1[*index_1].id(), sequence_length(value_1));
-                        lengths.insert(x_0[*index_0].id(), sequence_length(value_0));
-                    }
+                // Reading CPU-only metadata may await a resident slot's lock.
+                // Keep tensors managed and acquire the length-map lock only after
+                // those reads, so offload and other batches can still progress.
+                let mut observed_lengths = Vec::with_capacity(batch_len * 2);
+                for ((index_1, index_0), (value_1, value_0)) in batch_keys.iter().zip(x_1_wrapped.iter().zip(&x_0_wrapped)) {
+                    observed_lengths.push((x_1[*index_1].id(), sequence_length(value_1).await?));
+                    observed_lengths.push((x_0[*index_0].id(), sequence_length(value_0).await?));
                 }
+                sequence_lengths.write().extend(observed_lengths);
                 //
                 debug!("ResourcesBatch::build_batch_stream: descr={descr} x_1_wrapped={x_1_wrapped:?} x_0_wrapped={x_0_wrapped:?}");
 
@@ -1090,6 +1094,7 @@ mod tests {
     use parking_lot::RwLock;
     use rand::{RngExt, SeedableRng, rng, rngs::StdRng};
     use std::collections::HashMap;
+    use std::future::ready;
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use tch::Device::Cpu;
@@ -1421,7 +1426,7 @@ mod tests {
             resources_1_valid,
             resources_0_train,
             resources_0_valid,
-            |value| value.size().dim_1(),
+            |value| ready(Ok(value.size().dim_1())).boxed(),
             Arc::new(|x_1_wrapped: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>, x_0_wrapped: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>, ctx: MockRunCtx| {
                 async move {
                     let x_1 = try_join_all(x_1_wrapped.iter().map(|x| x.borrow_ref(ctx.tho_device_idx()))).await?;
@@ -1484,7 +1489,7 @@ mod tests {
             resources_1_valid,
             resources_0_train,
             resources_0_valid,
-            |value| value.size().dim_1(),
+            |value| ready(Ok(value.size().dim_1())).boxed(),
             Arc::new(|x_1_wrapped: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>, x_0_wrapped: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>, ctx: MockRunCtx| {
                 async move {
                     let x_1 = try_join_all(x_1_wrapped.iter().map(|x| x.borrow_ref(ctx.tho_device_idx()))).await?;
