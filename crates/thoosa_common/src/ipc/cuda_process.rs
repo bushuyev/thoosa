@@ -80,14 +80,20 @@ where
                 // otherwise the parent mistakes an encoder bug for worker death.
                 let failure = ThoError::IpcProtocol(format!("worker pid={} encoding response worker={:?} request_id={} status={:?}: {error:#}", std::process::id(), msg.worker_id, msg.request_id, msg.status));
                 error!("{failure:#}");
-                let reply = CudaWorkerMsgOut { worker_id: msg.worker_id, request_id: msg.request_id, status: failure.clone().into() };
+                let reply = CudaWorkerMsgOut {
+                    worker_id: msg.worker_id,
+                    request_id: msg.request_id,
+                    status: failure.clone().into(),
+                };
                 write_frame(&mut writer, &PostcardToFromBytes::to_bytes(&reply)?, "worker protocol failure").await?;
                 return Err(failure);
             }
         };
         write_frame(&mut writer, &frame, "worker").await?;
         trace!("worker_response_writer_loop: msg out ok");
-        if terminal { return Ok(()); }
+        if terminal {
+            return Ok(());
+        }
     }
     Ok(())
 }
@@ -325,7 +331,15 @@ fn unit_reply(response: CudaWorkerMsgOut) -> Result<(), ThoError> {
 }
 
 impl CudaIPCActor {
-    async fn new(gate: Arc<thoosa_shared::CudaActivityGate>, cuda_worker_args: Vec<String>, receiver: mpsc::Receiver<CudaIPCActorMessage>, control: mpsc::UnboundedReceiver<BackendControl>, arena_fd: OwnedFd, release: Option<TensorReleaseHandle>, runtime_failure: Option<Arc<RuntimeFailure>>) -> Result<Self, ThoError> {
+    async fn new(
+        gate: Arc<thoosa_shared::CudaActivityGate>,
+        cuda_worker_args: Vec<String>,
+        receiver: mpsc::Receiver<CudaIPCActorMessage>,
+        control: mpsc::UnboundedReceiver<BackendControl>,
+        arena_fd: OwnedFd,
+        release: Option<TensorReleaseHandle>,
+        runtime_failure: Option<Arc<RuntimeFailure>>,
+    ) -> Result<Self, ThoError> {
         let tho_device_idx = gate.device_idx();
         let cuda_worker_args = Arc::new(cuda_worker_args);
 
@@ -909,7 +923,12 @@ impl CudaIPCActor {
             CudaIPCActorMessage::EnsureStage { respond_to, .. } => {
                 let _ = respond_to.send(Err(error));
             }
-            CudaIPCActorMessage::InvokeStage { respond_to, .. } | CudaIPCActorMessage::InstallStage { respond_to, .. } | CudaIPCActorMessage::DiscardStageState { respond_to, .. } | CudaIPCActorMessage::ResetStageState { respond_to, .. } | CudaIPCActorMessage::DebugWorker { respond_to, .. } | CudaIPCActorMessage::GetDeviceStats { respond_to, .. } => {
+            CudaIPCActorMessage::InvokeStage { respond_to, .. }
+            | CudaIPCActorMessage::InstallStage { respond_to, .. }
+            | CudaIPCActorMessage::DiscardStageState { respond_to, .. }
+            | CudaIPCActorMessage::ResetStageState { respond_to, .. }
+            | CudaIPCActorMessage::DebugWorker { respond_to, .. }
+            | CudaIPCActorMessage::GetDeviceStats { respond_to, .. } => {
                 let _ = respond_to.send(Err(error));
             }
             CudaIPCActorMessage::PurgeStage { respond_to, .. } => {
@@ -1141,7 +1160,7 @@ impl CudaIPCActor {
                     debug!("CudaIPCActor::run: cause={cause:?} is_installed={}", GlobalCtx::is_installed());
 
                     if GlobalCtx::is_installed() {
-                        let _ = GlobalCtx::global().get_runner(actor.gate.device_idx()).request_cuda_reset_for_generation(generation, cause);
+                        let _ = GlobalCtx::global().get_runner(actor.gate.device_idx()).report_failure_for_generation(generation, cause);
                     } else {
                         // A worker can die while GlobalCtx is still constructing
                         // other devices. Close this gate without using the singleton.
@@ -1562,7 +1581,9 @@ impl CudaIPCActorHandle {
             if let Err(error) = CudaIPCActor::run(actor).await {
                 error!("CUDA IPC actor failed: {error:#}");
                 failure_gate.fail_process(error.clone());
-                if let Some(failure) = runtime_failure { failure.fail(error); }
+                if let Some(failure) = runtime_failure {
+                    failure.fail(error);
+                }
             }
         });
 
@@ -2184,12 +2205,21 @@ mod tests {
     #[tokio::test]
     async fn test_response_encoder_failure_sends_terminal_reply() -> anyhow::Result<()> {
         use super::*;
-        let worker = CudaWorkerId { device_idx: 1, generation: thoosa_shared::CudaDeviceGeneration(7) };
+        let worker = CudaWorkerId {
+            device_idx: 1,
+            generation: thoosa_shared::CudaDeviceGeneration(7),
+        };
         // Actual CPU tensors cannot be encoded as remote refs. Exercise a real
         // encoder failure rather than an artificial Serialize implementation.
         let output: ThoTensor = ThoTensor::new((), Tensor::f_zeros([1], (tch::Kind::Float, tch::Device::Cpu))?)?;
         let (tx, rx) = mpsc::channel(1);
-        tx.send(CudaWorkerMsgOut { worker_id: worker, request_id: 42, status: OpResult::Ok(Some(Box::new(output))) }).await.unwrap();
+        tx.send(CudaWorkerMsgOut {
+            worker_id: worker,
+            request_id: 42,
+            status: OpResult::Ok(Some(Box::new(output))),
+        })
+        .await
+        .unwrap();
         let (mut client, writer) = tokio::io::duplex(4096);
         let writing = tokio::spawn(worker_response_writer_loop(writer, rx));
         let frame = timeout(Duration::from_secs(3), read_frame(&mut client, "encoder error", MAX_FRAME_LEN)).await??;
@@ -2206,7 +2236,10 @@ mod tests {
     async fn test_bad_dynamic_reply_reports_request_and_retains_storage_until_exit() {
         use super::*;
         use crate::stages::train_step::TrainStepOutput;
-        let worker = CudaWorkerId { device_idx: 1, generation: thoosa_shared::CudaDeviceGeneration(7) };
+        let worker = CudaWorkerId {
+            device_idx: 1,
+            generation: thoosa_shared::CudaDeviceGeneration(7),
+        };
         let gate = Arc::new(thoosa_shared::CudaActivityGate::new(1));
         let mut pending = PendingRequests::new(worker);
         pending.peer_pid = Some(12345);
@@ -2216,10 +2249,23 @@ mod tests {
         let (reply, mut response) = oneshot::channel();
         let storage = Arc::new(vec![0u8; 8]);
         let weak = Arc::downgrade(&storage);
-        let request = CudaWorkerMsgIn::new(worker, 42, Operation::InvokeStage { endpoint_name: "TrainLabelStep".into(), stage_id: Some("label-7".into()), input: Box::new(()), consume: false });
+        let request = CudaWorkerMsgIn::new(
+            worker,
+            42,
+            Operation::InvokeStage {
+                endpoint_name: "TrainLabelStep".into(),
+                stage_id: Some("label-7".into()),
+                input: Box::new(()),
+                consume: false,
+            },
+        );
         pending.enqueue(tx.reserve().await.unwrap(), request, reply, Some(Box::new(storage)), false).unwrap();
         requests.recv().await.unwrap();
-        let reply = CudaWorkerMsgOut { worker_id: worker, request_id: 42, status: OpResult::Ok(Some(Box::new(TrainStepOutput::Completed))) };
+        let reply = CudaWorkerMsgOut {
+            worker_id: worker,
+            request_id: 42,
+            status: OpResult::Ok(Some(Box::new(TrainStepOutput::Completed))),
+        };
         let mut frame = PostcardToFromBytes::to_bytes(&reply).unwrap();
         let tag = b"TrainStepOutput";
         let start = frame.windows(tag.len()).position(|bytes| bytes == tag).unwrap();

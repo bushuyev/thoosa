@@ -813,10 +813,13 @@ where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     pub fn throttle_and_offload(step: crate::runner::adjusters::max_parallel::MaxParallelStep, descr: &str) -> Self {
-        Self::new(vec![
-            Adjusters::RunContext(run_ctx_adjuster(crate::runner::adjusters::max_parallel::MaxParallelAdjuster::<C>::new(*step))),
-            Adjusters::RunContext(run_ctx_adjuster(crate::runner::adjusters::dump_to_cpu::DumpToCpu::<C>::new(descr))),
-        ], None)
+        Self::new(
+            vec![
+                Adjusters::RunContext(run_ctx_adjuster(crate::runner::adjusters::max_parallel::MaxParallelAdjuster::<C>::new(*step))),
+                Adjusters::RunContext(run_ctx_adjuster(crate::runner::adjusters::dump_to_cpu::DumpToCpu::<C>::new(descr))),
+            ],
+            None,
+        )
     }
 }
 
@@ -1766,7 +1769,7 @@ mod tests {
                 _ = received => {}
             }
             let executor = super::oom_executor(1);
-            let ticket = executor.request_cuda_reset(ThoError::CudaBeingRecovered).unwrap().unwrap();
+            let ticket = executor.request_failure(ThoError::CudaBeingRecovered).unwrap().unwrap();
             assert!(matches!(run.await.unwrap_err().what(), ThoError::CudaBeingRecovered));
             executor.cuda_gate().unwrap().wait_for_pause_to_finish(ticket).await.unwrap();
             executor.submit(0, async { Ok(()) }, None).await.unwrap();

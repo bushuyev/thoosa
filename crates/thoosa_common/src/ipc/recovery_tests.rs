@@ -223,7 +223,7 @@ fn test_endpoint_install_cancellation_and_drop_during_reset_ipc() -> Result<(), 
                 let retryable = actor.register_stage(worker, ENDPOINT.into(), Some("oom".into()), input(RecoveryAction::OomOnce { marker: marker.clone() })).await?;
                 actor.ensure_stage(retryable.clone(), worker).await?;
                 std::fs::remove_file(marker)?;
-                global.get_runner(1).request_cuda_reset(ThoError::CudaBeingRecovered)?;
+                global.get_runner(1).request_failure(ThoError::CudaBeingRecovered)?;
                 assert!(gate.is_paused());
                 drop(owner);
                 gate.wait_if_paused().await?;
