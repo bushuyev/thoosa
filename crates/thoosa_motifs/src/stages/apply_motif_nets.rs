@@ -87,7 +87,12 @@ use thoosa_shared::{CopyToDevice, FuturesOrdering, ThoError, collect_futures_wit
 use thoosa_store::{TrainedNet, TrainedNetsBy};
 use tokio::sync::MutexGuard;
 
+pub(crate) mod cosine_group;
+use cosine_group::{ApplyCosineGroup, MAX_COSINE_GROUP, Probabilities};
+
 pub const APPLY_MOTIF_NET_ENDPOINT: &str = "APPLY_MOTIF_NET_ENDPOINT";
+
+type MotifFilter<C> = Option<(RunConfigId, Arc<FreqFilter<C>>)>;
 
 #[derive(Debug, cached_derive::Cached, Named)]
 pub struct ApplyMotifNets<C>
@@ -95,11 +100,12 @@ where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     id: SynKey,
-    #[expect(dead_code, reason = "Retains the shared owner for the lifetime of this stage or input.")]
     ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
     #[expect(dead_code, reason = "Retains the shared owner for the lifetime of this stage or input.")]
     store: Arc<dyn MotifsStore>,
-    apply_motif_nets: Vec<(u32 /*net_id*/, Option<(RunConfigId, Arc<FreqFilter<C>>)>, Arc<ApplyMotifNet<C>>)>,
+    motif_nets_ids: Vec<u32>,
+    apply_motif_nets: Vec<(u32, MotifFilter<C>, Arc<ApplyMotifNet<C>>)>,
+    cosine_groups: Vec<(MotifFilter<C>, Arc<ApplyCosineGroup<C>>)>,
     pub slice_step: u32,
     // pub motif_width:u32,
     stack_applied_motif_nets: Arc<DynSyncStageEnum<StackAppliedMotifNets<C>>>,
@@ -323,14 +329,21 @@ where
     {
         // Store order must not prevent labels with the same models from sharing an aggregate.
         // Feature rows still follow (motif_id, net_id) order in run; scan and quantization remain distinct.
-        let mut trained_net_ids = trained_nets.iter().map(|net| net.id).collect::<Vec<_>>();
+        if slice_step == 0 {
+            return Err(ThoError::new("motif inference slice_step must be positive"));
+        }
+        let motif_nets_ids = trained_nets.iter().map(|net| net.id).collect::<Vec<_>>();
+        let mut trained_net_ids = motif_nets_ids.clone();
         trained_net_ids.sort_unstable();
         let id = &SynKey::new([mono_key!(APPLY_MOTIF_NETS, "ApplyMotifNets"), mono_key!(slice_step, "slice_step"), mono_key!(quantize, "quantize")]) + &SynKey::new(trained_net_ids.into_iter().map(|id| mono_key!(id, format!("trained_net_id_{id}"))).collect::<Vec<_>>());
 
         let stack_applied_motif_nets = StackAppliedMotifNets::<C>::new(stage_ctx.tho_device_idx().into()).await?;
 
-        let mut apply_motif_nets = vec![];
-        for trained_net in trained_nets.into_iter() {
+        let mut single_models = Vec::new();
+        let mut group_candidates: HashMap<_, (MotifFilter<C>, Vec<ApplyMotifNetInit>)> = HashMap::new();
+        // Keep per-detector diagnostics and restart injection on the original path.
+        let can_batch = _fail_if_size_bigger_than.is_none() && !cfg!(feature = "test-restart-hooks") && !thoosa_common::utils::debug_plots_enabled();
+        for trained_net in trained_nets {
             let trained_net_id = trained_net.id;
             let (channel, motif_id) = crate::motifs_ws::parse_motif_path(&trained_net.net_path)?;
 
@@ -346,43 +359,65 @@ where
                 }
             };
 
-            apply_motif_nets.push((
+            let init = ApplyMotifNetInit::new(
                 trained_net_id,
-                maybe_freq_filter,
-                ApplyMotifNet::new(
-                    ApplyMotifNetInit::new(
-                        trained_net_id,
-                        slice_step,
-                        trained_net.net_path,
-                        channel,
-                        motif_id,
-                        quantize,
-                        #[cfg(test)]
-                        _fail_if_size_bigger_than,
-                    ),
-                    stage_ctx.branch(true),
-                    ws,
-                )
-                .await?,
-            ));
+                slice_step,
+                trained_net.net_path,
+                channel,
+                motif_id,
+                quantize,
+                #[cfg(test)]
+                _fail_if_size_bigger_than,
+            );
+            if can_batch {
+                let (params, _) = ws.read().load_motif_net(&init.motif_net_path, &Cpu, quantize, false)?;
+                let width = params.num_features();
+                if width > 0 && matches!(params.net_type, crate::train_nets::MotifNetTypeParams::CosineNetParams(_)) {
+                    let key = (maybe_freq_filter.as_ref().map(|filter| filter.0), channel, width, slice_step, quantize);
+                    group_candidates.entry(key).or_insert_with(|| (maybe_freq_filter.clone(), Vec::new())).1.push(init);
+                    continue;
+                }
+            }
+            single_models.push((maybe_freq_filter, init));
+        }
+
+        let mut cosine_groups = Vec::new();
+        for ((_, _, width, _, _), (filter, mut models)) in group_candidates {
+            // Canonical membership gives equivalent detector sets the same group cache keys.
+            models.sort_by_key(|model| (model.motif_id, model.trained_net_id));
+            for group in models.chunks(MAX_COSINE_GROUP) {
+                if group.len() > 1
+                    && let Some(stage) = ApplyCosineGroup::try_new(group, width, stage_ctx.tho_device_idx(), Arc::clone(ws)).await?
+                {
+                    cosine_groups.push((filter.clone(), stage));
+                } else {
+                    single_models.extend(group.iter().cloned().map(|model| (filter.clone(), model)));
+                }
+            }
+        }
+        let mut apply_motif_nets = Vec::with_capacity(single_models.len());
+        for (filter, init) in single_models {
+            apply_motif_nets.push((init.trained_net_id, filter, ApplyMotifNet::new(init, stage_ctx.branch(true), ws).await?));
         }
 
         Ok(Self {
             id,
             ws: Arc::clone(&ws),
             store: Arc::clone(&store),
+            motif_nets_ids,
             apply_motif_nets,
+            cosine_groups,
             slice_step,
             stack_applied_motif_nets,
         })
     }
 
     pub fn num_nets(&self) -> usize {
-        self.apply_motif_nets.len()
+        self.motif_nets_ids.len()
     }
 
     pub fn motif_nets_ids(&self) -> Vec<u32> {
-        self.apply_motif_nets.iter().map(|(id, ..)| *id).collect()
+        self.motif_nets_ids.clone()
     }
 }
 
@@ -401,57 +436,67 @@ where
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "ApplyMotifNets::run"))]
     async fn run(self: Arc<Self>, input: Self::In<'static>, mut ctx: Self::Ctx) -> Result<Self::Out, ThoError> {
-        let _device_idx = ctx.tho_device_idx();
-
-        debug!("ApplyMotifNets::run: self.loaded_motif_nets.len={:?} input={input:?}", self.apply_motif_nets.len());
-
-        let apply_motif_nets = self.apply_motif_nets.clone();
-        let apply_motif_nets_len = apply_motif_nets.len();
-        let mut inputs_by_filter_group: HashMap<Option<RunConfigId>, Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>> = HashMap::new();
-        inputs_by_filter_group.insert(None, Arc::clone(&input));
-
-        for (_net_id, freq_filter_find_motifs_run_config_id_freq_filter, apply_motif_net) in &apply_motif_nets {
-            let group_key = freq_filter_find_motifs_run_config_id_freq_filter.as_ref().map(|v| v.0);
-            if inputs_by_filter_group.contains_key(&group_key) {
-                continue;
+        let mut inputs_by_filter_group = HashMap::from([(None, Arc::clone(&input))]);
+        let filters = self.apply_motif_nets.iter().map(|(_, filter, _)| filter).chain(self.cosine_groups.iter().map(|(filter, _)| filter));
+        for (id, filter) in filters.flatten() {
+            if let std::collections::hash_map::Entry::Vacant(entry) = inputs_by_filter_group.entry(Some(*id)) {
+                entry.insert(t!(Arc::clone(filter).run_cached(Arc::clone(&input), ctx.branch(true))).await?);
             }
-            let filtered_input: Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>> = match &freq_filter_find_motifs_run_config_id_freq_filter.as_ref().map(|v| Arc::clone(&v.1)) {
-                Some(freq_filter) => {
-                    debug!(
-                        "ApplyMotifNets::run: freq_filter={freq_filter:?} motif_id={:?} apply_motif_net.freq_filter_find_motifs_run_config_id={:?}",
-                        apply_motif_net.motif_id(),
-                        freq_filter_find_motifs_run_config_id_freq_filter
-                    );
-
-                    t!(freq_filter.clone().run_cached(Arc::clone(&input), ctx.branch(true))).await?
-                }
-                None => {
-                    debug!("ApplyMotifNets::run: no freq_filter for  motif_id={:?}", apply_motif_net.motif_id());
-                    Arc::clone(&input)
-                }
-            };
-            inputs_by_filter_group.insert(group_key, filtered_input);
         }
 
-        // Each result owns its eviction registration while other nets run.
-        let futures = apply_motif_nets.into_iter().map(|(net_id, filter, stage)| {
-            let group_key = filter.map(|v| v.0);
-            let filtered_input = inputs_by_filter_group.get(&group_key).cloned().expect("filtered input for group must exist");
+        // Each output owns its eviction registration while other scans run.
+        type ScanResults = Vec<(Vec<(u32, u32)>, Probabilities)>;
+        let mut futures: Vec<BoxFuture<'static, Result<ScanResults, ThoError>>> = Vec::new();
+        for (net_id, filter, stage) in &self.apply_motif_nets {
+            let filtered = Arc::clone(&inputs_by_filter_group[&filter.as_ref().map(|(id, _)| *id)]);
+            let stage = Arc::clone(stage);
+            let key = (stage.motif_id(), *net_id);
             let run_ctx = ctx.branch(true);
-            async move {
-                let motif_id = stage.motif_id();
-                let output = stage.run_cached(filtered_input, run_ctx).await?;
-                Ok((motif_id, net_id, output))
-            }
-        });
-        let mut motif_nets_applied = t!(collect_futures_with_progress(futures, apply_motif_nets_len, FuturesOrdering::Unordered, thoosa_shared::CollectionErrorPolicy::Propagate, "ApplyMotifNets::run",)).await?;
+            futures.push(async move {
+                Ok(vec![(vec![key], stage.run_cached(filtered, run_ctx).await?)])
+            }.boxed());
+        }
+        for (filter, group) in &self.cosine_groups {
+            let filtered = Arc::clone(&inputs_by_filter_group[&filter.as_ref().map(|(id, _)| *id)]);
+            let mut run_ctx = ctx.branch(true);
+            let group = Arc::clone(group);
+            let ws = Arc::clone(&self.ws);
+            futures.push(async move {
+                match Arc::clone(&group).run_cached(Arc::clone(&filtered), run_ctx.branch(true)).await {
+                    Ok(output) => Ok(vec![(group.models.iter().map(|model| (model.motif_id, model.trained_net_id)).collect(), output)]),
+                    Err(error) if !error.needs_cuda_recovery() && !error.is_cuda_recovery_failed()
+                        && (error.is_oom() || error.data_error_kind() == Some(thoosa_shared::DataErrorKind::OOMHandlingFailed)) =>
+                    {
+                        // Reuse the individual stage's step-aligned input splitting
+                        // if throttling and offloading could not fit the group.
+                        let mut outputs = Vec::with_capacity(group.models.len());
+                        for model in &group.models {
+                            let stage = ApplyMotifNet::new(model.clone(), run_ctx.branch(true), &ws).await?;
+                            let output = stage.run_cached(Arc::clone(&filtered), run_ctx.branch(true)).await?;
+                            outputs.push((vec![(model.motif_id, model.trained_net_id)], output));
+                        }
+                        Ok(outputs)
+                    }
+                    Err(error) => Err(error),
+                }
+            }.boxed());
+        }
+        let count = futures.len();
+        let scans = t!(collect_futures_with_progress(futures.into_iter(), count, FuturesOrdering::Unordered, thoosa_shared::CollectionErrorPolicy::Propagate, "ApplyMotifNets::run")).await?;
 
-        debug!("ApplyMotifNets::run: motif_nets_applied.len={} motif_nets_applied={motif_nets_applied:?}", motif_nets_applied.len());
-        // Existing label models expect motif-id order, independently of inference cache identity.
-        motif_nets_applied.sort_by_key(|(motif_id, net_id, _)| (*motif_id, *net_id));
+        // Stack in the established (motif_id, net_id) order. Carry a single
+        // reference per group and select its rows on the execution side.
+        let mut rows = Vec::with_capacity(self.num_nets());
+        let mut blocks = Vec::new();
+        for (keys, output) in scans.into_iter().flatten() {
+            rows.extend(keys.into_iter().enumerate().map(|(row, key)| (key, (blocks.len(), row))));
+            blocks.push(output);
+        }
+        rows.sort_by_key(|(key, _)| *key);
         let stack_input = Arc::new(StackAppliedMotifNetsInputWrapper {
             id: self.out_id(input.id()),
-            motif_nets_applied: motif_nets_applied.into_iter().map(|(_, _, output)| output).collect(),
+            motif_nets_applied: blocks,
+            rows: rows.into_iter().map(|(_, source)| source).collect(),
         });
 
         let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::throttle_and_offload(MaxParallelStep::FAST, "stack_apply_motif_nets");
@@ -480,6 +525,7 @@ pub struct StackAppliedMotifNetsInput<'a> {
     id: SynKey,
     device_idx: usize,
     motif_nets_applied: Vec<ThoDataRef<'a, ThoTensor<MotifProbability, SynKey>>>,
+    rows: Vec<(usize, usize)>,
 }
 
 impl WorkerStageInput for StackAppliedMotifNetsInput<'_> {
@@ -489,6 +535,7 @@ impl WorkerStageInput for StackAppliedMotifNetsInput<'_> {
             id: self.id.clone(),
             device_idx: self.device_idx,
             motif_nets_applied: tensors,
+            rows: self.rows.clone(),
         }))
     }
 
@@ -498,6 +545,7 @@ impl WorkerStageInput for StackAppliedMotifNetsInput<'_> {
             id: self.id.clone(),
             device_idx: self.device_idx,
             motif_nets_applied: tensors,
+            rows: self.rows.clone(),
         })
     }
 }
@@ -517,7 +565,7 @@ impl Data for StackAppliedMotifNetsInput<'_> {
     type Metrics = MonoMetrics<0, 1>;
 
     fn size(&self) -> Self::Metrics {
-        self.motif_nets_applied.len().into()
+        self.rows.len().into()
     }
     fn tho_device_idx(&self) -> usize {
         self.device_idx
@@ -534,6 +582,7 @@ impl Adjustable for StackAppliedMotifNetsInput<'_> {}
 struct StackAppliedMotifNetsInputWrapper {
     id: SynKey,
     motif_nets_applied: Vec<Arc<DevicesWrap<ThoTensor<MotifProbability, SynKey>>>>,
+    rows: Vec<(usize, usize)>,
 }
 
 impl BorrowRef for StackAppliedMotifNetsInputWrapper {
@@ -555,6 +604,7 @@ impl BorrowRef for StackAppliedMotifNetsInputWrapper {
             id: self.id.clone(),
             device_idx: to_device_idx,
             motif_nets_applied: tensors,
+            rows: self.rows.clone(),
         })
     }
 }
@@ -595,6 +645,7 @@ where
                         id: SynKey::new(vec![]),
                         device_idx: device.tho_device_idx(),
                         motif_nets_applied: Vec::new(),
+                        rows: Vec::new(),
                     };
                     Ok(Arc::new(DynSyncStageEnum::Proxy {
                         stage: Arc::new(ProxyStage::proxy_recreatable(STACK_APPLIED_MOTIF_NETS_ENDPOINT, Some(0.to_string()), device.tho_device_idx(), Box::new(init)).await?),
@@ -640,19 +691,31 @@ where
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "StackAppliedMotifNets::do_run"))]
     fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         let tensors = &input.motif_nets_applied;
-        let lengths = tensors.iter().map(|tensor| tensor.as_ref().size()[0]).collect::<Vec<_>>();
+        let shapes = tensors.iter().map(|tensor| tensor.as_ref().size()).collect::<Vec<_>>();
+        let lengths = input.rows.iter().map(|&(block, row)| match shapes.get(block).map(Vec::as_slice) {
+            Some([len]) if row == 0 => Ok(*len),
+            Some([rows, len]) if row < *rows as usize => Ok(*len),
+            _ => Err(ThoError::new(format!("invalid motif stack source block={block} row={row}"))),
+        }).collect::<Result<Vec<_>, _>>()?;
         debug!("StackAppliedMotifNets::do_run: lengths={lengths:?}");
         let max_len = lengths.iter().copied().max().unwrap_or(0);
         let options = tensors.first().map(|tensor| (tensor.as_ref().kind(), tensor.as_ref().tho_device().into())).unwrap_or((Float, ThoDevice::from(input.device_idx).into()));
-        let output = tch_result(Tensor::f_zeros([tensors.len() as i64, max_len], options))?;
-        for (row, tensor) in tensors.iter().enumerate() {
+        let output = tch_result(Tensor::f_zeros([input.rows.len() as i64, max_len], options))?;
+        for (row, &(block, source_row)) in input.rows.iter().enumerate() {
             // Only the new aggregate is written; cached per-net probabilities remain reusable.
-            let source = tensor.as_ref().local()?;
+            let tensor = tensors[block].as_ref().local()?;
+            let selected;
+            let source = if shapes[block].len() == 2 {
+                selected = tch_result(tensor.f_get(source_row as i64))?;
+                &selected
+            } else {
+                &*tensor
+            };
             let stretched;
             let source = if source.size()[0] == max_len {
-                &*source
+                source
             } else {
-                stretched = stretch(&source, max_len as usize, 0)?;
+                stretched = stretch(source, max_len as usize, 0)?;
                 &stretched
             };
             tch_result(tch_result(output.f_get(row as i64))?.f_copy_(source))?;

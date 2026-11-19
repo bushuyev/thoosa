@@ -1,6 +1,7 @@
 //! Worker endpoint composition belongs to the feature backend, independent of CLI commands.
 use crate::stages::apply_label_nets::{APPLY_LABEL_NET_ENDPOINT, STACK_APPLIED_LABEL_NETS_ENDPOINT, apply_label_net_endpoint_init, stack_applied_label_nets_init};
 use crate::stages::apply_motif_nets::{APPLY_MOTIF_NET_ENDPOINT, STACK_APPLIED_MOTIF_NETS_ENDPOINT, apply_motif_net_endpoint_init, stack_applied_motif_nets_init};
+use crate::stages::apply_motif_nets::cosine_group::{APPLY_COSINE_GROUP_ENDPOINT, apply_cosine_group_init};
 use crate::stages::cross_batch_clc::{CROSS_UNFOLD_CLC_ENDPOINT, sync_cross_unfold_clc_endpoint_init};
 use crate::stages::motif_stats::{MOTIF_STATS_CONSUME_ENDPOINT, MOTIF_STATS_SYNC_ENDPOINT, motif_stats_consume_stage_endpoint_init, motif_stats_sync_stage_endpoint_init};
 use crate::stages::prepare_cross_batch::{PREPARE_CROSS_BATCH_ENDPOINT, prepare_cross_batch_endpoint_init};
@@ -52,6 +53,7 @@ pub fn cuda_worker_endpoint_inits() -> HashMap<String, MotifsInitFn> {
         (MOTIF_STATS_CONSUME_ENDPOINT.to_string(), Box::new(motif_stats_consume_stage_endpoint_init) as MotifsInitFn),
         (SYNC_FREQ_FILTER_ENDPOINT.to_string(), Box::new(sync_freq_filter_endpoint_init) as MotifsInitFn),
         (APPLY_MOTIF_NET_ENDPOINT.to_string(), Box::new(apply_motif_net_endpoint_init) as MotifsInitFn),
+        (APPLY_COSINE_GROUP_ENDPOINT.to_string(), Box::new(apply_cosine_group_init) as MotifsInitFn),
         (APPLY_LABEL_NET_ENDPOINT.to_string(), Box::new(apply_label_net_endpoint_init) as MotifsInitFn),
         (STACK_APPLIED_MOTIF_NETS_ENDPOINT.to_string(), Box::new(stack_applied_motif_nets_init) as MotifsInitFn),
         (STACK_APPLIED_LABEL_NETS_ENDPOINT.to_string(), Box::new(stack_applied_label_nets_init) as MotifsInitFn),
