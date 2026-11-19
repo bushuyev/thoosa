@@ -1,5 +1,4 @@
 use async_trait::async_trait;
-use std::cmp::min;
 use thoosa_common::runner::adjusters::max_parallel::MAX_PARALLEL;
 use thoosa_common::runner::global_ctx::{GlobalCtx, RegisteredCacheHandle};
 use thoosa_shared::traits::MaxParallelCtx;
@@ -296,9 +295,6 @@ where
                 collect_eta_record_completion(epochs_eta_guard.id());
                 match epoch_result {
                     Ok((checkpoint, valid_loss)) => {
-                        if max_other_parallel < MAX_PARALLEL as usize {
-                            max_other_parallel = min(max_other_parallel * 2, MAX_PARALLEL as usize);
-                        }
                         recovery_checkpoint = checkpoint;
                         completed_epochs += 1;
                         if let Some(loss) = valid_loss {
@@ -333,11 +329,12 @@ where
                         prefetch = false;
                         // Restoration replaces the entire module/optimizer and its
                         // acknowledgement state. Failed epochs never affect patience.
-                        // Apply the user's per-epoch reduction on success and failure alike.
                         if max_other_parallel == 0 {
                             return Err(error.context("training epoch ran out of memory with exclusive runner access"));
                         }
                         train_step.schedule_epoch_restore(Arc::clone(&recovery_checkpoint), ctx.tho_device_idx()).await?;
+                        // Keep the reduced limit for the rest of this attempt so
+                        // later epochs avoid the setting that exhausted memory.
                         max_other_parallel /= 2;
                         warn!("TrainNet: discarded epoch={idx} after OOM; completed={completed_epochs} aborted={aborted_epochs} next_max_other_parallel={max_other_parallel} error={error:#}");
                     }
