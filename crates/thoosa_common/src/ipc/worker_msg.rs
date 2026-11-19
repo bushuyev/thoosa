@@ -8,6 +8,8 @@ use thoosa_shared::device_stats::ThoDeviceStats;
 use thoosa_shared::ipc_types::{H2DTensorKey, TensorKey, WorkerOutput};
 use thoosa_shared::{CudaAction, SyncStageRunnerError, ThoError, tho_error};
 
+pub(crate) const MAX_TENSOR_RELEASE_BATCH: usize = 128;
+
 /// Numeric tensor and endpoint IDs are only meaningful in their originating
 /// worker. A replacement process may allocate exactly the same IDs again.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -144,6 +146,9 @@ pub enum Operation {
         dummy: String,
     }, //without dummy empty message deserialized as Shutdown?
     GetDeviceStats,
+    DropThoTensors {
+        tensor_keys: Vec<u64>,
+    },
 }
 
 impl Operation {
@@ -155,6 +160,7 @@ impl Operation {
             Self::H2dCopy { .. } => "H2dCopy".into(),
             Self::D2hCopy { .. } => "D2hCopy".into(),
             Self::DropThoTensor { tensor_key } => format!("DropThoTensor tensor_key={tensor_key}"),
+            Self::DropThoTensors { tensor_keys } => format!("DropThoTensors count={}", tensor_keys.len()),
             Self::InstallStage { endpoint_name, stage_id, .. } => format!("InstallStage endpoint={endpoint_name} stage_id={stage_id:?}"),
             Self::InvokeStage { endpoint_name, stage_id, consume, .. } => format!("InvokeStage endpoint={endpoint_name} stage_id={stage_id:?} consume={consume}"),
             Self::GetStageStateInfo { endpoint_name, stage_id } => format!("GetStageStateInfo endpoint={endpoint_name} stage_id={stage_id:?}"),

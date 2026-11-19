@@ -5,7 +5,7 @@ use crate::cuda_utils::tensor_mem_size;
 use crate::ipc::ipc_cuda_utils::send_fd;
 use crate::ipc::proxy::StageStateDump;
 use crate::ipc::serialization::{PostcardToFromBytes, ToFromBytes, decode_failure, message_header};
-use crate::ipc::worker_msg::{CudaWorkerId, CudaWorkerMsgIn, CudaWorkerMsgOut, DeviceStatsOutput, OpResult, Operation, WorkerCopyDonePayload, WorkerInput};
+use crate::ipc::worker_msg::{CudaWorkerId, CudaWorkerMsgIn, CudaWorkerMsgOut, DeviceStatsOutput, MAX_TENSOR_RELEASE_BATCH, OpResult, Operation, WorkerCopyDonePayload, WorkerInput};
 use crate::runner::global_ctx::{GlobalCtx, RuntimeFailure};
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
@@ -190,6 +190,22 @@ enum BackendControl {
     Retire { authority: CudaActivityPauseTicket, respond_to: oneshot::Sender<Result<(), ThoError>> },
     Restart { authority: CudaActivityPauseTicket, respond_to: oneshot::Sender<Result<(), ThoError>> },
     Shutdown { respond_to: oneshot::Sender<Result<(), ThoError>> },
+}
+
+fn collect_tensor_releases(first: u64, worker: CudaWorkerId, control: &mut mpsc::UnboundedReceiver<BackendControl>, next_control: &mut Option<BackendControl>) -> Vec<u64> {
+    let mut keys = vec![first];
+    while keys.len() < MAX_TENSOR_RELEASE_BATCH {
+        match control.try_recv() {
+            Ok(BackendControl::ReleaseTensor { key, worker_id }) if worker_id == worker => keys.push(key),
+            Ok(other) => {
+                // Do not jump over shutdown, retirement, or another generation.
+                *next_control = Some(other);
+                break;
+            }
+            Err(_) => break,
+        }
+    }
+    keys
 }
 
 type PendingResponses = Arc<PendingRequests>;
@@ -950,7 +966,30 @@ impl CudaIPCActor {
         Ok(())
     }
 
-    async fn control(&mut self, control: BackendControl) -> bool {
+    async fn release_tensors(&self, worker_id: CudaWorkerId, keys: Vec<u64>) -> Result<(), ThoError> {
+        let Some(worker) = self.spawned_state.as_ref().filter(|worker| worker.worker_id == worker_id) else {
+            return Ok(());
+        };
+        if self.gate.check_generation(worker_id.generation).is_err() {
+            return Ok(());
+        }
+        let permit = tokio::select! {
+            biased;
+            _ = self.gate.wait_for_generation_end(worker_id.generation) => return Ok(()),
+            _ = worker.pending.failed.cancelled() => return Ok(()),
+            permit = worker.tx.reserve() => permit.context("worker writer closed")?,
+        };
+        // Recovery can start while waiting for writer capacity. Retirement
+        // reclaims releases omitted here with the rest of the worker's tensors.
+        if self.gate.check_generation(worker_id.generation).is_err() {
+            return Ok(());
+        }
+        let request = CudaWorkerMsgIn::new(worker_id, self.next_id.fetch_add(1, Ordering::Relaxed), Operation::DropThoTensors { tensor_keys: keys });
+        let (reply, _response) = oneshot::channel();
+        worker.pending.enqueue(permit, request, reply, None, false)
+    }
+
+    async fn control(&mut self, control: BackendControl, next_control: &mut Option<BackendControl>) -> bool {
         debug!("CudaIPCActor::control: control={control:?}");
         match control {
             BackendControl::ReleaseEndpoint { stage_id, endpoint, worker_id } => {
@@ -973,31 +1012,11 @@ impl CudaIPCActor {
                 }
             }
             BackendControl::ReleaseTensor { key, worker_id } => {
-                // Recheck after queueing: recovery may have started since Drop.
-                // Cache invalidation precedes retirement, so a worker can still
-                // be present even though its tensors will be reclaimed at exit.
-                if self.gate.is_paused() {
-                    return false;
-                }
-                if let Some(worker) = &self.spawned_state {
-                    if worker.worker_id == worker_id {
-                        let request = CudaWorkerMsgIn::new(worker_id, self.next_id.fetch_add(1, Ordering::Relaxed), Operation::DropThoTensor { tensor_key: key });
-                        // Queue before later shutdown, but do not wait for CUDA:
-                        // a hung worker must still be interruptible by retirement.
-                        let result = async {
-                            let permit = worker.tx.reserve().await.context("worker writer closed")?;
-                            // The writer may have been full when recovery began.
-                            if self.gate.is_paused() {
-                                return Ok(());
-                            } //restart is in progress
-                            let (reply, _response) = oneshot::channel();
-                            worker.pending.enqueue(permit, request, reply, None, false)
-                        }
-                        .await;
-                        if let Err(error) = result {
-                            warn!("tensor release failed: {error:#}");
-                        }
-                    }
+                let keys = collect_tensor_releases(key, worker_id, &mut self.control, next_control);
+                // Submit before the next control. Worker shutdown drains accepted
+                // requests, so this path never waits for a release acknowledgement.
+                if let Err(error) = self.release_tensors(worker_id, keys).await {
+                    warn!("tensor release batch failed: {error:#}");
                 }
             }
             BackendControl::Retire { authority, respond_to } => {
@@ -1108,15 +1127,21 @@ impl CudaIPCActor {
     }
 
     async fn run(mut actor: CudaIPCActor) -> Result<(), ThoError> {
+        let mut next_control = None;
         loop {
             let failed = actor.spawned_state.as_ref().map(|worker| worker.pending.failed.clone());
 
             tokio::select! {
                 biased;
-                Some(control) = actor.control.recv() => {
+                Some(control) = async {
+                    match next_control.take() {
+                        Some(control) => Some(control),
+                        None => actor.control.recv().await,
+                    }
+                } => {
                     debug!("CudaIPCActor::run: control={control:?}");
 
-                    if actor.control(control).await {
+                    if actor.control(control, &mut next_control).await {
                         return Ok(());
                     }
 
@@ -1879,6 +1904,33 @@ mod tests {
         let bytes = PostcardToFromBytes::to_bytes(&reply).unwrap();
         let decoded = PostcardToFromBytes::from_bytes(&bytes).unwrap();
         CudaIPCActor::copy_result(decoded).expect_err("worker error must fail the copy")
+    }
+
+    #[test]
+    fn test_release_batches_stop_at_limit_generation_and_shutdown_ipc() {
+        use super::{MAX_TENSOR_RELEASE_BATCH, collect_tensor_releases};
+        use crate::ipc::worker_msg::CudaWorkerId;
+        use thoosa_shared::CudaDeviceGeneration;
+        let worker = CudaWorkerId { device_idx: 1, generation: CudaDeviceGeneration(2) };
+        let stale = CudaWorkerId { generation: CudaDeviceGeneration(1), ..worker };
+        let (tx, mut controls) = mpsc::unbounded_channel();
+        for key in 1..=MAX_TENSOR_RELEASE_BATCH as u64 {
+            tx.send(BackendControl::ReleaseTensor { key, worker_id: worker }).unwrap();
+        }
+        tx.send(BackendControl::ReleaseTensor { key: 1000, worker_id: stale }).unwrap();
+        let (respond_to, _response) = tokio::sync::oneshot::channel();
+        tx.send(BackendControl::Shutdown { respond_to }).unwrap();
+        tx.send(BackendControl::ReleaseTensor { key: 1001, worker_id: worker }).unwrap();
+
+        let mut next = None;
+        assert_eq!(collect_tensor_releases(0, worker, &mut controls, &mut next), (0..MAX_TENSOR_RELEASE_BATCH as u64).collect::<Vec<_>>());
+        assert!(next.is_none());
+        let BackendControl::ReleaseTensor { key, worker_id } = controls.try_recv().unwrap() else { panic!("expected next release") };
+        assert_eq!(collect_tensor_releases(key, worker_id, &mut controls, &mut next), [MAX_TENSOR_RELEASE_BATCH as u64]);
+        assert!(matches!(next.take(), Some(BackendControl::ReleaseTensor { key: 1000, worker_id }) if worker_id == stale));
+        assert_eq!(collect_tensor_releases(1000, stale, &mut controls, &mut next), [1000]);
+        assert!(matches!(next.take(), Some(BackendControl::Shutdown { .. })));
+        assert!(matches!(controls.try_recv().unwrap(), BackendControl::ReleaseTensor { key: 1001, .. }));
     }
 
     #[test]

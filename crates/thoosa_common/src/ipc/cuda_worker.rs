@@ -7,7 +7,7 @@ use crate::ipc::cuda_process::{DeviceInfo, IPC_SOCK_ENV};
 use crate::ipc::ipc_cuda_utils::recv_fd;
 use crate::ipc::serialization::{MessageHeader, PostcardToFromBytes, ToFromBytes, decode_failure, message_header};
 use crate::ipc::worker_msg::CudaWorkerId;
-use crate::ipc::worker_msg::{CudaWorkerMsgIn, CudaWorkerMsgOut, DebugOutput, DeviceStatsOutput, OpResult, Operation, WorkerCopyDonePayload, WorkerInput};
+use crate::ipc::worker_msg::{CudaWorkerMsgIn, CudaWorkerMsgOut, DebugOutput, DeviceStatsOutput, MAX_TENSOR_RELEASE_BATCH, OpResult, Operation, WorkerCopyDonePayload, WorkerInput};
 use crate::ipc::wraps::{ErasedWithState, SyncStageIpcWrapper};
 use crate::runner::blocking::STAGE_BLOCKING_POOL;
 use crate::tho_device::ThoDevice;
@@ -743,6 +743,20 @@ impl CudaWorker {
                 Operation::DropThoTensor { tensor_key } => {
                     debug!("run_worker: Operation::DropThoTensor: request_id={request_id} tensor_key={tensor_key}");
                     Ok(Self::drop_tensor(&context, &tensor_key))
+                }
+                Operation::DropThoTensors { tensor_keys } => {
+                    if tensor_keys.is_empty() || tensor_keys.len() > MAX_TENSOR_RELEASE_BATCH {
+                        return Err(ThoError::IpcProtocol(format!("invalid tensor release batch length {}", tensor_keys.len())));
+                    }
+                    // Detach all keys under one registry lock. Drop the tensor
+                    // owners after unlocking so other worker requests can proceed.
+                    let removed: Vec<_> = {
+                        let mut tensors = context.all_cuda_tensors.tensors.lock();
+                        tensor_keys.iter().filter_map(|key| tensors.remove(key)).collect()
+                    };
+                    debug!("worker tensor release: request_id={request_id} requested={} removed={}", tensor_keys.len(), removed.len());
+                    drop(removed);
+                    Ok(OpResult::Ok(None))
                 }
                 Operation::InstallStage { endpoint_name, stage_id, init_data } => {
                     debug!("run_worker: install endpoint endpoint_name={endpoint_name} stage_id={stage_id:?}");
