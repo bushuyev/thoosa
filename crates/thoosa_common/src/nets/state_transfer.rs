@@ -10,6 +10,10 @@ use thoosa_common::tch_error::tch_result;
 use thoosa_shared::ThoError;
 use thoosa_shared::ipc_types::TensorKey;
 
+// Checkpoints transport model variables and optimizer tensors together. Keep
+// the variable namespace shared by capture, restoration and model publication.
+pub(crate) const VAR_STORE_TENSOR_PREFIX: &str = "var/";
+
 /// Tensor storage and its schema have separate lifetimes: the schema remains in
 /// the worker while the parent owns the CPU copy of the tensors.
 #[derive(Debug, Default)]
@@ -123,7 +127,7 @@ impl VarStoreState {
                 trainable,
                 requires_grad: tensor.requires_grad(),
             });
-            tensors.insert(format!("var/{name}"), tch_result(tensor.f_detach())?)?;
+            tensors.insert(format!("{VAR_STORE_TENSOR_PREFIX}{name}"), tch_result(tensor.f_detach())?)?;
         }
         // Optimizer snapshots address parameters by group and registration
         // order, not by the arbitrary iteration order of named_variables.
@@ -135,7 +139,7 @@ impl VarStoreState {
         let mut vs = VarStore::new(ThoDevice::from(device).into());
         vs.set_kind(self.kind.into());
         for var in &self.variables {
-            let tensor = tensors.get(&format!("var/{}", var.name))?;
+            let tensor = tensors.get(&format!("{VAR_STORE_TENSOR_PREFIX}{}", var.name))?;
             let (trainable, group) = var.trainable.map_or((false, 0), |(_, group)| (true, group));
             let (parent, name) = var.name.rsplit_once('.').unwrap_or(("", &var.name));
             let mut path = vs.root().set_group(group);

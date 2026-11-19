@@ -1,8 +1,13 @@
 use super::*;
 use crate::cuda_utils::tensor_mem_size;
+use crate::nets::state_transfer::VAR_STORE_TENSOR_PREFIX;
+use crate::runner::blocking::BlockingPool;
+use std::path::Path;
 use thoosa_common::ipc::tensor_info::WorkerTensorInfoPayload;
 use thoosa_common::tch_error::tch_result;
 use thoosa_shared::ipc_types::TensorKey;
+
+static CHECKPOINT_WRITE_POOL: LazyLock<BlockingPool> = LazyLock::new(|| BlockingPool::new(4));
 
 /// An immutable CPU recovery point, retained independently of live/offloaded state.
 /// Metadata is encoded so every restoration gets its own owned copy.
@@ -19,6 +24,35 @@ impl CpuStateCheckpoint {
 
     pub(crate) fn info(&self) -> Result<StageStateInfo, ThoError> {
         Ok(serde_json::from_slice(&self.info)?)
+    }
+
+    pub(crate) async fn publish_model(self: &Arc<Self>, path: &Path) -> Result<(), ThoError> {
+        let checkpoint = Arc::clone(self);
+        let dir = path.parent().filter(|dir| !dir.as_os_str().is_empty()).unwrap_or(Path::new(".")).to_path_buf();
+        let pending = CHECKPOINT_WRITE_POOL
+            .run_owned(move || {
+                // The staged file owns cleanup even if the trial is cancelled
+                // while the blocking serializer is still running.
+                let pending = tempfile::NamedTempFile::new_in(dir)?.into_temp_path();
+                let mut variables = Vec::new();
+                for (key, tensor) in &checkpoint.tensors {
+                    let Some(name) = key.strip_prefix(VAR_STORE_TENSOR_PREFIX) else { continue };
+                    let tensor = tensor.local()?;
+                    if tensor.device() != tch::Device::Cpu {
+                        return Err(ThoError::new(format!("checkpoint variable {name:?} is not on CPU")));
+                    }
+                    variables.push((name, tensor));
+                }
+                let named_tensors = variables.iter().map(|(name, tensor)| (*name, &**tensor)).collect::<Vec<_>>();
+                tch_result(Tensor::write_safetensors(&named_tensors, &pending))?;
+                Ok(pending)
+            })
+            .await?;
+        // Publish only from the trial that still owns the destination. Rename
+        // the complete file in the same directory so the previous best survives
+        // a failed write or cancellation before this point.
+        pending.persist(path).with_context(|| format!("publish model checkpoint to {path:?}"))?;
+        Ok(())
     }
 
     fn from_dump(mut dump: StageStateDump) -> Result<Self, ThoError> {
@@ -115,5 +149,41 @@ where
             Ok(())
         })
         .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tch::{Device, Kind};
+
+    #[tokio::test]
+    async fn test_publish_model_uses_cpu_variables_and_preserves_previous_best() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("best.safetensors");
+        let checkpoint = Arc::new(CpuStateCheckpoint::new(
+            StageStateInfo::empty(),
+            HashMap::from([
+                ("var/net.weight".into(), ThoTensor::new((), Tensor::f_from_slice(&[1.0f32, 2.0])?)?),
+                ("var/net.running_count".into(), ThoTensor::new((), Tensor::f_from_slice(&[3i64])?)?),
+                ("optimizer/moment".into(), ThoTensor::new((), Tensor::f_zeros([2], (Kind::Float, Device::Cpu))?)?),
+            ]),
+        )?);
+        checkpoint.publish_model(&path).await?;
+        let published: HashMap<_, _> = Tensor::read_safetensors(&path)?.into_iter().collect();
+        assert_eq!(published.len(), 2);
+        assert_eq!(published["net.weight"].f_double_value(&[1])?, 2.0);
+        assert_eq!(published["net.running_count"].f_int64_value(&[0])?, 3);
+        assert!(checkpoint.restore_dump()?.tensors.contains_key("optimizer/moment"));
+
+        let previous = std::fs::read(&path)?;
+        let invalid = Arc::new(CpuStateCheckpoint::new(
+            StageStateInfo::empty(),
+            HashMap::from([("var/net.weight".into(), ThoTensor::new((), Tensor::f_zeros([1], (Kind::ComplexFloat, Device::Cpu))?)?)]),
+        )?);
+        assert!(invalid.publish_model(&path).await.is_err());
+        assert_eq!(std::fs::read(&path)?, previous);
+        assert_eq!(dir.path().read_dir()?.count(), 1, "a failed write must remove its staged file");
+        Ok(())
     }
 }

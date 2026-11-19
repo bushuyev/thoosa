@@ -224,9 +224,8 @@ where
             let device = Device::from(ThoDevice::from(ctx.tho_device_idx()));
             let epochs = (self.epochs)(&run_config);
 
-            // The path is part of worker initialization so the state owner can
-            // checkpoint without exporting its VarStore. Use the caller's workspace
-            // temporary directory so checkpoint publication stays on its filesystem.
+            // Publish best weights from the same CPU snapshot used for rollback.
+            // Stage the write beside the destination for atomic replacement.
             std::fs::create_dir_all(&self.checkpoint_dir)?;
             let best_checkpoint_path = self.checkpoint_dir.join(format!("thoosa_train_net_best_{}_{}.safetensors", now_ms(), random::<u64>()));
             let best_checkpoint = TmpFile::new(best_checkpoint_path.clone());
@@ -285,8 +284,7 @@ where
                     }
                     let checkpoint = train_step.save_epoch_checkpoint(ctx.tho_device_idx()).await?;
                     if valid_loss.is_some_and(|loss| loss < best_valid_loss - min_delta) {
-                        // Best-model publication remains explicit, including the last epoch.
-                        train_step.checkpoint(ctx.branch(false), max_other_parallel).await?;
+                        checkpoint.publish_model(&best_checkpoint_path).await?;
                     }
                     Ok::<_, ThoError>((checkpoint, valid_loss))
                 }
