@@ -2662,21 +2662,30 @@ fn render_cache_statistics(frame: &mut Frame<'_>, app: &App, area: Rect) {
     // Scale exact byte counts without rounding small caches down to zero before scaling.
     let maximum = statistics.iter().map(|statistic| statistic.bytes).max().unwrap_or(0).max(1024);
     let height = columns[0].height.saturating_sub(1);
-    let axis = (0..columns[0].height).map(|row| {
-        if row == height {
-            Line::from("          └")
-        } else if row == 0 || row == height / 2 || row + 1 == height {
-            let fraction = (height.saturating_sub(row + 1)) as f64 / height.saturating_sub(1).max(1) as f64;
-            Line::from(format!("{:>9.1} ┤", maximum as f64 / 1024.0 * fraction))
-        } else {
-            Line::from("          │")
-        }
-    }).collect::<Vec<_>>();
+    let axis = (0..columns[0].height)
+        .map(|row| {
+            if row == height {
+                Line::from("          └")
+            } else if row == 0 || row == height / 2 || row + 1 == height {
+                let fraction = (height.saturating_sub(row + 1)) as f64 / height.saturating_sub(1).max(1) as f64;
+                Line::from(format!("{:>9.1} ┤", maximum as f64 / 1024.0 * fraction))
+            } else {
+                Line::from("          │")
+            }
+        })
+        .collect::<Vec<_>>();
     frame.render_widget(Paragraph::new(axis), columns[0]);
-    let bars = statistics[start..end].iter().map(|statistic| {
-        Bar::default().label(Line::from(statistic.type_name.as_str())).value(statistic.bytes).text_value(format!("{:.1}", statistic.bytes as f64 / 1024.0))
-    }).collect::<Vec<_>>();
-    let chart = BarChart::default().data(BarGroup::default().bars(&bars)).bar_width(bar_width).bar_gap(1).max(maximum).bar_style(Style::default().fg(Color::Cyan)).value_style(Style::default().fg(Color::Black).bg(Color::Cyan));
+    let bars = statistics[start..end]
+        .iter()
+        .map(|statistic| Bar::default().label(Line::from(statistic.type_name.as_str())).value(statistic.bytes).text_value(format!("{:.1}", statistic.bytes as f64 / 1024.0)))
+        .collect::<Vec<_>>();
+    let chart = BarChart::default()
+        .data(BarGroup::default().bars(&bars))
+        .bar_width(bar_width)
+        .bar_gap(1)
+        .max(maximum)
+        .bar_style(Style::default().fg(Color::Cyan))
+        .value_style(Style::default().fg(Color::Black).bg(Color::Cyan));
     frame.render_widget(chart, columns[1]);
 }
 
@@ -3327,7 +3336,8 @@ async fn read_progress_stream(stream: Stream, tx: &mpsc::UnboundedSender<Progres
             }
         }
         Ok(())
-    }.await;
+    }
+    .await;
     if awaiting_action {
         let _ = tx.send(ProgressClientEvent::CacheStatistics(Err("Progress socket disconnected before cache statistics arrived.".to_string())));
     }
@@ -4254,7 +4264,9 @@ mod tests {
             assert_eq!(serde_json::from_str::<ProgressRequest>(&request)?, ProgressRequest::ShowCacheStatistics);
             // Progress remains readable while the action is in flight.
             writer.write_all(&bytes).await?;
-            let response = ProgressResponse::CacheStatistics { cache_statistics: Ok(vec![CacheStatistic { type_name: "RoundTripCache".into(), bytes: 4096 }]) };
+            let response = ProgressResponse::CacheStatistics {
+                cache_statistics: Ok(vec![CacheStatistic { type_name: "RoundTripCache".into(), bytes: 4096 }]),
+            };
             let mut response = serde_json::to_vec(&response)?;
             response.push(b'\n');
             writer.write_all(&response).await?;
@@ -4281,7 +4293,8 @@ mod tests {
                 }
             }
             Err("client stopped before the action reply".to_string())
-        }).await?;
+        })
+        .await?;
         assert_eq!(statistics, Ok(vec![CacheStatistic { type_name: "RoundTripCache".into(), bytes: 4096 }]));
         client_task.abort();
         let _ = client_task.await;

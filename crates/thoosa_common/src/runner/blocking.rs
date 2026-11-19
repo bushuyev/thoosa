@@ -32,7 +32,9 @@ impl BlockingPool {
     /// scope synchronous once entered: cancellation must never detach CUDA work
     /// from those borrows, the stream lease, or the caller's recovery activity.
     pub(crate) async fn acquire(&self) -> Result<BlockingPermit<'_>, ThoError> {
-        Ok(BlockingPermit { _slot: self.slots.acquire().await.context("acquire synchronous stage slot")? })
+        Ok(BlockingPermit {
+            _slot: self.slots.acquire().await.context("acquire synchronous stage slot")?,
+        })
     }
 }
 
@@ -101,7 +103,8 @@ mod tests {
             assert!(observed_state.try_lock().is_err(), "cancelled caller released state during execution");
             assert_eq!(observed_pool.slots.available_permits(), 0);
             finish_tx.send(()).expect("blocking stage is still waiting");
-        }).await?;
+        })
+        .await?;
         // An abort racing a synchronous completion can yield either result;
         // joining still guarantees the borrowed state is no longer in use.
         match job.await {
@@ -120,11 +123,13 @@ mod tests {
         let (finish_tx, finish_rx) = std::sync::mpsc::channel();
         let job_pool = Arc::clone(&pool);
         let job = tokio::spawn(async move {
-            job_pool.run_owned(move || {
-                entered_tx.send(()).expect("test is waiting for file work");
-                finish_rx.recv_timeout(Duration::from_secs(5)).expect("test releases file work");
-                Ok(())
-            }).await
+            job_pool
+                .run_owned(move || {
+                    entered_tx.send(()).expect("test is waiting for file work");
+                    finish_rx.recv_timeout(Duration::from_secs(5)).expect("test releases file work");
+                    Ok(())
+                })
+                .await
         });
         entered_rx.await?;
         job.abort();

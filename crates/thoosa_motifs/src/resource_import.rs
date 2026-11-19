@@ -4,17 +4,17 @@ use parking_lot::RwLock;
 use rayon::iter::{ParallelBridge, ParallelIterator};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tch::{Tensor};
+use tch::Tensor;
 use thoosa_common::runner::run_ctx::RunCtxImpl;
-use thoosa_common::stages::freq_filter::{SyncFreqFilter};
+use thoosa_common::stages::freq_filter::SyncFreqFilter;
 use thoosa_common::tho_tensor::ThoTensor;
+use thoosa_shared::cdt;
 use thoosa_shared::collect_futures_eta::{CollectEtaInvocationGuard, collect_eta_record_completion};
 use thoosa_shared::comp_id::SynKey;
+use thoosa_shared::mono_key;
 use thoosa_shared::resource::{ResourceId, ResourceStats};
-use thoosa_shared::{mono_key};
-use thoosa_shared::{cdt};
+use thoosa_store::SqlStore;
 use thoosa_store::rusqlite::Transaction;
-use thoosa_store::{SqlStore};
 
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "hbac/import_resources"))]
 pub async fn import_resources<F, R, S>(

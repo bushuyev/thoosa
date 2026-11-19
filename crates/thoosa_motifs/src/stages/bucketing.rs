@@ -1320,14 +1320,14 @@ mod tests {
         BucketRunConfig, BucketRunConfigRangeOrValue, BucketingConfig, BucketingConfigRangeOrValue, BucketingInput, BucketingStage, LogMelPatchConfig, LogMelPatchConfigRangeOrValue, PatchTempStore, SelectBucketsInputSelector, bucket_selector_sample_range, bucket_slice_count,
         bucket_step_samples_for_config, filter_mel_patch_groups,
     };
-    use crate::plotting::plot_resource;
-    use crate::resource_import::import_resources;
-use crate::plotting::plot_motif;
     use crate::dims::MotifSlices;
     use crate::distance::{EucDistConfig, SimilarityMetric, clc_d2_similarity};
     use crate::fragments::Resolution;
     use crate::motif_tracker_store::IdSlice;
     use crate::motifs_store::MotifsStore;
+    use crate::plotting::plot_motif;
+    use crate::plotting::plot_resource;
+    use crate::resource_import::import_resources;
     use crate::stages::find_motifs_run_config::{AccumulateStats, Aggr, FindMotifsRunConfig, MaxAggr, Metrics, NormThicknessRunConfig, SlicesFilter};
     use crate::stages::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
     use crate::stages::motif_stats::{MotifStats, MotifStatsInput, MotifStatsOutput};

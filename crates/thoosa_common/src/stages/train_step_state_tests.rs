@@ -25,8 +25,15 @@ fn test_training_acknowledgements_round_trip_through_dynamic_postcard_reply() ->
     use crate::ipc::worker_msg::{CudaWorkerId, CudaWorkerMsgOut};
     // A direct enum round trip misses typetag's internally tagged adapter.
     for output in [TrainStepOutput::Completed, TrainStepOutput::Loss(0.125)] {
-        let worker_id = CudaWorkerId { device_idx: 1, generation: thoosa_shared::CudaDeviceGeneration(7) };
-        let reply = CudaWorkerMsgOut { worker_id, request_id: 42, status: OpResult::Ok(Some(Box::new(output))) };
+        let worker_id = CudaWorkerId {
+            device_idx: 1,
+            generation: thoosa_shared::CudaDeviceGeneration(7),
+        };
+        let reply = CudaWorkerMsgOut {
+            worker_id,
+            request_id: 42,
+            status: OpResult::Ok(Some(Box::new(output))),
+        };
         let bytes = PostcardToFromBytes::to_bytes(&reply)?;
         let restored: CudaWorkerMsgOut = PostcardToFromBytes::from_bytes(&bytes)?;
         assert_eq!(restored.worker_id, worker_id);
@@ -183,10 +190,12 @@ async fn prepared_batch_round_trips() -> Result<(), ThoError> {
                 })
                 .boxed();
             let mut actual = vec![];
-            pipeline.run_batches(source, ctx.branch(false), train, LossReporting::Report, 32, prefetch, |output| {
-                actual.push(output.loss()?);
-                Ok(())
-            }).await?;
+            pipeline
+                .run_batches(source, ctx.branch(false), train, LossReporting::Report, 32, prefetch, |output| {
+                    actual.push(output.loss()?);
+                    Ok(())
+                })
+                .await?;
             assert_eq!(actual.len(), 4);
             for actual in actual {
                 let expected = GlobalCtx::global().execution(1).run_stage(reference.clone(), input(train)?, 1, &ctx).await?.loss()?;
@@ -294,10 +303,12 @@ fn test_prepared_batches_retry_after_worker_reset_ipc() -> Result<(), ThoError> 
                             })
                             .boxed();
                         let mut losses = vec![];
-                        pipeline.run_batches(source, RunCtxImpl::new(1, "reset batches"), true, LossReporting::Report, 32, true, |output| {
-                            losses.push(output.loss()?);
-                            Ok(())
-                        }).await?;
+                        pipeline
+                            .run_batches(source, RunCtxImpl::new(1, "reset batches"), true, LossReporting::Report, 32, true, |output| {
+                                losses.push(output.loss()?);
+                                Ok(())
+                            })
+                            .await?;
                         Ok(losses)
                     }
                 });

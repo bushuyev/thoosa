@@ -3,10 +3,6 @@
 extern crate core;
 
 pub mod cli;
-pub mod workflow;
-pub mod plotting;
-pub mod resource_import;
-pub mod worker_endpoints;
 pub mod common_stats;
 pub mod criteria;
 pub mod data;
@@ -20,6 +16,10 @@ pub mod motif_tracker_store;
 pub mod motifs_store;
 pub mod motifs_ws;
 pub mod pearson_corr;
+pub mod plotting;
+pub mod resource_import;
 pub mod stages;
 pub mod tch_test_utils;
 pub mod train_nets;
+pub mod worker_endpoints;
+pub mod workflow;

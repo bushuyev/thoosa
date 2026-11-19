@@ -13,7 +13,7 @@ use tch::Tensor;
 use tch::kind::Kind;
 use thoosa_common::dims::ChannelsData;
 use thoosa_common::resources::SavableResult;
-use thoosa_common::runner::common::cachable::{Cached, BorrowRef, DevicesWrap};
+use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
 use thoosa_common::stages::freq_filter::FreqFilter;
 use thoosa_common::stages::seq_scan::{MeanAbsSeqScanMetricConfig, MeanPowerSeqScanMetricConfig, SeqScanMetric, SeqScanRunConfig};
 use thoosa_common::stages::stages_seq::{PairStage, SingleOrPair};

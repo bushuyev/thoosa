@@ -11,7 +11,7 @@ Data (run  resources, labels, configuration parameters etc) is kept in sqlite da
 
 
 ## Important Agent Rules
-- **Never run `cargo fmt` or any other bulk formatter.** Make only the minimal manual edits required for the task at hand.
+- **Never run `cargo fmt --all` or any other bulk formatter.** Make only the minimal manual edits required for the task at hand and run `cargo fmt` only on the changed files.
 - **Do not touch unrelated files or code paths.** If a change is not strictly required to implement the current request, leave it untouched.
 - **Use fallible tensor APIs and propagate tensor errors.** In `thoosa_common` and code invoked from it, prefer `Tensor::f_*`/`tensor.f_*` forms and bubble errors up; do not `unwrap`/`expect` tensor operations.
 - **if you've got any questions, ask before starting tasks**

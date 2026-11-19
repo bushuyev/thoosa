@@ -32,11 +32,9 @@ use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::utils::kick_register_cuda_hooks;
 use thoosa_common::ws::{FsWorkspace, Workspace, WsConfigs};
 use thoosa_motifs::cli::{CommonCommands, ImportResourcesArgs, MotifCommands, RunAllArgs, init_loader};
-use thoosa_motifs::worker_endpoints::cuda_worker_endpoint_inits;
-use thoosa_motifs::resource_import::import_resources;
-use thoosa_motifs::workflow::run_grid;
 use thoosa_motifs::find::FindMotifsArgs;
 use thoosa_motifs::motifs_store::MotifsStore;
+use thoosa_motifs::resource_import::import_resources;
 use thoosa_motifs::stages::apply_label_nets::{APPLY_LABEL_NET_ENDPOINT, STACK_APPLIED_LABEL_NETS_ENDPOINT, apply_label_net_endpoint_init, stack_applied_label_nets_init};
 use thoosa_motifs::stages::apply_motif_nets::{APPLY_MOTIF_NET_ENDPOINT, STACK_APPLIED_MOTIF_NETS_ENDPOINT, SyncApplyMotifNet, apply_motif_net_endpoint_init, stack_applied_motif_nets_init};
 use thoosa_motifs::stages::cross_batch_clc::{CROSS_UNFOLD_CLC_ENDPOINT, sync_cross_unfold_clc_endpoint_init};
@@ -47,6 +45,8 @@ use thoosa_motifs::stages::train_final_net::{SYNC_LOGITS_BATCH_ENDPOINT, sync_lo
 use thoosa_motifs::stages::train_label_nets::{SYNC_LABEL_BATCH_ENDPOINT, sync_label_batch_endpoint_init, train_label_step_endpoint_inits};
 use thoosa_motifs::stages::train_motif_nets::train_motif_step_endpoint_inits;
 use thoosa_motifs::train_nets::InferArgs;
+use thoosa_motifs::worker_endpoints::cuda_worker_endpoint_inits;
+use thoosa_motifs::workflow::run_grid;
 use thoosa_shared::tracked_await::t;
 use thoosa_shared::traits::RunCtx;
 use thoosa_shared::{ThoError, cdt_for_dir};
@@ -197,13 +197,7 @@ fn main() -> anyhow::Result<()> {
 
         let store = Arc::new(SqlStore::from_path_with_tables(ws.read().store_path(), vec![thoosa_store::create_tables, thoosa_motifs::motifs_store::create_motif_tables]).await?);
 
-        run_common_cli(
-            args.common_args.clone(),
-            Arc::clone(&store),
-            Arc::clone(&ws),
-            cdt.clone(),
-        )
-        .await?;
+        run_common_cli(args.common_args.clone(), Arc::clone(&store), Arc::clone(&ws), cdt.clone()).await?;
 
         Ok(())
     });

@@ -912,7 +912,9 @@ pub fn final_net(params: &FinalNetParams) -> anyhow::Result<Node> {
         builder.linear_s(params.mid_features * params.in_features, path)?;
         match params.architecture {
             // Keep both the operations and their sequence indices unchanged for old weight files.
-            FinalNetArchitecture::Relu => { builder.func(|t| Ok(t.f_relu()?))?; }
+            FinalNetArchitecture::Relu => {
+                builder.func(|t| Ok(t.f_relu()?))?;
+            }
             FinalNetArchitecture::GeluResidual => {
                 // Smooth activation retains negative evidence; modest hidden dropout regularizes
                 // the small label-score dataset and is disabled by the existing evaluation path.
@@ -927,11 +929,17 @@ pub fn final_net(params: &FinalNetParams) -> anyhow::Result<Node> {
             // Start with linear calibration of the raw label logits, then learn nonlinear corrections.
             // Zero initialization applies only to the correction head, so hidden features can learn
             // once that head moves away from zero. No softmax belongs here: the loss consumes logits.
-            let correction = builder.linear_s_with_conf("final_net_last_layer", params.out_features, LinearConfig {
-                ws_init: init::Init::Const(0.0),
-                bs_init: Some(init::Init::Const(0.0)),
-                bias: true,
-            })?.end_seq()?;
+            let correction = builder
+                .linear_s_with_conf(
+                    "final_net_last_layer",
+                    params.out_features,
+                    LinearConfig {
+                        ws_init: init::Init::Const(0.0),
+                        bs_init: Some(init::Init::Const(0.0)),
+                        bias: true,
+                    },
+                )?
+                .end_seq()?;
             let linear = SeqBuilder::new(params.in_features, None)?.linear_s(params.out_features, "final_net_skip")?.end_seq()?;
             Ok(Node::Par {
                 elts: vec![linear, correction],

@@ -1,17 +1,29 @@
 use std::io::Write;
 // Commands call application operations defined independently of argument parsing.
-pub use crate::resource_import::import_resources;
 pub use crate::plotting::{plot_motif, plot_resource, run_plot};
+pub use crate::resource_import::import_resources;
 pub use crate::worker_endpoints::{cuda_worker_endpoint_inits, sync_freq_filter_endpoint_init};
 pub use crate::workflow::{dyn_step_find_and_select, median_window_from_find_and_select, median_window_from_find_motifs, median_window_from_find_motifs_grid, run_grid, run_opt};
 
+use crate::find::{FindMotifsArgs, SelectMotifsArgs};
+use crate::fragments::{PlotDataArgs, Resolution};
 use crate::motifs_store::MotifsStore;
+use crate::stages::apply_motif_nets::ApplyMotifNets;
 use crate::stages::convert_precision::{ConvertPrecisionArgs, ConvertPrecisionInput, ConvertPrecisionStage};
 use crate::stages::cross_loader::ResourcesConfigInput;
 use crate::stages::export::{Export as ExportStage, ExportArgs, ExportInput};
 use crate::stages::find_motifs_run_config::{FindMotifsRunConfigRangeOrValue, SelectMotifsRunConfigRangeOrValue};
+use crate::stages::merge_selected_motifs::{MergeSelectedMotifs, MergeSelectedMotifsArgs, MergeSelectedMotifsInput};
+use crate::stages::motif_loader::MotifLoader;
+use crate::stages::motif_stats::MotifStats;
 use crate::stages::purge_models::{PurgeModelsArgs, PurgeModelsInput, PurgeModelsStage};
+use crate::stages::select_motifs::{SelectMotifsInput, SelectMotifsStage};
+use crate::stages::seq_scan::SeqScanStage;
 use crate::stages::tensor_loader::RawTensorLoader;
+use crate::stages::train_final_net::new_train_final_net;
+use crate::stages::train_label_nets::{TrainLabelNetRunConfigRangeOrValue, TrainLabelNetsArgs, new_train_label_nets};
+use crate::stages::train_motif_nets::{TrainMotifNetInput, TrainMotifNets};
+use crate::train_nets::{TrainFinalNetArgs, TrainFinalNetRunConfigRangeOrValue, TrainMotifNetRunConfigRangeOrValue, TrainMotifsNetsArgs};
 use anyhow::Context as _;
 use async_trait::async_trait;
 use clap::{Args, Subcommand};
@@ -22,34 +34,22 @@ use std::fs::OpenOptions;
 use std::process;
 use std::sync::Arc;
 use tch::Device::Cpu;
-use tch::{Tensor};
+use tch::Tensor;
+use thoosa_common::args::StageCommand;
+use thoosa_common::nets::common_nets::OptConfig;
 use thoosa_common::resources::{Labeled, Logits, NetResources, Simple};
 use thoosa_common::runner::run_ctx::RunCtxImpl;
+use thoosa_common::stages::seq_scan::SeqScanRunConfigRangeOrValue;
 use thoosa_common::tch_error::tch_result;
 use thoosa_common::tho_device::ThoDevice;
-use crate::find::{FindMotifsArgs, SelectMotifsArgs};
-use crate::fragments::{PlotDataArgs, Resolution};
-use crate::stages::apply_motif_nets::{ApplyMotifNets};
-use crate::stages::merge_selected_motifs::{MergeSelectedMotifs, MergeSelectedMotifsArgs, MergeSelectedMotifsInput};
-use crate::stages::motif_loader::{MotifLoader};
-use crate::stages::motif_stats::{MotifStats};
-use crate::stages::select_motifs::{SelectMotifsInput, SelectMotifsStage};
-use crate::stages::seq_scan::SeqScanStage;
-use crate::stages::train_final_net::{new_train_final_net};
-use crate::stages::train_label_nets::{TrainLabelNetRunConfigRangeOrValue, TrainLabelNetsArgs, new_train_label_nets};
-use crate::stages::train_motif_nets::{TrainMotifNetInput, TrainMotifNets};
-use crate::train_nets::{TrainFinalNetArgs, TrainFinalNetRunConfigRangeOrValue, TrainMotifNetRunConfigRangeOrValue, TrainMotifsNetsArgs};
-use thoosa_common::args::StageCommand;
-use thoosa_common::stages::seq_scan::SeqScanRunConfigRangeOrValue;
 use thoosa_common::tho_tensor::ThoTensor;
-use thoosa_common::nets::common_nets::OptConfig;
 use thoosa_common::transforms::filters::InputFilter;
+use thoosa_shared::ResourceType;
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::tracked_await::t;
 use thoosa_shared::traits::AsyncStage;
-use thoosa_shared::traits::{RunCtx};
+use thoosa_shared::traits::RunCtx;
 use thoosa_shared::{mono_key, parse_resources};
-use thoosa_shared::{ResourceType};
 use thoosa_store::Store;
 
 // Keep malformed user configuration on the command's Result path and retain
@@ -614,9 +614,15 @@ mod cli_tests {
             for aggregate in [false, true] {
                 for perf_file in [false, true] {
                     let mut args = vec!["thoosa_motifs"];
-                    if console { args.push("--tokio-console"); }
-                    if aggregate { args.push("--aggregate-timing"); }
-                    if perf_file { args.push("--write-perf-log-file"); }
+                    if console {
+                        args.push("--tokio-console");
+                    }
+                    if aggregate {
+                        args.push("--aggregate-timing");
+                    }
+                    if perf_file {
+                        args.push("--write-perf-log-file");
+                    }
                     let cli = MotifAppArgs::parse_from(args);
                     assert_eq!(cli.common_args.tokio_console, console);
                     assert_eq!(cli.common_args.aggregate_timing, aggregate);

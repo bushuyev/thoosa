@@ -1035,10 +1035,13 @@ impl CrossClcResultMerge for DistsMask {
                     return Err(ThoError::new("DistsMask merge: type mismatch"));
                 }
 
-                let packed_parts = parts.iter().map(|part| match &part.mask_type {
-                    DistsMaskType::MaskPacked(size, _) => Ok((&part.mask, size.as_slice())),
-                    _ => Err(ThoError::new("DistsMask merge: type mismatch")),
-                }).collect::<Result<Vec<_>, _>>()?;
+                let packed_parts = parts
+                    .iter()
+                    .map(|part| match &part.mask_type {
+                        DistsMaskType::MaskPacked(size, _) => Ok((&part.mask, size.as_slice())),
+                        _ => Err(ThoError::new("DistsMask merge: type mismatch")),
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
                 let (packed_mask, merged_sizes) = merge_packed_masks(&packed_parts)?;
 
                 let has_dists = parts[0].dists.is_some();
@@ -1452,7 +1455,9 @@ mod tests {
 
     #[test]
     fn test_packed_pair_and_batch_merge_preserve_row_boundaries() -> anyhow::Result<()> {
-        if !tch::Cuda::is_available() { return Ok(()); }
+        if !tch::Cuda::is_available() {
+            return Ok(());
+        }
         // Exercise aligned bytes and partial-byte joins over multiple rows and channels.
         for (left_width, right_width) in [(8, 16), (3, 5), (8, 3), (3, 8)] {
             let left_size = [2, 2, left_width];

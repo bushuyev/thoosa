@@ -295,9 +295,7 @@ where
                 let input = Arc::new(ApplyLabelNetInputWrapper::new(Arc::clone(&motif_probs)));
 
                 let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::throttle_and_offload(MaxParallelStep::FAST, "apply_label_net_init");
-                let result = t!(oom_handler.run(&apply_label_net, input, ctx.branch(false), WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::default()),))
-                    .await?
-                    .into_inner();
+                let result = t!(oom_handler.run(&apply_label_net, input, ctx.branch(false), WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::default()),)).await?.into_inner();
 
                 debug!("ApplyLabelNets::run: result={result:?}");
 
@@ -334,14 +332,9 @@ where
         let stack_input = StackAppliedLabelNetsInputWrapper::new(self.out_id(&input_id), order, Arc::into_inner(tmp_cache).expect("ApplyLabelNets::run: tmp_cache still shared").into_inner());
 
         let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::throttle_and_offload(MaxParallelStep::FAST, "stack_apply_label_nets");
-        let label_outputs = t!(oom_handler.consume(
-            &self.stack_applied_label_nets,
-            stack_input,
-            ctx.branch(true),
-            WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::default(),),
-        ))
-        .await?
-        .into_inner();
+        let label_outputs = t!(oom_handler.consume(&self.stack_applied_label_nets, stack_input, ctx.branch(true), WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::default(),),))
+            .await?
+            .into_inner();
 
         Ok(Arc::new(DevicesWrap::wrap(label_outputs)))
     }
@@ -808,9 +801,7 @@ where
                 // Construction has no input tensors that must remain on this device, so an OOM retry may dump every cached tensor.
 
                 let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::throttle_and_offload(MaxParallelStep::FAST, "apply_label_net_init");
-                let stage = oom_handler
-                    .new_stage(sync_init, run_context, WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::default()), &ws)
-                    .await?;
+                let stage = oom_handler.new_stage(sync_init, run_context, WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::default()), &ws).await?;
 
                 ////ApplyLabelNet is needed for final net training - no need to unregister
                 GlobalCtx::global().register_cache((stage.stage_id(), Arc::clone(&stage) as Arc<dyn CachePurger>));

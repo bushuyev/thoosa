@@ -1,20 +1,20 @@
 //! Configuration expansion and stage execution shared by commands and projects.
-use thoosa_shared::ThoError;
 use crate::motifs_store::MotifsStore;
+use crate::stages::find_and_select_motifs::FindAndSelectMotifsRunConfigFields;
 use crate::stages::find_motifs_run_config::FindMotifsRunConfigFields;
 use log::{debug, info};
 use parking_lot::RwLock;
 use std::fmt::Debug;
 use std::ops::Range;
 use std::sync::Arc;
-use thoosa_common::resources::{SavableResult};
-use thoosa_shared::traits::Stage;
-use crate::stages::find_and_select_motifs::FindAndSelectMotifsRunConfigFields;
+use thoosa_common::resources::SavableResult;
 use thoosa_run_config_args::{GridRunConfigSource, OptRunConfigSource};
+use thoosa_shared::ThoError;
 use thoosa_shared::hyperparameter::FieldName;
 use thoosa_shared::run_configs::{RunConfig, RunConfigId};
 use thoosa_shared::tracked_await::t;
 use thoosa_shared::traits::AsyncStage;
+use thoosa_shared::traits::Stage;
 use thoosa_shared::val::NamedVal;
 use thoosa_shared::{RangeOrValue, panic_to_err_async};
 

@@ -658,11 +658,7 @@ async fn new_final_training_step<C: RunCtx + 'static>(device: ThoDevice, params:
     let (step, _) = TrainStep::new_local(
         device,
         move |training_config: CommonTrainingRunConfig, device| async move {
-            let config = ModConfig::new(
-                training_config.tho_optimizer(),
-                move |var_store| final_net(&params)?.build_tch_module::<Batch<LabelProbability>, Batch<LabelsProbabilities>>(&var_store.root()),
-                training_config.lr,
-            );
+            let config = ModConfig::new(training_config.tho_optimizer(), move |var_store| final_net(&params)?.build_tch_module::<Batch<LabelProbability>, Batch<LabelsProbabilities>>(&var_store.root()), training_config.lr);
             Ok((ThoTrainModule::new_on_device(config, device)?, ()))
         },
         Arc::new(Box::new(|batch| batch) as TrainStepXFn<LabelProbability>),

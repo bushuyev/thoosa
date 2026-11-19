@@ -678,12 +678,15 @@ where
                                     Arc::clone(&resources_1_valid),
                                     Arc::clone(&resources_0_train),
                                     Arc::clone(&resources_0_valid),
-                                    |value| async move {
-                                        // MotifProbability uses AnyMetrics. The aggregate is
-                                        // stretched to the longest detector output, recorded
-                                        // in CPU metadata in both local and IPC modes.
-                                        Ok(value.extra().await?.into_iter().max().unwrap_or(0))
-                                    }.boxed(),
+                                    |value| {
+                                        async move {
+                                            // MotifProbability uses AnyMetrics. The aggregate is
+                                            // stretched to the longest detector output, recorded
+                                            // in CPU metadata in both local and IPC modes.
+                                            Ok(value.extra().await?.into_iter().max().unwrap_or(0))
+                                        }
+                                        .boxed()
+                                    },
                                     Arc::new(
                                         move |x_1_wrapped: Vec<Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>>, x_0_wrapped: Vec<Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>>, mut ctx: C| {
                                             let label = label.clone();
@@ -693,15 +696,8 @@ where
                                                 //TODO
 
                                                 let input = Arc::new(SyncLabelBatchInputWrapper::new(x_1_wrapped, x_0_wrapped, num_nets as i64, label));
-                                                let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> =
-                                                    OOMHandler::throttle_and_offload(MaxParallelStep::FAST, "sync_label_batch");
-                                                let output = t!(oom_handler.run(
-                                                    &sync_label_batch,
-                                                    input,
-                                                    ctx.branch(false),
-                                                    WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::default(),),
-                                                ))
-                                                .await?;
+                                                let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::throttle_and_offload(MaxParallelStep::FAST, "sync_label_batch");
+                                                let output = t!(oom_handler.run(&sync_label_batch, input, ctx.branch(false), WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::default(),),)).await?;
                                                 Ok(output.into_parts())
                                             }
                                             .boxed()
@@ -802,7 +798,16 @@ where
     X: Dims + 'static,
     Y: Dims + 'static,
 {
-    pub fn new(loader: Arc<L>, batch_size: u32, resources_1_train: Arc<Vec<Resource>>, resources_1_valid: Arc<Vec<Resource>>, resources_0_train: Arc<Vec<Resource>>, resources_0_valid: Arc<Vec<Resource>>, sequence_length: for<'a> fn(&'a DevicesWrap<LD>) -> BoxFuture<'a, Result<i64, ThoError>>, build_batch_fn: BuildBatchFn<LD, X, Y, C>) -> Self {
+    pub fn new(
+        loader: Arc<L>,
+        batch_size: u32,
+        resources_1_train: Arc<Vec<Resource>>,
+        resources_1_valid: Arc<Vec<Resource>>,
+        resources_0_train: Arc<Vec<Resource>>,
+        resources_0_valid: Arc<Vec<Resource>>,
+        sequence_length: for<'a> fn(&'a DevicesWrap<LD>) -> BoxFuture<'a, Result<i64, ThoError>>,
+        build_batch_fn: BuildBatchFn<LD, X, Y, C>,
+    ) -> Self {
         debug!("ResourcesBatch::new: batch_size={batch_size:?}");
         debug!("ResourcesBatch::new: resources_1_train={resources_1_train:?}");
         debug!("ResourcesBatch::new: resources_1_valid={resources_1_valid:?}");
@@ -874,14 +879,7 @@ where
     Y: Dims + 'static,
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "ResourcesBatch::build_batch_stream"))]
-    fn build_batch_stream(
-        &self,
-        resource_indexes_for_batches: Vec<Box<[(usize, usize)]>>,
-        mut ctx: C,
-        x_1: Arc<Vec<Resource>>,
-        x_0: Arc<Vec<Resource>>,
-        descr: &'static str,
-    ) -> BoxStream<'static, Result<(ThoBatch<X>, Option<BatchLengths>, ThoBatch<Y>), ThoError>> {
+    fn build_batch_stream(&self, resource_indexes_for_batches: Vec<Box<[(usize, usize)]>>, mut ctx: C, x_1: Arc<Vec<Resource>>, x_0: Arc<Vec<Resource>>, descr: &'static str) -> BoxStream<'static, Result<(ThoBatch<X>, Option<BatchLengths>, ThoBatch<Y>), ThoError>> {
         debug!("ResourcesBatch::build_batch_stream: resource_indexes_for_batches={resource_indexes_for_batches:?}");
 
         let build_batch_fn = Arc::clone(&self.build_batch_fn);
@@ -1002,11 +1000,7 @@ async fn new_label_training_step<C: RunCtx + 'static>(device: ThoDevice, params:
     let (step, _) = TrainStep::new_local(
         device,
         move |training_config: CommonTrainingRunConfig, device| async move {
-            let config = ModConfig::new(
-                training_config.tho_optimizer(),
-                move |var_store| params.label_net()?.build_tch_module::<Batch<MotifProbability>, Batch<LabelProbability>>(&var_store.root()),
-                training_config.lr,
-            );
+            let config = ModConfig::new(training_config.tho_optimizer(), move |var_store| params.label_net()?.build_tch_module::<Batch<MotifProbability>, Batch<LabelProbability>>(&var_store.root()), training_config.lr);
             Ok((ThoTrainModule::new_on_device(config, device)?, ()))
         },
         Arc::new(Box::new(|batch| batch) as TrainStepXFn<MotifProbability>),
@@ -1057,16 +1051,23 @@ where
         let remote_path = vs_path.clone();
         let input_cloner = Arc::new(|input: &TrainStepInput<MotifProbability, LabelProbability>| -> Result<Box<dyn WorkerInput>, ThoError> { Ok(Box::new(TrainLabelStepInput(input.clone_refs_for_worker()?))) });
         // Installation owns backend selection, IDs, and owner-managed recovery.
-        let stage = execution.install_stateful(
-            TRAIN_LABEL_STEP_ENDPOINT,
-            thoosa_common::ipc::endpoints::StageRecovery::OwnerManaged,
-            || async move { Ok(Arc::new(new_label_training_step(device.into(), local_params, run_config.common_training_args, vs_path).await?)) },
-            || async move {
-                let init = TrainLabelStepIpcInit { params: remote_params, training_config: remote_config, tho_device_idx: device, vs_path: remote_path };
-                Ok((Box::new(init) as Box<dyn WorkerInput>, ()))
-            },
-            Some(input_cloner),
-        ).await?;
+        let stage = execution
+            .install_stateful(
+                TRAIN_LABEL_STEP_ENDPOINT,
+                thoosa_common::ipc::endpoints::StageRecovery::OwnerManaged,
+                || async move { Ok(Arc::new(new_label_training_step(device.into(), local_params, run_config.common_training_args, vs_path).await?)) },
+                || async move {
+                    let init = TrainLabelStepIpcInit {
+                        params: remote_params,
+                        training_config: remote_config,
+                        tho_device_idx: device,
+                        vs_path: remote_path,
+                    };
+                    Ok((Box::new(init) as Box<dyn WorkerInput>, ()))
+                },
+                Some(input_cloner),
+            )
+            .await?;
         Ok((stage, node_params))
     }
 }

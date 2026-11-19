@@ -8,7 +8,7 @@ use thoosa_shared::ThoError;
 use thoosa_shared::traits::{AsyncStage, OutId, RunCtx, Stage, WithId};
 
 use crate as thoosa_common;
-use crate::runner::common::cachable::{Cached, BorrowRef, DevicesWrap};
+use crate::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
 use crate::runner::run_ctx::RunCtxImpl;
 use crate::tho_tensor::ThoTensor;
 

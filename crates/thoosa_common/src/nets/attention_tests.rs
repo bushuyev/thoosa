@@ -5,7 +5,11 @@ fn attention_inputs(device: Device, kind: Kind) -> anyhow::Result<(Tensor, Tenso
     // Use an odd head width and the projection/transposition layout from the
     // model to exercise CUDA alignment and the original (unpadded) scale.
     let base = Tensor::f_arange(2 * 7 * 3 * 19, (Kind::Float, device))?.f_view([2, 7, 3, 19])?.f_transpose(1, 2)?.f_mul_scalar(0.013)?;
-    Ok((base.f_sin()?.f_to_kind(kind)?.f_set_requires_grad(true)?, base.f_cos()?.f_to_kind(kind)?.f_set_requires_grad(true)?, base.f_mul_scalar(0.7)?.f_sin()?.f_to_kind(kind)?.f_set_requires_grad(true)?))
+    Ok((
+        base.f_sin()?.f_to_kind(kind)?.f_set_requires_grad(true)?,
+        base.f_cos()?.f_to_kind(kind)?.f_set_requires_grad(true)?,
+        base.f_mul_scalar(0.7)?.f_sin()?.f_to_kind(kind)?.f_set_requires_grad(true)?,
+    ))
 }
 
 fn compare_dense_attention(device: Device, kind: Kind, masked: bool) -> anyhow::Result<()> {

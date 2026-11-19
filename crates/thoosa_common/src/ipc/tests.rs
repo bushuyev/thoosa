@@ -115,7 +115,9 @@ async fn run_ipc_main(main_f: impl Future<Output = Result<(), ThoError>>, shutdo
             failure = failure => Err(failure),
             result = main_f => result,
         }
-    }).catch_unwind().await;
+    })
+    .catch_unwind()
+    .await;
     shutdown.await;
     match result {
         Ok(result) => result,
@@ -334,9 +336,12 @@ mod tests {
         let mut cleaned_up = false;
         let result = super::run_ipc_main(
             std::future::pending(),
-            async { cleaned_up = true; },
+            async {
+                cleaned_up = true;
+            },
             std::future::ready(ThoError::IpcProtocol("bad worker reply".into())),
-        ).await;
+        )
+        .await;
         assert!(result.unwrap_err().is_ipc_protocol_failure());
         assert!(cleaned_up);
     }

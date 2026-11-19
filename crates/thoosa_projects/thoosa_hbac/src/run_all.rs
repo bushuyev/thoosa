@@ -11,26 +11,24 @@ use thoosa_common::runner::run_ctx::RunCtxImpl;
 use thoosa_common::tch_error::tch_result;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::transforms::filters::InputFilterRangeOrValue::{AverageFilter, BandPassFilter, MedianFilter, SavGolFilter};
-use thoosa_common::transforms::filters::{AverageFilterParamsRangeOrValue, BandPassFilterParamsRangeOrValue, InputFilter, InputFilterRangeOrValue, MedianFilterParamsRangeOrValue, NotchBandFilterParamsRangeOrValue, PaddingRangeOrValue, ReplicatePaddingRangeOrValue, SavGolFilterParamsRangeOrValue, ZeroPaddingRangeOrValue};
+use thoosa_common::transforms::filters::{
+    AverageFilterParamsRangeOrValue, BandPassFilterParamsRangeOrValue, InputFilter, InputFilterRangeOrValue, MedianFilterParamsRangeOrValue, NotchBandFilterParamsRangeOrValue, PaddingRangeOrValue, ReplicatePaddingRangeOrValue, SavGolFilterParamsRangeOrValue, ZeroPaddingRangeOrValue,
+};
 use thoosa_common::ws::Workspace;
-use thoosa_motifs::cli::{RunAllArgs};
-use thoosa_motifs::workflow::dyn_step_find_and_select;
-use thoosa_motifs::workflow::median_window_from_find_and_select;
-use thoosa_motifs::workflow::run_grid;
-use thoosa_motifs::workflow::run_opt;
-use thoosa_motifs::plotting::run_plot;
+use thoosa_motifs::cli::RunAllArgs;
 use thoosa_motifs::distance::{DotProductConfigRangeOrValue, EucDistConfigRangeOrValue, SimilarityMetricRangeOrValue};
 use thoosa_motifs::find::FixedFindMotifsConfig;
 use thoosa_motifs::fragments::{DataBy, PlotDataArgs};
 use thoosa_motifs::motifs_store::MotifsStore;
+use thoosa_motifs::plotting::run_plot;
 use thoosa_motifs::stages::apply_motif_nets::ApplyMotifNets;
 use thoosa_motifs::stages::cross_loader::ResourcesConfigInput;
 use thoosa_motifs::stages::extend_motifs::ExtendMotifsStage;
 use thoosa_motifs::stages::find_and_select_motifs::{FindAndSelectMotifsInput, FindAndSelectMotifsRunConfig, FindAndSelectMotifsRunConfigFields, FindAndSelectMotifsRunConfigRangeOrValue, FindAndSelectMotifsStage};
 use thoosa_motifs::stages::find_motifs_run_config::{
     AccumulateStatsRangeOrValue, AggrRangeOrValue, CoherenceRunConfigRangeOrValue, CrossLoaderRunConfig, CrossLoaderRunConfigRangeOrValue, ExtendMotifsConfigRangeOrValue, ExtendMotifsRunConfigRangeOrValue, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, FinderKindRangeOrValue,
-    InlierRatioRunConfigRangeOrValue, InterestingTvNorm01RunConfigRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MetricsRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, PeriodicityAcfRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue,
-    SelectMotifsRunConfigFields, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue,
+    InlierRatioRunConfigRangeOrValue, InterestingTvNorm01RunConfigRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MetricsRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, PeriodicityAcfRunConfigRangeOrValue, PrecalculateStatsRangeOrValue,
+    QuantileAggrRangeOrValue, SelectMotifsRunConfigFields, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue,
 };
 use thoosa_motifs::stages::motif_loader::MotifLoader;
 use thoosa_motifs::stages::select_motifs::{SelectMotifsInput, SelectMotifsStage};
@@ -39,6 +37,10 @@ use thoosa_motifs::stages::train_final_net::new_train_final_net;
 use thoosa_motifs::stages::train_label_nets::{TrainLabelNetRunConfig, TrainLabelNetRunConfigRangeOrValue, new_train_label_nets};
 use thoosa_motifs::stages::train_motif_nets::{TrainMotifNetInput, TrainMotifNets};
 use thoosa_motifs::train_nets::{FinalNetArgsRangeOrValue, LabelNetTypeArgsRangeOrValue, MotifCosineNetArgsRangeOrValue, MotifsBy, TrainFinalNetRunConfig, TrainFinalNetRunConfigRangeOrValue, TrainMotifNetRunConfig, TrainMotifNetRunConfigRangeOrValue};
+use thoosa_motifs::workflow::dyn_step_find_and_select;
+use thoosa_motifs::workflow::median_window_from_find_and_select;
+use thoosa_motifs::workflow::run_grid;
+use thoosa_motifs::workflow::run_opt;
 use thoosa_motifs::{stages, train_nets};
 use thoosa_shared::hyperparameter::FieldName;
 use thoosa_shared::run_configs::RunConfigId;
@@ -686,7 +688,9 @@ fn run_all_find_motifs_config_grid_0() -> FindMotifsRunConfigRangeOrValue<FindMo
                 high_hz: RangeOrValue::Value(100.0),
             }),
             // Retain a lightly smoothed branch as well as the slow morphology seen in earlier screening.
-            MedianFilter(MedianFilterParamsRangeOrValue { window: RangeOrValue::Range { range: 5..102, step: Some((96, 0)) } }),
+            MedianFilter(MedianFilterParamsRangeOrValue {
+                window: RangeOrValue::Range { range: 5..102, step: Some((96, 0)) },
+            }),
             InputFilterRangeOrValue::Vec(vec![
                 SavGolFilter(SavGolFilterParamsRangeOrValue {
                     window_len: RangeOrValue::Value(9),
@@ -727,7 +731,10 @@ fn run_all_select_motifs_config_grid_0<P: FieldName + 'static>() -> SelectMotifs
                 min: RangeOrValue::Value(0.6),
             },
             MotifCriterionConstraintRangeOrValue {
-                metric: MetricsRangeOrValue::InlierRatio(InlierRatioRunConfigRangeOrValue { k: RangeOrValue::Value(3.0), eps: RangeOrValue::Value(1e-8) }),
+                metric: MetricsRangeOrValue::InlierRatio(InlierRatioRunConfigRangeOrValue {
+                    k: RangeOrValue::Value(3.0),
+                    eps: RangeOrValue::Value(1e-8),
+                }),
                 min: RangeOrValue::Value(0.7),
             },
             MotifCriterionConstraintRangeOrValue {
@@ -939,12 +946,12 @@ mod tests {
     use thoosa_common::transforms::filters::InputFilterRangeOrValue::BandPassFilter;
     use thoosa_common::transforms::filters::{BandPassFilterParamsRangeOrValue, PaddingRangeOrValue, ZeroPaddingRangeOrValue};
     use thoosa_common::ws::{FsWorkspace, WsConfigs, mock_ws_simp};
-    use thoosa_motifs::cli::{RunAllArgs};
-use thoosa_motifs::resource_import::import_resources;
+    use thoosa_motifs::cli::RunAllArgs;
     use thoosa_motifs::distance::{EucDistConfigRangeOrValue, SimilarityMetricRangeOrValue, TRIGGER_RESET_IN_CLC_D2_SIMILARITY_AND_MASK};
     use thoosa_motifs::find::FixedFindMotifsConfig;
     use thoosa_motifs::fragments::Resolution;
     use thoosa_motifs::motifs_store::{MotifsStore, create_motif_tables};
+    use thoosa_motifs::resource_import::import_resources;
     use thoosa_motifs::stages::find_and_select_motifs::{FindAndSelectMotifsRunConfigFields, FindAndSelectMotifsRunConfigRangeOrValue};
     use thoosa_motifs::stages::find_motifs_run_config::{
         AggrRangeOrValue, CoherenceRunConfigRangeOrValue, CrossLoaderRunConfigRangeOrValue, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, FinderKindRangeOrValue, InlierRatioRunConfigRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MetricsRangeOrValue,
@@ -993,7 +1000,13 @@ use thoosa_motifs::resource_import::import_resources;
             let Aggr::Quantile(q) = stats.aggr else { panic!("expected quantile cutoff") };
             assert!(q.q > 0.0 && q.q < 1.0, "the cutoff must not collapse to the maximum observed distance");
             let filters = config.freq_filter.as_ref().expect("EEG preprocessing");
-            let stride = filters.iter().filter_map(|filter| match filter { InputFilter::SavGolFilter(params) => Some(params.stride), _ => None }).product::<u32>();
+            let stride = filters
+                .iter()
+                .filter_map(|filter| match filter {
+                    InputFilter::SavGolFilter(params) => Some(params.stride),
+                    _ => None,
+                })
+                .product::<u32>();
             strides.insert(stride);
             let duration = config.window as f64 * stride as f64 / 200.0;
             assert!((0.4..=8.0).contains(&duration), "unexpected EEG motif duration: {duration}");

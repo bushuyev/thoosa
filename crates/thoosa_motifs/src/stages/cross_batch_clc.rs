@@ -47,7 +47,7 @@ pub const SYNC_CROSS_UNFOLD_CLC_ENDPOINT: &str = "CrossUnfoldClc";
 #[derive(Debug)]
 enum CrossOuterBatch<'a, R> {
     Raw(BorrowedResourceBatch<'a, R>),
-    Prepared { data: ThoDataRef<'a, PreparedCrossBatch>, resources: Vec<R> },//used in <impl SelectRef for CrossInputSelectorWrap>::select_ref
+    Prepared { data: ThoDataRef<'a, PreparedCrossBatch>, resources: Vec<R> }, //used in <impl SelectRef for CrossInputSelectorWrap>::select_ref
 }
 
 #[derive(Debug)]
@@ -329,9 +329,7 @@ where
         CrossInputBatch1Selector: 'o,
         Self: 'o,
     {
-        async move {
-            self.borrow_inner_range(checked_batch_range(&selector.resources_batch_range, self.inner.len())?)
-        }
+        async move { self.borrow_inner_range(checked_batch_range(&selector.resources_batch_range, self.inner.len())?) }
     }
 }
 

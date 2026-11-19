@@ -99,13 +99,7 @@ where
         // The input can come from different loaders; follow its registered owners.
 
         let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, SyncStftSelector> = OOMHandler::throttle_and_offload(MaxParallelStep::FAST, "sync_stft");
-        let output = t!(oom_handler.run(
-            &self.sync_stft,
-            Arc::clone(&input),
-            ctx.branch(false),
-            WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::default(),),
-        ))
-        .await?;
+        let output = t!(oom_handler.run(&self.sync_stft, Arc::clone(&input), ctx.branch(false), WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::default(),),)).await?;
         Ok(Arc::new(DevicesWrap::wrap(output)))
     }
 }

@@ -216,7 +216,16 @@ where
             .await
     }
 
-    pub(crate) async fn run_batches(self: &Arc<Self>, batches: BoxStream<'_, Result<(ThoBatch<DI>, Option<BatchLengths>, ThoBatch<DO>), ThoError>>, mut ctx: C, train: bool, loss_reporting: LossReporting, max_other_parallel: usize, prefetch: bool, mut on_completed: impl FnMut(TrainStepOutput) -> Result<(), ThoError> + Send) -> Result<(), ThoError>
+    pub(crate) async fn run_batches(
+        self: &Arc<Self>,
+        batches: BoxStream<'_, Result<(ThoBatch<DI>, Option<BatchLengths>, ThoBatch<DO>), ThoError>>,
+        mut ctx: C,
+        train: bool,
+        loss_reporting: LossReporting,
+        max_other_parallel: usize,
+        prefetch: bool,
+        mut on_completed: impl FnMut(TrainStepOutput) -> Result<(), ThoError> + Send,
+    ) -> Result<(), ThoError>
     where
         C: MaxParallelCtx + Adjustable,
     {
@@ -804,7 +813,12 @@ struct TrainStepWireOutput {
 
 impl From<TrainStepOutput> for TrainStepWireOutput {
     fn from(output: TrainStepOutput) -> Self {
-        Self { loss: match output { TrainStepOutput::Completed => None, TrainStepOutput::Loss(loss) => Some(loss) } }
+        Self {
+            loss: match output {
+                TrainStepOutput::Completed => None,
+                TrainStepOutput::Loss(loss) => Some(loss),
+            },
+        }
     }
 }
 

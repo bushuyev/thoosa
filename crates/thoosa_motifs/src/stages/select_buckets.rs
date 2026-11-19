@@ -454,13 +454,7 @@ where
 
                 let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::throttle_and_offload(MaxParallelStep::FAST, "select_buckets");
 
-                t!(oom_handler.run(
-                    &sync_stage,
-                    Arc::new(SelectBucketsSyncInputWrapper::new(select_config)),
-                    ctx.branch(false),
-                    WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::default(),),
-                ))
-                .await
+                t!(oom_handler.run(&sync_stage, Arc::new(SelectBucketsSyncInputWrapper::new(select_config)), ctx.branch(false), WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::default(),),)).await
             }
         });
 

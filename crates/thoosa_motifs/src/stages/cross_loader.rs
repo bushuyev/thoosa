@@ -237,15 +237,7 @@ where
         self
     }
 
-    async fn run_loaded_batch(
-        &self,
-        t_0_batch: LoadedResourceBatch,
-        t_1_batch: LoadedResourceBatch,
-        mut ctx: C,
-        receiver: Arc<RSV>,
-        prepared_outer: Option<Arc<TmpCachedEntry<PreparedCrossBatch>>>,
-        pending_consumer: &mut Option<JoinHandle<Result<(), ThoError>>>,
-    ) -> Result<(), ThoError> {
+    async fn run_loaded_batch(&self, t_0_batch: LoadedResourceBatch, t_1_batch: LoadedResourceBatch, mut ctx: C, receiver: Arc<RSV>, prepared_outer: Option<Arc<TmpCachedEntry<PreparedCrossBatch>>>, pending_consumer: &mut Option<JoinHandle<Result<(), ThoError>>>) -> Result<(), ThoError> {
         debug!("CrossLoader::run_loaded_batch: find_motifs_run_config_id={} t_0_batch={t_0_batch:?} t_1_batch={t_1_batch:?}", self.find_motifs_run_config_id);
 
         let cross_unfold_clc = Arc::clone(&self.cross_unfold_clc);
@@ -314,12 +306,7 @@ where
         let prepared_outer = if let Some(stage) = &self.prepare_outer {
             let prepared_cache = Arc::new(TmpCached::new("discovery_outer_batch").await);
 
-            let input = Arc::new(CrossInputSelectorWrap::new(
-                mono_key!(self.find_motifs_run_config_id, "prepare_outer_batch").into(),
-                t_0_batch.clone(),
-                ResourceBatch::default(),
-                CacheArea::default(),
-            ));
+            let input = Arc::new(CrossInputSelectorWrap::new(mono_key!(self.find_motifs_run_config_id, "prepare_outer_batch").into(), t_0_batch.clone(), ResourceBatch::default(), CacheArea::default()));
 
             // Preparing the outer batch reads each of its cached resource tensors.
 
@@ -376,15 +363,7 @@ where
 
                 if t_1_len > max_batch {
                     if !t_1_batch.is_empty() {
-                        t!(self.run_loaded_batch(
-                            t_0_batch.clone(),
-                            std::mem::take(&mut t_1_batch),
-                            ctx.branch(false),
-                            Arc::clone(&receiver),
-                            prepared_outer.clone(),
-                            &mut pending_consumer,
-                        ))
-                        .await?;
+                        t!(self.run_loaded_batch(t_0_batch.clone(), std::mem::take(&mut t_1_batch), ctx.branch(false), Arc::clone(&receiver), prepared_outer.clone(), &mut pending_consumer,)).await?;
                         t_1_batch_len = 0;
                         collect_eta_record_completion(cross_loader_inner.id());
                     }
@@ -401,15 +380,7 @@ where
                     continue;
                 }
 
-                t!(self.run_loaded_batch(
-                    t_0_batch.clone(),
-                    std::mem::take(&mut t_1_batch),
-                    ctx.branch(false),
-                    Arc::clone(&receiver),
-                    prepared_outer.clone(),
-                    &mut pending_consumer,
-                ))
-                .await?;
+                t!(self.run_loaded_batch(t_0_batch.clone(), std::mem::take(&mut t_1_batch), ctx.branch(false), Arc::clone(&receiver), prepared_outer.clone(), &mut pending_consumer,)).await?;
                 t_1_batch_len = 0;
                 collect_eta_record_completion(cross_loader_inner.id());
             }
@@ -945,7 +916,7 @@ impl SelectRef<CrossInputSelector> for CrossInputSelectorWrap {
     /// The adjuster leaves the outer selector unchanged (normally `Full`), allowing
     /// reuse of `prepared_outer` across inner chunks. A changed outer selection
     /// instead materializes raw inputs so preparation matches the selected resources.
-    fn select_ref<'o>(&'o self, to_tho_device_idx: usize, selector: CrossInputSelector) -> impl Future<Output=Result<<Self as BorrowRef>::Out<'o>, ThoError>> + Send
+    fn select_ref<'o>(&'o self, to_tho_device_idx: usize, selector: CrossInputSelector) -> impl Future<Output = Result<<Self as BorrowRef>::Out<'o>, ThoError>> + Send
     where
         CrossInputSelector: 'o,
         Self: 'o,
@@ -954,7 +925,9 @@ impl SelectRef<CrossInputSelector> for CrossInputSelectorWrap {
             // Inner resource/slice retries reuse the same outer preparation.
             // Retain the raw path for selectors that actually change the outer batch.
             let inner = t!(selector.batch_1_selector.borrow_to(&self.batch_1, to_tho_device_idx)).await?;
-            if matches!(selector.batch_0_selector, RangeOrSlice::Full) && let Some(prepared) = &self.prepared_outer {
+            if matches!(selector.batch_0_selector, RangeOrSlice::Full)
+                && let Some(prepared) = &self.prepared_outer
+            {
                 let prepared = BorrowRef::borrow_ref(prepared, to_tho_device_idx).await?;
                 prepared.as_ref().validate_lengths(self.batch_0.lengths())?;
                 CrossInput::from_prepared(self.id.clone(), prepared, self.batch_0.resources().to_vec(), inner)

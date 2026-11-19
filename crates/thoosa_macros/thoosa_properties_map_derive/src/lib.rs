@@ -277,7 +277,9 @@ fn vector_properties(field_ident: &syn::Ident, field_name: &str, item_ty: &syn::
                 Some(values)
             } else if values.is_empty() { None } else { Some(values) }
         }
-    } else { quote! { values } };
+    } else {
+        quote! { values }
+    };
     let decoded = quote! {
         #field_ident: {
             thoosa_properties_map::validate_indices(properties, &thoosa_shared::conc_str(&prefix, #field_path))?;

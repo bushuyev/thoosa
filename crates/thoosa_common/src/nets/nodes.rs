@@ -1270,10 +1270,21 @@ fn scaled_attention(mut q: Tensor, mut k: Tensor, mut v: Tensor, key_valid: Opti
         };
         // Backend values follow LibTorch's ATen/SDPBackend.h; reserve slot 5 for unknown values.
         let slot = if (0..=4).contains(&backend) { backend as u32 } else { 5 };
-        let kind_slot = match q.kind() { Kind::Float => 0, Kind::Half => 1, Kind::BFloat16 => 2, _ => 3 };
+        let kind_slot = match q.kind() {
+            Kind::Float => 0,
+            Kind::Half => 1,
+            Kind::BFloat16 => 2,
+            _ => 3,
+        };
         let bit = 1u64 << (slot * 8 + u32::from(mask.is_some()) * 4 + u32::from(dropout_p > 0.0) * 2 + u32::from(q.device().is_cuda()));
         if REPORTED_BACKENDS[kind_slot].fetch_or(bit, Ordering::Relaxed) & bit == 0 {
-            log::info!("SelfAttention::scaled_attention: backend={backend_name} device={:?} kind={:?} q_shape={:?} head_dim={head_dim} masked={} train={train} dropout_p={dropout_p}", q.device(), q.kind(), q.size(), mask.is_some());
+            log::info!(
+                "SelfAttention::scaled_attention: backend={backend_name} device={:?} kind={:?} q_shape={:?} head_dim={head_dim} masked={} train={train} dropout_p={dropout_p}",
+                q.device(),
+                q.kind(),
+                q.size(),
+                mask.is_some()
+            );
         }
     }
 

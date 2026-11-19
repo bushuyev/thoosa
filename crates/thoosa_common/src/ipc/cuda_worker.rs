@@ -5,12 +5,12 @@ use crate::dims::Dims;
 use crate::ipc::cuda_process;
 use crate::ipc::cuda_process::{DeviceInfo, IPC_SOCK_ENV};
 use crate::ipc::ipc_cuda_utils::recv_fd;
-use crate::ipc::serialization::{PostcardToFromBytes, ToFromBytes, MessageHeader, decode_failure, message_header};
+use crate::ipc::serialization::{MessageHeader, PostcardToFromBytes, ToFromBytes, decode_failure, message_header};
 use crate::ipc::worker_msg::CudaWorkerId;
 use crate::ipc::worker_msg::{CudaWorkerMsgIn, CudaWorkerMsgOut, DebugOutput, DeviceStatsOutput, OpResult, Operation, WorkerCopyDonePayload, WorkerInput};
 use crate::ipc::wraps::{ErasedWithState, SyncStageIpcWrapper};
-use crate::tho_device::ThoDevice;
 use crate::runner::blocking::STAGE_BLOCKING_POOL;
+use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
 use crate::ws::{FsWorkspace, Workspace, WsConfigs};
 use anyhow::Context as _;
@@ -129,7 +129,11 @@ where
                 },
                 Err(error) => {
                     warn!("serve_worker_requests: error={error:?}");
-                    let failure = if error.kind() == std::io::ErrorKind::InvalidData { ThoError::IpcProtocol(format!("invalid request framing for worker={worker_id:?}: {error}")) } else { error.into() };
+                    let failure = if error.kind() == std::io::ErrorKind::InvalidData {
+                        ThoError::IpcProtocol(format!("invalid request framing for worker={worker_id:?}: {error}"))
+                    } else {
+                        error.into()
+                    };
                     Err((None, failure))
                 }
             };
@@ -795,9 +799,10 @@ impl CudaWorker {
                             // The request/endpoint/input/stream owners stay on this
                             // stack until synchronization. Transport and async
                             // submission remain on the Tokio scheduler.
-                            STAGE_BLOCKING_POOL.acquire().await?.run(|| {
-                                panic_to_err!(crate::ipc::wraps::run_worker_stage(endpoint.stage.execution(), input, consume, &context.all_cuda_tensors, &context.tho_device, &run_ctx, &mut stream))
-                            })
+                            STAGE_BLOCKING_POOL
+                                .acquire()
+                                .await?
+                                .run(|| panic_to_err!(crate::ipc::wraps::run_worker_stage(endpoint.stage.execution(), input, consume, &context.all_cuda_tensors, &context.tho_device, &run_ctx, &mut stream)))
                         }
                     };
                     if let Err(e) = &result {
@@ -1164,8 +1169,12 @@ mod request_tests {
         for console in [false, true] {
             for aggregate in [false, true] {
                 let mut args = vec!["thoosa_hbac"];
-                if console { args.push("--tokio-console"); }
-                if aggregate { args.push("--aggregate-timing"); }
+                if console {
+                    args.push("--tokio-console");
+                }
+                if aggregate {
+                    args.push("--aggregate-timing");
+                }
                 let cli = WorkerCli::parse_from(args);
                 assert_eq!(cli.tokio_console, console);
                 assert_eq!(cli.aggregate_timing, aggregate);
@@ -1196,9 +1205,22 @@ mod request_tests {
     async fn test_bad_request_payload_sends_terminal_reply_before_exit() {
         let (mut client, server) = tokio::io::duplex(4096);
         let (reader, writer) = tokio::io::split(server);
-        let handler = MockRequestHandlerBuilder { calls: 0, run: |_| async { Ok(OpResult::Ok(None)) }.boxed() }.build();
+        let handler = MockRequestHandlerBuilder {
+            calls: 0,
+            run: |_| async { Ok(OpResult::Ok(None)) }.boxed(),
+        }
+        .build();
         let worker = tokio::spawn(serve_worker_requests(reader, writer, worker_id(), move |request| handler.run(request)));
-        let request = CudaWorkerMsgIn::new(worker_id(), 42, Operation::InvokeStage { endpoint_name: "TrainLabelStep".into(), stage_id: None, input: Box::new(()), consume: false });
+        let request = CudaWorkerMsgIn::new(
+            worker_id(),
+            42,
+            Operation::InvokeStage {
+                endpoint_name: "TrainLabelStep".into(),
+                stage_id: None,
+                input: Box::new(()),
+                consume: false,
+            },
+        );
         let mut frame = PostcardToFromBytes::to_bytes(&request).unwrap();
         let start = frame.windows(4).position(|bytes| bytes == b"void").unwrap();
         frame[start] = b'X';

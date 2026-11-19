@@ -8,8 +8,8 @@ use std::marker::PhantomData;
 use std::sync::{Arc, LazyLock};
 use tch::Device;
 use tch::Device::Cpu;
-use thoosa_common::runner::common::cachable::DevicesWrap;
 use thoosa_common::runner::blocking::BlockingPool;
+use thoosa_common::runner::common::cachable::DevicesWrap;
 #[double]
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::tho_device::ThoDevice;
@@ -70,11 +70,13 @@ where
 
         let loader_fn = Arc::clone(&self.loader_fn);
         let resource = Arc::clone(&input);
-        let loaded = FILE_LOAD_POOL.run_owned(move || {
-            // Register the result before returning across the task boundary;
-            // cancellation drops this managed value together with the result.
-            Ok(Arc::new(DevicesWrap::wrap(loader_fn(&resource, &Cpu)?)))
-        }).await?;
+        let loaded = FILE_LOAD_POOL
+            .run_owned(move || {
+                // Register the result before returning across the task boundary;
+                // cancellation drops this managed value together with the result.
+                Ok(Arc::new(DevicesWrap::wrap(loader_fn(&resource, &Cpu)?)))
+            })
+            .await?;
         if ctx.tho_device_idx() == 0 {
             return Ok(loaded);
         }
@@ -226,15 +228,18 @@ mod tests {
         let (started_tx, mut started_rx) = tokio::sync::mpsc::unbounded_channel();
         let (finish_tx, finish_rx) = std::sync::mpsc::channel();
         let finish_rx = std::sync::Mutex::new(finish_rx);
-        let loader = Arc::new(RawTensorLoader::<MockRunCtx>::new(move |resource, device| {
-            assert_eq!(resource.id(), 123);
-            assert_eq!(*device, Cpu, "file loading must stay on CPU in both execution modes");
-            started_tx.send(std::thread::current().id()).expect("test is waiting for file work");
-            finish_rx.lock().expect("test receiver lock").recv_timeout(Duration::from_secs(5)).expect("scheduler must release file work");
-            // No tensor/device initialization is needed to verify propagation of
-            // a typed loader failure across the new blocking-task boundary.
-            Err(ThoError::oom())
-        }, ThoDevice::from(0usize)));
+        let loader = Arc::new(RawTensorLoader::<MockRunCtx>::new(
+            move |resource, device| {
+                assert_eq!(resource.id(), 123);
+                assert_eq!(*device, Cpu, "file loading must stay on CPU in both execution modes");
+                started_tx.send(std::thread::current().id()).expect("test is waiting for file work");
+                finish_rx.lock().expect("test receiver lock").recv_timeout(Duration::from_secs(5)).expect("scheduler must release file work");
+                // No tensor/device initialization is needed to verify propagation of
+                // a typed loader failure across the new blocking-task boundary.
+                Err(ThoError::oom())
+            },
+            ThoDevice::from(0usize),
+        ));
         let load = tokio::spawn(loader.run(Arc::new(Resource::new(123, 1, "resource", 10)), mock_run_ctx::default(0)));
         let file_thread = started_rx.recv().await.expect("loader started");
         assert_ne!(file_thread, scheduler_thread, "synchronous file work ran on Tokio's current-thread scheduler");

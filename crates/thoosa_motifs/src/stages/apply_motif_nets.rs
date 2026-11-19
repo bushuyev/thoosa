@@ -455,14 +455,9 @@ where
         });
 
         let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::throttle_and_offload(MaxParallelStep::FAST, "stack_apply_motif_nets");
-        let motif_nets_applied = t!(oom_handler.run(
-            &self.stack_applied_motif_nets,
-            Arc::clone(&stack_input),
-            ctx.branch(true),
-            WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::default(),),
-        ))
-        .await?
-        .into_inner();
+        let motif_nets_applied = t!(oom_handler.run(&self.stack_applied_motif_nets, Arc::clone(&stack_input), ctx.branch(true), WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::default(),),))
+            .await?
+            .into_inner();
 
         debug!("ApplyMotifNets::run: 1. motif_nets_applied={motif_nets_applied:?}");
 
@@ -935,11 +930,7 @@ where
             &self.sync_stage,
             Arc::new(ApplyMotifNetInputWrapper::new(Arc::clone(&input))),
             ctx,
-            Contexts::<DynSyncStageWithStateEnum<SyncApplyMotifNet<C>, MotifNetMeta>, _, _, _>::new(
-                ApplyMotifNetSplitsContext::new(input.size().clone(), out_id, slices, (Float, Cpu), width, step)?,
-                NoopRunnableContext {},
-                MaxParallelAndDumpToCpuAdjustableContex::default(),
-            ),
+            Contexts::<DynSyncStageWithStateEnum<SyncApplyMotifNet<C>, MotifNetMeta>, _, _, _>::new(ApplyMotifNetSplitsContext::new(input.size().clone(), out_id, slices, (Float, Cpu), width, step)?, NoopRunnableContext {}, MaxParallelAndDumpToCpuAdjustableContex::default()),
         )
         .await
         .map_err(|error| error.context(format!("apply motif net {:?}", self.id)))?;
@@ -1048,9 +1039,7 @@ where
                 // Construction loads model state and has no cached tensor inputs to retain.
 
                 let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::throttle_and_offload(MaxParallelStep::FAST, "apply_motif_net_init");
-                let stage = oom_handler
-                    .new_stage(sync_init, run_context, WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::default()), &ws)
-                    .await?;
+                let stage = oom_handler.new_stage(sync_init, run_context, WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::default()), &ws).await?;
 
                 // Every configured instance must remain purgeable; concatenated tensor IDs can collide as display strings.
                 thoosa_common::runner::global_ctx::GlobalCtx::global().register_cache((stage.stage_id(), Arc::clone(&stage) as Arc<dyn CachePurger>));

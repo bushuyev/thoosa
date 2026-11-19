@@ -3,8 +3,8 @@ use crate::ipc::cuda_worker::{AllTensors, WokerRunCtx, WorkerStageInput, WorkerS
 use crate::ipc::serialization::json::IpcCodec;
 use crate::ipc::state_transfer::{CheckpointRestore, StateTransfer};
 use crate::ipc::worker_msg::WorkerInput;
-use crate::runner::purge::CachePurger;
 use crate::runner::blocking::STAGE_BLOCKING_POOL;
+use crate::runner::purge::CachePurger;
 use crate::runner::sync_stage::{ConsumingStage, PrepareStage};
 use crate::tho_device::ThoDevice;
 use futures_util::FutureExt;

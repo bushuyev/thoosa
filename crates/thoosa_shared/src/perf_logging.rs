@@ -613,9 +613,7 @@ mod tests {
             let key = if enabled { "test_optional_aggregate_enabled" } else { "test_optional_aggregate_disabled" };
             let writer = SyncMakeWriter::new(Vec::<u8>::new());
             let aggregate_layer = enabled.then(|| PerfLayer::new().with_filter(FilterFn::new(aggregate_span_filter)));
-            let subscriber = registry()
-                .with(fmt::layer().with_ansi(false).with_writer(writer.clone()).with_filter(tracing_subscriber::filter::LevelFilter::INFO))
-                .with(aggregate_layer);
+            let subscriber = registry().with(fmt::layer().with_ansi(false).with_writer(writer.clone()).with_filter(tracing_subscriber::filter::LevelFilter::INFO)).with(aggregate_layer);
 
             tracing::subscriber::with_default(subscriber, || {
                 let unrelated = tracing::debug_span!("unrelated_diagnostic_span");
@@ -641,9 +639,7 @@ mod tests {
     fn test_aggregate_timing_ignores_spans_enabled_by_other_layers() {
         use super::*;
 
-        let subscriber = Arc::new(registry()
-            .with(PerfLayer::new().with_filter(FilterFn::new(aggregate_span_filter)))
-            .with(fmt::layer().with_writer(std::io::sink)));
+        let subscriber = Arc::new(registry().with(PerfLayer::new().with_filter(FilterFn::new(aggregate_span_filter))).with(fmt::layer().with_writer(std::io::sink)));
         tracing::subscriber::with_default(Arc::clone(&subscriber), || {
             // DEBUG output or Console can enable spans that the timing layer
             // rejects. Verify those spans never receive timing extensions.

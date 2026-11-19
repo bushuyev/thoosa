@@ -839,7 +839,10 @@ mod generation_tests {
 
     #[test]
     fn test_remote_allocation_registry_removes_only_last_owner() {
-        let worker = CudaWorkerId { device_idx: 1, generation: CudaDeviceGeneration(u64::MAX) };
+        let worker = CudaWorkerId {
+            device_idx: 1,
+            generation: CudaDeviceGeneration(u64::MAX),
+        };
         let identity = (0, worker, u64::MAX);
         let owner = KeyHolder::ownership(identity.2, worker, None);
         let alias = KeyHolder::ownership(identity.2, worker, None);
@@ -858,7 +861,10 @@ mod generation_tests {
 
     #[test]
     fn test_remote_allocation_cleanup_preserves_replacement() {
-        let worker = CudaWorkerId { device_idx: 2, generation: CudaDeviceGeneration(u64::MAX) };
+        let worker = CudaWorkerId {
+            device_idx: 2,
+            generation: CudaDeviceGeneration(u64::MAX),
+        };
         let identity = (0, worker, u64::MAX);
         let owner = KeyHolder::ownership(identity.2, worker, None);
         let weak = Arc::downgrade(&owner);

@@ -733,13 +733,7 @@ where
         let sync_input = SyncMotifLoaderInputWrapper::new(input_id.clone(), motif_id_value, select_motifs_run_config_id_for_key, real_find_motifs_run_config_id, channel, window, loaded_resources, "motif loader wrapper");
 
         let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::throttle_and_offload(MaxParallelStep::FAST, "motif_loader");
-        let motif = t!(oom_handler.consume(
-            &sync_motif_loader,
-            sync_input,
-            ctx.branch(true),
-            WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::default()),
-        ))
-        .await?;
+        let motif = t!(oom_handler.consume(&sync_motif_loader, sync_input, ctx.branch(true), WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::default()),)).await?;
 
         Ok(Arc::new(DevicesWrap::wrap(motif.into_data_with_extra())))
     }
@@ -882,13 +876,7 @@ where
 
         let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::throttle_and_offload(MaxParallelStep::FAST, "random_slices_loader");
         debug!("RandomSlicesLoader::run: motif_id={motif_id}: sync_input={sync_input:?}");
-        let motif = t!(oom_handler.consume(
-            &sync_motif_loader,
-            sync_input,
-            ctx.branch(true),
-            WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::default()),
-        ))
-        .await?;
+        let motif = t!(oom_handler.consume(&sync_motif_loader, sync_input, ctx.branch(true), WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::default()),)).await?;
 
         let DataWithExtra { data, .. } = motif.into_data_with_extra();
 

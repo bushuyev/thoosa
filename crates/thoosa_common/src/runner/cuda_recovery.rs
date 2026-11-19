@@ -1,5 +1,5 @@
-use std::ops::Deref;
 use std::collections::VecDeque;
+use std::ops::Deref;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -90,16 +90,28 @@ impl CudaRecoveryCoordinator {
             cycle.deref()
         );
 
-        let terminal = cause.is_ipc_protocol_failure()
-            || (self.retire.is_none() && self.process_failure.is_some() && (cause.needs_cuda_recovery() || cause.is_cuda_recovery_failed()));
+        let terminal = cause.is_ipc_protocol_failure() || (self.retire.is_none() && self.process_failure.is_some() && (cause.needs_cuda_recovery() || cause.is_cuda_recovery_failed()));
         let budget_exhausted = if !terminal && cycle.is_none() {
             let now = Instant::now();
             let mut history = self.recoveries.lock();
-            while history.front().is_some_and(|started| now.duration_since(*started) >= RECOVERY_WINDOW) { history.pop_front(); }
-            if history.len() >= MAX_RECOVERIES_IN_WINDOW { true } else { history.push_back(now); false }
-        } else { false };
+            while history.front().is_some_and(|started| now.duration_since(*started) >= RECOVERY_WINDOW) {
+                history.pop_front();
+            }
+            if history.len() >= MAX_RECOVERIES_IN_WINDOW {
+                true
+            } else {
+                history.push_back(now);
+                false
+            }
+        } else {
+            false
+        };
         if terminal || budget_exhausted {
-            let cause = if budget_exhausted { cause.context(format!("CUDA device {} exceeded {MAX_RECOVERIES_IN_WINDOW} recovery attempts in {} seconds", gate.device_idx(), RECOVERY_WINDOW.as_secs())) } else { cause };
+            let cause = if budget_exhausted {
+                cause.context(format!("CUDA device {} exceeded {MAX_RECOVERIES_IN_WINDOW} recovery attempts in {} seconds", gate.device_idx(), RECOVERY_WINDOW.as_secs()))
+            } else {
+                cause
+            };
             // Terminal reports supersede an active pause and never invoke restart.
             // Local CUDA cannot be repaired in-process; IPC protocol bugs cannot
             // be repaired by replacing a child. Drain still cancels queued work.
@@ -111,7 +123,9 @@ impl CudaRecoveryCoordinator {
             if let Some(task) = task {
                 task.abort();
             }
-            if let Some(process_failure) = &self.process_failure { process_failure(failure.clone()); }
+            if let Some(process_failure) = &self.process_failure {
+                process_failure(failure.clone());
+            }
             return Err(failure);
         }
         if let Some(recovery) = cycle.as_ref() {
@@ -131,7 +145,9 @@ impl CudaRecoveryCoordinator {
                 cycle.take();
                 let failure = gate.failure().expect("failed recovery");
                 drop(cycle);
-                if let Some(process_failure) = &self.process_failure { process_failure(failure.clone()); }
+                if let Some(process_failure) = &self.process_failure {
+                    process_failure(failure.clone());
+                }
                 return Err(failure);
             }
         };
@@ -266,7 +282,9 @@ mod tests {
             Arc::clone(&gate),
             Arc::new(|_| panic!("protocol failure must not restart")),
             Some(Arc::new(|_, _| panic!("actor owns terminal worker retirement"))),
-            Some(Arc::new(move |error| { failure_tx.send(error).unwrap(); })),
+            Some(Arc::new(move |error| {
+                failure_tx.send(error).unwrap();
+            })),
         );
         let (_held, pending) = oneshot::channel();
         let ticket = coordinator.request(gate.device_generation(), ThoError::CudaBeingRecovered, || Ok(pending)).unwrap().unwrap();
@@ -287,7 +305,9 @@ mod tests {
             Arc::clone(&gate),
             Arc::new(|_| Box::pin(async { Ok(()) })),
             Some(Arc::new(|_, _| Box::pin(async { Ok(()) }))),
-            Some(Arc::new(move |error| { failure_tx.send(error).unwrap(); })),
+            Some(Arc::new(move |error| {
+                failure_tx.send(error).unwrap();
+            })),
         );
         // Successful worker replacement is permitted, but cannot reset the budget.
         for _ in 0..MAX_RECOVERIES_IN_WINDOW {

@@ -13,7 +13,7 @@ use std::sync::Arc;
 use tch::Kind::Float;
 use tch::Tensor;
 use thoosa_common::data_with_extra::DataWithExtra;
-use thoosa_common::runner::common::cachable::{Cached, BorrowRef, DevicesWrap};
+use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
 use thoosa_common::tch_error::tch_result;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;

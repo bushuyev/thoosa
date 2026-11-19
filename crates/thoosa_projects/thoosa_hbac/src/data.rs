@@ -67,7 +67,6 @@ impl Splitter for ByPatientIdSplitter {
     }
 }
 
-
 pub fn labeled_resources(base: impl AsRef<Path>, file: impl AsRef<Path>) -> anyhow::Result<HashMap<String, Vec<(String, f32)>>> {
     let path = base.as_ref().join(file);
     let eeg_path = path.clone().parent().unwrap().to_path_buf();
@@ -159,7 +158,6 @@ pub fn labeled_resources(base: impl AsRef<Path>, file: impl AsRef<Path>) -> anyh
             h
         }))
 }
-
 
 #[allow(dead_code)]
 #[derive(Debug)]
@@ -494,12 +492,12 @@ mod tests {
     use thoosa_common::utils::{assert_close, from, hist_1_dim, lin_t, plot_series, skewness_kurtosis_1_dim, to_vec_f32};
     use thoosa_common::ws::{FsWorkspace, mock_ws_simp};
     use thoosa_common::ws::{Workspace, WsConfigs};
-    use thoosa_motifs::resource_import::import_resources;
     use thoosa_motifs::data::parquet_to_tensor_by_path;
     use thoosa_motifs::distance::MaskMaker::LeQuantile;
     use thoosa_motifs::distance::clc_d2_similarity_and_mask;
     use thoosa_motifs::find::SelectMotifsParams;
     use thoosa_motifs::motifs_store::{MockMotifsStoreBuilder, MotifsStore, create_motif_tables};
+    use thoosa_motifs::resource_import::import_resources;
     use thoosa_motifs::stages::apply_motif_nets::ApplyMotifNets;
     use thoosa_motifs::stages::find_motifs_run_config::FindMotifsRunConfig;
     use thoosa_motifs::stages::motif_stats::random_non_overlapping_slices;
@@ -561,7 +559,6 @@ mod tests {
 
         Ok(())
     }
-
 
     #[test]
     pub fn test_nth_fragment_to_tensor() {

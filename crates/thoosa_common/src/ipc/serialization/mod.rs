@@ -1,8 +1,8 @@
 pub mod json;
 pub mod tho_tensor;
 
-use serde::{Deserialize, Serialize};
 use crate::ipc::worker_msg::CudaWorkerId;
+use serde::{Deserialize, Serialize};
 use thoosa_shared::ThoError;
 
 // Both messages begin with these positional fields. Decode only this prefix on
@@ -23,7 +23,9 @@ pub(crate) fn decode_failure(direction: &str, peer: &str, frame: &[u8], error: &
     let output_tag = || -> Option<&str> {
         let (_, payload) = message_header(frame).ok()?;
         let ((status, present), payload) = postcard::take_from_bytes::<(u32, u8)>(payload).ok()?;
-        if status != 0 || present != 1 { return None; }
+        if status != 0 || present != 1 {
+            return None;
+        }
         let ((fields, key, tag), _) = postcard::take_from_bytes::<(usize, &str, &str)>(payload).ok()?;
         (fields > 0 && key == "type").then_some(tag)
     };

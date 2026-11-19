@@ -197,40 +197,44 @@ impl<O: Clone> CachedFuture<O> {
         // Shared futures may be polled by the cache's detached task rather than
         // their caller. Carry scheduling ownership just as we carry CUDA leases.
         let context = thoosa_shared::job_context::JobContext::current().dependencies();
-        let inner = async move { context.run(async move {
-            let activity = activity?;
-            let dependencies = activity.clone();
-            let run = async move {
-                let interrupted = async {
-                    let origin_ended = async {
-                        match &computation_origin {
-                            Some((gate, generation)) => gate.wait_for_generation_end(*generation).await,
-                            None => std::future::pending().await,
+        let inner = async move {
+            context
+                .run(async move {
+                    let activity = activity?;
+                    let dependencies = activity.clone();
+                    let run = async move {
+                        let interrupted = async {
+                            let origin_ended = async {
+                                match &computation_origin {
+                                    Some((gate, generation)) => gate.wait_for_generation_end(*generation).await,
+                                    None => std::future::pending().await,
+                                }
+                            };
+                            let dependency_ended = async {
+                                match &dependencies {
+                                    Some(scope) => scope.wait_for_interruption().await,
+                                    None => std::future::pending().await,
+                                }
+                            };
+                            tokio::select! { error = origin_ended => error, error = dependency_ended => error }
+                        };
+                        tokio::select! {
+                            biased;
+                            error = interrupted => Err(error),
+                            result = inner => {
+                                if let Some(scope) = &dependencies { scope.check_dependencies()?; }
+                                if let Some((gate, generation)) = &computation_origin { gate.check_generation(*generation)?; }
+                                result
+                            }
                         }
                     };
-                    let dependency_ended = async {
-                        match &dependencies {
-                            Some(scope) => scope.wait_for_interruption().await,
-                            None => std::future::pending().await,
-                        }
-                    };
-                    tokio::select! { error = origin_ended => error, error = dependency_ended => error }
-                };
-                tokio::select! {
-                    biased;
-                    error = interrupted => Err(error),
-                    result = inner => {
-                        if let Some(scope) = &dependencies { scope.check_dependencies()?; }
-                        if let Some((gate, generation)) = &computation_origin { gate.check_generation(*generation)?; }
-                        result
+                    match activity {
+                        Some(scope) => scope.run(run).await,
+                        None => run.await,
                     }
-                }
-            };
-            match activity {
-                Some(scope) => scope.run(run).await,
-                None => run.await,
-            }
-        }).await }
+                })
+                .await
+        }
         .boxed()
         .shared();
         // A cache owns its pending future even when every caller cancels. Keep
@@ -1198,7 +1202,7 @@ mod tests {
     use tokio::sync::{Notify, Semaphore};
     use tokio::time::timeout;
     extern crate self as caching_runner;
-    use crate::runner::common::cachable::{join_or_start_inflight, BorrowRef, DevicesWrap, InflightRole};
+    use crate::runner::common::cachable::{BorrowRef, DevicesWrap, InflightRole, join_or_start_inflight};
     use crate::runner::common::mock_run_ctx;
     pub use crate::runner::common::*;
     use crate::runner::global_ctx;

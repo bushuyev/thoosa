@@ -300,13 +300,13 @@ mod tests {
         use crate::cuda_copier::CudaActorHandle;
         use crate::ipc::cuda_worker::CudaWorker;
         use crate::ipc::tests::run_ipc_test;
-        use crate::runner::global_ctx::GlobalCtx;
         use crate::runner::common::cachable::{CachedFuture, DevicesWrap};
+        use crate::runner::global_ctx::GlobalCtx;
         use crate::tch_error::tch_result;
         use crate::tho_tensor::ThoTensor;
         use crate::ws::mock_ws_simp;
-        use parking_lot::RwLock;
         use futures_util::FutureExt;
+        use parking_lot::RwLock;
         use std::collections::HashMap;
         use std::sync::Arc;
         use thoosa_shared::ThoError;
@@ -345,19 +345,27 @@ mod tests {
                         }
                     }
                     Err(ThoError::new("progress socket closed before publishing worker stats"))
-                }).await??;
+                })
+                .await??;
                 // Exercise the action on the same socket, measuring the cached worker reference in the parent.
                 super::send_progress_message(&mut writer, &ProgressRequest::ShowCacheStatistics).await.map_err(|error| ThoError::new(error.to_string()))?;
                 timeout(Duration::from_secs(5), async {
                     while let Some(line) = lines.next_line().await? {
                         if let ProgressResponse::CacheStatistics { cache_statistics } = serde_json::from_str(&line)? {
                             let statistics = cache_statistics.map_err(ThoError::new)?;
-                            assert_eq!(statistics, vec![CacheStatistic { type_name: "ProgressStats".to_string(), bytes: 4 * 1024 * 1024 }]);
+                            assert_eq!(
+                                statistics,
+                                vec![CacheStatistic {
+                                    type_name: "ProgressStats".to_string(),
+                                    bytes: 4 * 1024 * 1024
+                                }]
+                            );
                             return Ok::<_, ThoError>(());
                         }
                     }
                     Err(ThoError::new("progress socket closed before publishing cache statistics"))
-                }).await??;
+                })
+                .await??;
                 server.shutdown().await;
                 GlobalCtx::global().remove_cache(registration.key());
                 drop(cached);

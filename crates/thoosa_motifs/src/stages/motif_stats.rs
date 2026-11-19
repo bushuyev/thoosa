@@ -1179,13 +1179,7 @@ where
 
                 let clc_input = Arc::new(MotifStatsCalcInputWrapper::from_managed(input_id.clone(), Arc::clone(&motif), metrics.clone(), quantiles.clone()));
                 let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::throttle_and_offload(MaxParallelStep::FAST, "clc_stats");
-                t!(oom_handler.run(
-                    &clc_stats_run,
-                    clc_input,
-                    ctx.branch(false),
-                    WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::default(),),
-                ))
-                .await?
+                t!(oom_handler.run(&clc_stats_run, clc_input, ctx.branch(false), WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::default(),),)).await?
             }
             MotifStatsSource::MergedMotifs(motif_loader_inputs) => {
                 if motif_loader_inputs.is_empty() {
@@ -1225,13 +1219,7 @@ where
 
                 let clc_input = Arc::new(MotifStatsCalcInputWrapper::from_motifs(input_id.clone(), motifs.clone(), metrics.clone(), quantiles.clone()));
                 let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::throttle_and_offload(MaxParallelStep::FAST, "clc_stats");
-                t!(oom_handler.run(
-                    &clc_stats_run,
-                    clc_input,
-                    ctx.branch(false),
-                    WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::default(),),
-                ))
-                .await?
+                t!(oom_handler.run(&clc_stats_run, clc_input, ctx.branch(false), WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::default(),),)).await?
             }
             MotifStatsSource::Random { max_slices, find_motifs_run_config_id, resources } => {
                 debug!("MotifStats::run: MotifStatsSource::Random  max_slices={max_slices:?} find_motifs_run_config_id={find_motifs_run_config_id} resources={resources:?}");
@@ -1256,13 +1244,7 @@ where
                 let clc_input = MotifStatsTmpCachedChannelsInput::new(input_id.clone(), channels_slices, metrics.clone(), quantiles.clone());
 
                 let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::throttle_and_offload(MaxParallelStep::FAST, "clc_stats");
-                t!(oom_handler.consume(
-                    &clc_stats_consume,
-                    clc_input,
-                    ctx.branch(false),
-                    WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::default(),),
-                ))
-                .await?
+                t!(oom_handler.consume(&clc_stats_consume, clc_input, ctx.branch(false), WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::default(),),)).await?
             }
         };
 

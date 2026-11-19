@@ -107,8 +107,12 @@ impl PendingRequests {
             self.state.lock().closed = Some(error.clone());
             // Publish before actor scheduling/recovery can observe a concurrent
             // socket error and mistake this protocol bug for a restart request.
-            if let Some(gate) = &self.gate { gate.fail_process(error.clone()); }
-            if let Some(failure) = &self.runtime_failure { failure.fail(error); }
+            if let Some(gate) = &self.gate {
+                gate.fail_process(error.clone());
+            }
+            if let Some(failure) = &self.runtime_failure {
+                failure.fail(error);
+            }
         } else {
             self.close(ThoError::CudaBeingRecovered.context(format!("worker transport failed: {error}")));
         }
@@ -125,7 +129,13 @@ impl PendingRequests {
 
     pub fn complete(&self, response: CudaWorkerMsgOut) -> Result<(), ThoError> {
         if response.worker_id != self.worker {
-            return Err(ThoError::IpcProtocol(format!("response worker {:?} does not match {:?}; request_id={} {}", response.worker_id, self.worker, response.request_id, self.describe(response.request_id))));
+            return Err(ThoError::IpcProtocol(format!(
+                "response worker {:?} does not match {:?}; request_id={} {}",
+                response.worker_id,
+                self.worker,
+                response.request_id,
+                self.describe(response.request_id)
+            )));
         }
         if let super::worker_msg::OpResult::Failed(error) = &response.status
             && error.requires_worker_exit()
@@ -135,7 +145,11 @@ impl PendingRequests {
             let request = {
                 let mut state = self.state.lock();
                 let error: ThoError = error.clone().into();
-                if error.is_ipc_protocol_failure() { state.closed = Some(error); } else { state.closed.get_or_insert(error); }
+                if error.is_ipc_protocol_failure() {
+                    state.closed = Some(error);
+                } else {
+                    state.closed.get_or_insert(error);
+                }
                 let mut request = state.requests.remove(&response.request_id);
                 if let Some(keepalive) = request.as_mut().and_then(|request| request.keepalive.take()) {
                     state.retained.push(keepalive);
@@ -143,7 +157,9 @@ impl PendingRequests {
                 request
             };
             let failure: ThoError = error.clone().into();
-            if failure.is_ipc_protocol_failure() { self.transport_failed(failure); }
+            if failure.is_ipc_protocol_failure() {
+                self.transport_failed(failure);
+            }
             self.failed.cancel();
             if let Some(request) = request {
                 let _ = request.reply.send(Ok(response));
