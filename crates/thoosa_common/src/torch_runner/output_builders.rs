@@ -1,3 +1,4 @@
+use crate::cuda_copier::{complete_cuda_stream, run_cuda_stage};
 use crate::dims::Dims;
 use crate::runner::adjusters::splits::OutputBuilder;
 use crate::tho_tensor::ThoTensor;
@@ -9,6 +10,7 @@ use tch::Kind;
 use thoosa_shared::CopyToDevice;
 use thoosa_shared::ThoError;
 use thoosa_shared::traits::{Named, WithId};
+use thoosa_shims::stream::ThoCudaStream;
 
 #[allow(dead_code)]
 #[derive(Debug)]
@@ -71,31 +73,33 @@ where
         let partial_size = partial.size();
         let partial_len = *partial_size.get(self.dim as usize).ok_or_else(|| ThoError::new("partial output dimension is out of bounds"))?;
 
-        match self.add {
+        let partial = if matches!(self.add, BuildAs::Sum) && self.output.tho_device_idx() != partial.tho_device_idx() {
+            // Addition requires both operands on the destination device, including GPU outputs.
+            partial.copy_to_device(self.output.tho_device_idx()).await?
+        } else {
+            partial
+        };
+        let mut output = self.output.local_mut()?;
+        let stream = match output.device() {
+            Device::Cuda(index) => Some(ThoCudaStream::current(index as i32)?),
+            _ => None,
+        };
+        let mut assemble = || match self.add {
             BuildAs::Append => {
-                debug!(
-                    "SingleDimTensorOutputBuilder::add_partial_output, BuildAs::Append: self.dim={} self.output.size={:?} self.added_partial_output_len={:?} self.output.size={:?} partial_size={partial_size:?}",
-                    self.dim,
-                    self.output.size(),
-                    self.added_partial_output_len,
-                    self.output.size()
-                );
-
-                let mut t = self.output.local_mut()?;
-
-                t.copy_partial_from_(self.dim, self.added_partial_output_len, partial_len, &partial)?;
+                debug!("SingleDimTensorOutputBuilder::add_partial_output, BuildAs::Append: dim={} output.size={:?} added_partial_output_len={} partial_size={partial_size:?}", self.dim, output.size(), self.added_partial_output_len);
+                output.copy_partial_from_(self.dim, self.added_partial_output_len, partial_len, &partial)
             }
             BuildAs::Sum => {
-                debug!("SingleDimTensorOutputBuilder::add_partial_output, BuildAs::Sum: self.output.size={:?} partial_size={partial_size:?}", self.output.size());
-                if self.output.tho_device_idx() != partial.tho_device_idx() {
-                    // Addition requires both operands on the destination device, including GPU outputs.
-                    let partial = partial.copy_to_device(self.output.tho_device_idx()).await?;
-                    self.output.local_mut()?.add_(&partial)?;
-                } else {
-                    let mut t = self.output.local_mut()?;
-                    t.add_(&partial)?;
-                }
+                debug!("SingleDimTensorOutputBuilder::add_partial_output, BuildAs::Sum: output.size={:?} partial_size={partial_size:?}", output.size());
+                output.add_(&partial)
             }
+        };
+        if let Some(stream) = stream {
+            // A stage can allocate the partial on a pooled stream. Finish reading it
+            // on the assembly stream before its allocator can reuse that storage.
+            run_cuda_stage(assemble, || complete_cuda_stream(stream.synchronize(), || stream.synchronize()).result)?;
+        } else {
+            assemble()?;
         }
 
         self.added_partial_output_len += partial_len;

@@ -465,7 +465,7 @@ impl CudaIPCActor {
 
         debug!("CudaIPCActor::spawn_worker_for_cuda_device: child={child:?}");
 
-        let ready = timeout(WORKER_READY_TIMEOUT, async {
+        let handshake = async {
             debug!("CudaIPCActor::spawn_worker_for_cuda_device: before accept");
 
             let accept_r = listener.accept().await;
@@ -483,20 +483,30 @@ impl CudaIPCActor {
 
             device_info.worker_id.check(worker_id)?;
             Ok::<_, ThoError>((stream, device_info))
-        })
-        .await;
+        };
+        // A worker can exit before opening the socket. Observe that exit
+        // immediately rather than waiting out the handshake deadline.
+        let ready = tokio::select! {
+            biased;
+            ready = timeout(WORKER_READY_TIMEOUT, handshake) => {
+                match ready {
+                    Ok(result) => result,
+                    Err(error) => Err(ThoError::from(error).context("CUDA worker readiness timed out")),
+                }
+            }
+            status = child.wait() => match status {
+                Ok(status) => Err(ThoError::new(format!("CUDA worker {worker_id:?} exited before readiness: {status}"))),
+                Err(error) => Err(ThoError::from(error).context("waiting for CUDA worker readiness")),
+            },
+        };
 
         debug!("CudaIPCActor::spawn_worker_for_cuda_device: ready={ready:?}");
 
         let (stream, device_info) = match ready {
-            Ok(Ok(ready)) => ready,
-            result => {
+            Ok(ready) => ready,
+            Err(error) => {
                 kill_and_reap(&mut child).await?;
-                return Err(match result {
-                    Ok(Err(error)) => error,
-                    Err(error) => ThoError::from(error).context("CUDA worker readiness timed out"),
-                    Ok(Ok(_)) => unreachable!(),
-                });
+                return Err(error);
             }
         };
 

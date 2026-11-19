@@ -2,7 +2,6 @@
 
 use log::debug;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::ops::{AddAssign, DivAssign, Range};
@@ -163,7 +162,7 @@ pub enum OOMRunnerConfig {
     DumpedToCpuAndSplits,
 }
 
-pub async fn run_mul_task_invocations<R, F, CF>(load_and_clc: Arc<R>, resources: &[&'static str], device_idx: usize, check_device_idx: usize, ctx_fac: F, check: CF, check_threads: bool) -> Result<(), ThoError>
+pub async fn run_mul_task_invocations<R, F, CF>(load_and_clc: Arc<R>, resources: &[&'static str], device_idx: usize, check_device_idx: usize, ctx_fac: F, check: CF, synchronize_start: bool) -> Result<(), ThoError>
 where
     // D:WithId + Data + Send + Sync,
     R: AsyncStage + Cached + OutId + Send + Sync + 'static,
@@ -178,7 +177,9 @@ where
 {
     let check_arc = Arc::new(check);
     let ctx_fac_arc = Arc::new(ctx_fac);
-    let thread_ids = Arc::new(parking_lot::RwLock::new(vec![]));
+    // Start competing invocations together. Tokio may poll all of them on a
+    // single scheduler thread even when their work overlaps.
+    let start = (synchronize_start && resources.len() > 1).then(|| Arc::new(tokio::sync::Barrier::new(resources.len())));
     let res_cnt = Arc::new(AtomicU32::new(0));
     let res_cnt_arc = Arc::clone(&res_cnt);
 
@@ -187,7 +188,7 @@ where
         .enumerate()
         .map(|(idx, res)| {
             let load_and_clc = Arc::clone(&load_and_clc);
-            let thread_ids = Arc::clone(&thread_ids);
+            let start = start.clone();
             let res = *res;
 
             let check_arc = Arc::clone(&check_arc);
@@ -195,7 +196,9 @@ where
             let res_cnt_arc = Arc::clone(&res_cnt_arc);
             async move {
                 debug!("run_mul_task_invocations: task {idx}: device_idx={device_idx} thread id={:?}", std::thread::current().id());
-                thread_ids.write().push(std::thread::current().id());
+                if let Some(start) = start {
+                    start.wait().await;
+                }
 
                 let name: &'static str = Box::leak(format!("task_{idx}({res})").into_boxed_str());
 
@@ -227,11 +230,6 @@ where
     r?;
 
     assert_eq!(resources.len() as u32, res_cnt.load(Relaxed));
-
-    // assert_eq!(thread_ids.read().iter().collect::<HashSet<_>>().len(), thread_ids.read().len());
-    if check_threads {
-        assert!(thread_ids.read().iter().collect::<HashSet<_>>().len() > 1);
-    }
 
     Ok(())
 }

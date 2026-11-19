@@ -237,13 +237,14 @@ mod tests {
     async fn test_tmp_cache() -> Result<(), ThoError> {
         use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
         use std::sync::Arc;
+        use thoosa_shared::traits::DummyWithId;
         RealGlobalCtx::init_devices(2)?;
 
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
         #[derive(Debug, Clone)]
         struct TestData {
-            id: DebugId,
+            id: DummyWithId,
             device: usize,
         }
 
@@ -275,7 +276,7 @@ mod tests {
         }
 
         impl WithId for TestData {
-            type ID = DebugId;
+            type ID = DummyWithId;
 
             fn id(&self) -> &Self::ID {
                 &self.id
@@ -284,18 +285,20 @@ mod tests {
         impl Output for TestData {}
 
         impl TestData {
-            pub fn new(id: DebugId, device: usize) -> Self {
+            pub fn new(id: DummyWithId, device: usize) -> Self {
                 Self { id, device }
             }
         }
 
         let tmp_cache: TmpCached<TestData> = TmpCached::new("tmp").await;
-        let foo_id = debug_id!("foo");
+        // DebugId discards its name in release builds. The lease test needs
+        // two distinct entries in every profile.
+        let foo_id = DummyWithId("foo");
 
         tmp_cache.insert(TestData::new(foo_id.clone(), 1));
 
         let lease = tmp_cache.get(&foo_id).unwrap().protect(1);
-        let other_id = debug_id!("other");
+        let other_id = DummyWithId("other");
         tmp_cache.insert(TestData::new(other_id.clone(), 1));
         GlobalCtx::global().dump_all_to_cpu(1, "test").await?;
 
@@ -307,6 +310,7 @@ mod tests {
         drop(lease);
         let cache_name = tmp_cache.name.clone();
         let all = tmp_cache.take_all(1).await?;
+        assert_eq!(all.len(), 2);
         assert!(all.iter().all(|data| data.device == 1));
 
         // Rebuilt inputs get a new lease, independently of their old registration.

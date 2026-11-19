@@ -327,8 +327,11 @@ fn event_loop(mut conn: rusqlite::Connection, mut receiver: Receiver<Message>) {
             }
             Message::Close(reply) => match conn.close() {
                 Ok(()) => {
+                    // Close admission before waking the caller. Otherwise a
+                    // clone can enqueue work between the reply and worker exit.
+                    drop(receiver);
                     let _ = reply.send(Ok(()));
-                    break;
+                    return;
                 }
                 Err((c, e)) => {
                     conn = c;

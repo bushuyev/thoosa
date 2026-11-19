@@ -252,6 +252,15 @@ fn test_endpoint_install_cancellation_and_drop_during_reset_ipc() -> Result<(), 
 
 #[test]
 fn test_stage_failure_is_reported_by_runner_ipc() -> Result<(), ThoError> {
+    check_stage_failure_reported_by_runner(&["install", "invoke"])
+}
+
+#[test]
+fn test_consuming_and_cancelled_stage_failures_are_reported_by_runner_ipc() -> Result<(), ThoError> {
+    check_stage_failure_reported_by_runner(&["consume", "cancelled"])
+}
+
+fn check_stage_failure_reported_by_runner(modes: &[&'static str]) -> Result<(), ThoError> {
     super::tests::run_ipc_test(
         module_path!(),
         async {
@@ -260,7 +269,9 @@ fn test_stage_failure_is_reported_by_runner_ipc() -> Result<(), ThoError> {
                 let actor = global.execution(1).ipc_actor()?;
                 let gate = global.cuda_activity_gate(1).unwrap();
                 let mut pid = install_and_probe(&actor).await?;
-                for mode in ["install", "invoke", "consume", "cancelled"] {
+                // Each case consumes one restart. The tests above run in
+                // separate processes so the production budget stays enabled.
+                for &mode in modes {
                     let worker = actor.worker_id()?;
                     let (observed_tx, observed_rx) = tokio::sync::oneshot::channel();
                     let (release_tx, release_rx) = tokio::sync::oneshot::channel();
@@ -366,6 +377,15 @@ fn test_training_trial_survives_fatal_worker_restart_ipc() -> Result<(), ThoErro
 
 #[test]
 fn test_fatal_actor_paths_replace_worker_ipc() -> Result<(), ThoError> {
+    check_fatal_actor_paths_replace_worker(&["install", "invoke", "consume"])
+}
+
+#[test]
+fn test_cancelled_copy_and_poison_actor_paths_replace_worker_ipc() -> Result<(), ThoError> {
+    check_fatal_actor_paths_replace_worker(&["cancelled", "copy", "poison"])
+}
+
+fn check_fatal_actor_paths_replace_worker(modes: &[&'static str]) -> Result<(), ThoError> {
     super::tests::run_ipc_test(
         module_path!(),
         async {
@@ -374,7 +394,9 @@ fn test_fatal_actor_paths_replace_worker_ipc() -> Result<(), ThoError> {
                 let actor = global.execution(1).ipc_actor()?;
                 let gate = global.cuda_activity_gate(1).unwrap();
                 let mut pid = install_and_probe(&actor).await?;
-                for mode in ["install", "invoke", "consume", "cancelled", "copy", "poison"] {
+                // Stay within the restart budget per process while exercising
+                // each actor path through the real worker transport.
+                for &mode in modes {
                     let worker = actor.worker_id()?;
                     let dir = tempfile::tempdir()?;
                     let started = dir.path().join("started").to_str().unwrap().to_owned();
@@ -442,27 +464,23 @@ fn test_fatal_actor_paths_replace_worker_ipc() -> Result<(), ThoError> {
 }
 
 #[test]
-fn test_failed_replacement_readiness_is_terminal_only_for_its_device_ipc() -> Result<(), ThoError> {
-    super::tests::run_ipc_test(
+fn test_failed_replacement_readiness_stops_the_process_ipc() -> Result<(), ThoError> {
+    let original_pid = std::cell::Cell::new(None);
+    let original_generation = std::cell::Cell::new(None);
+    let result = super::tests::run_ipc_test(
         module_path!(),
         async {
             tokio::time::timeout(Duration::from_secs(50), async {
                 let global = GlobalCtx::global();
                 let actor = global.execution(1).ipc_actor()?;
-                let pid = install_and_probe(&actor).await?;
+                original_pid.set(Some(install_and_probe(&actor).await?));
                 let worker = actor.worker_id()?;
-                let gate = global.cuda_activity_gate(1).unwrap();
+                original_generation.set(Some(worker.generation));
                 let failed_actor = actor.clone();
                 let _ = submit_worker_request(async move { failed_actor.invoke_stage(worker, ENDPOINT.into(), Some(1.to_string()), input(RecoveryAction::Fatal), false).await }).await;
-                assert_eq!(global.get_runner(0).submit(0, async { Ok(42) }, None).await?, 42);
-                let failure = gate.wait_if_paused().await.unwrap_err();
-                assert!(failure.is_cuda_recovery_failed());
-                assert_eq!(gate.device_generation(), worker.generation, "unready replacement must never publish its generation");
-                assert!(!Path::new(&format!("/proc/{pid}")).exists());
-                assert!(actor.worker_id().unwrap_err().is_cuda_recovery_failed());
-                assert!(GlobalCtx::process_failure().is_none());
-                assert_eq!(global.get_runner(0).submit(0, async { Ok(43) }, None).await?, 43);
-                Ok::<_, ThoError>(())
+                // The harness must interrupt the main task and join shutdown
+                // when the replacement fails, even with no caller awaiting CUDA.
+                std::future::pending::<Result<(), ThoError>>().await
             })
             .await?
         },
@@ -474,7 +492,19 @@ fn test_failed_replacement_readiness_is_terminal_only_for_its_device_ipc() -> Re
             let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)?));
             CudaWorker::run_worker(sock, &ws, HashMap::from([(ENDPOINT.into(), Box::new(initialize) as InitFn)]), thoosa_common::tho_device::ThoDevice::from(1usize)).await
         },
-    )
+    );
+    if std::env::var_os(super::cuda_process::IPC_SOCK_ENV).is_some() {
+        return result;
+    }
+    let error = result.expect_err("failed replacement must stop the IPC application");
+    let ThoError::CudaRecoveryFailed(failure) = error.what() else { panic!("expected terminal recovery failure, got {error:#}") };
+    assert!(failure.recovery.as_ref().is_some_and(|error| format!("{error:#}").contains("exited before readiness")), "startup should report the exited worker: {error:#}");
+    assert!(GlobalCtx::process_failure().is_some_and(|error| error.is_cuda_recovery_failed()));
+    assert!(GlobalCtx::is_shutting_down());
+    assert_eq!(GlobalCtx::global().cuda_activity_gate(1).unwrap().device_generation(), original_generation.get().unwrap(), "unready replacement must never publish its generation");
+    let pid = original_pid.get().unwrap();
+    assert!(!Path::new(&format!("/proc/{pid}")).exists());
+    Ok(())
 }
 
 #[test]

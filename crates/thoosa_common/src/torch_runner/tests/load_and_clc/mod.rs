@@ -276,11 +276,9 @@ where
 
         debug!("mul_check: res={res}  result_t.size()={:?} \n\n", result.size());
 
-        let ok = expected.allclose(&*result.local()?, rtol, atol, false);
-        // if !ok {
-        debug!("mul_check: res={res} expected=\n{expected} result_t=\n{} \n\n", result);
-        // }
-        assert!(ok);
+        let actual = result.local()?;
+        let ok = crate::tch_error::tch_result(expected.f_allclose(&actual, rtol, atol, false))?;
+        assert!(ok, "{res}: expected {expected}, got {}", &*actual);
         Ok(())
     })();
     assert!(checked.is_ok(), "tensor comparison failed: {checked:?}");
@@ -434,7 +432,6 @@ async fn test_load_and_clc_oom_splits_tensor() -> Result<(), ThoError> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
 async fn test_load_and_clc_oom_max_parallel_and_splits_tensor() -> Result<(), ThoError> {
-    //TODO flaky
     unsafe {
         let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
     }
